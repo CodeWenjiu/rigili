@@ -12,7 +12,7 @@ use crate::platform::runtime::Tokio;
 pub enum HomeEvent {
     Open {
         bvid: String,
-        cid: u64,
+        cid: Option<u64>,
         title: String,
     },
 }
@@ -122,7 +122,7 @@ impl Render for HomeView {
                 .gap_y_6()
                 .children(self.videos.iter().map(|video| {
                     let bvid = video.bvid.clone();
-                    let cid = video.cid;
+                    let cid = (video.cid != 0).then_some(video.cid);
                     let title = video.title.clone();
                     let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| {
                         cx.emit(HomeEvent::Open {

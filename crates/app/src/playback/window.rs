@@ -5,7 +5,7 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use super::request::{PlaybackRequest, PlaybackSource, resolve};
+use super::request::{PlaybackRequest, resolve};
 use super::surface::PlayerView;
 use crate::backend::Backend;
 use crate::platform::runtime::Tokio;
@@ -53,26 +53,15 @@ impl PlayerWindow {
     }
 
     fn start(&mut self, request: PlaybackRequest, cx: &mut Context<Self>) {
-        self.error = None;
-
-        let (bvid, cid) = match &request.source {
-            PlaybackSource::Video { bvid, cid } => (bvid.clone(), *cid),
-            PlaybackSource::Stream { video, audio } => {
-                let (video, audio) = (video.clone(), audio.clone());
-                self.loading = false;
-                self.request = None;
-                self.player
-                    .update(cx, |player, cx| player.load_urls(video, audio, cx));
-                cx.notify();
-                return;
-            }
-        };
-
         let Some(backend) = self.backend.clone() else {
             return;
         };
+
+        let bvid = request.bvid.clone();
+        let cid = request.cid;
         self.request = Some(request);
         self.loading = true;
+        self.error = None;
         cx.notify();
 
         let task = Tokio::spawn(&*cx, async move { resolve(backend, bvid, cid).await });

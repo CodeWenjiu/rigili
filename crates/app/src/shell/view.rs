@@ -13,25 +13,25 @@ pub struct MainView {
     playback: Option<Playback>,
 }
 
-pub fn open_main(initial: Option<PlaybackRequest>, cx: &mut App) -> Result<()> {
+pub fn open_main(cx: &mut App) -> Result<()> {
     gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
-        cx.new(|cx| MainView::new(window, cx, initial.clone()))
+        cx.new(|cx| MainView::new(window, cx))
     })
     .map(|_| ())
 }
 
 impl MainView {
-    pub fn new(
-        window: &mut Window,
-        cx: &mut Context<Self>,
-        initial: Option<PlaybackRequest>,
-    ) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let home = cx.new(HomeView::new);
 
         cx.subscribe_in(&home, window, |this, _, event: &HomeEvent, window, cx| {
             let HomeEvent::Open { bvid, cid, title } = event;
             this.play(
-                PlaybackRequest::video(title.clone(), bvid.clone(), Some(*cid)),
+                PlaybackRequest {
+                    title: title.clone(),
+                    bvid: bvid.clone(),
+                    cid: *cid,
+                },
                 window,
                 cx,
             );
@@ -55,14 +55,10 @@ impl MainView {
         })
         .detach();
 
-        let mut view = Self {
+        Self {
             home,
             playback: None,
-        };
-        if let Some(request) = initial {
-            view.play(request, window, cx);
         }
-        view
     }
 
     fn play(&mut self, request: PlaybackRequest, window: &mut Window, cx: &mut Context<Self>) {
