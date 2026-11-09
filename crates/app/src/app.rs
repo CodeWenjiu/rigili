@@ -7,7 +7,7 @@ use gpui_kit::component::slider::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use gpuili_player::{Player, PlayerStatus, VideoFrame};
+use gpuili_player::{Player, PlayerStatus, VideoFrame, VideoSize};
 use image::RgbaImage;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
@@ -40,9 +40,8 @@ impl MainView {
         let video_url = cx.new(|cx| {
             InputState::new(window, cx).placeholder("视频地址、B 站 DASH 视频流，或本地文件路径")
         });
-        let audio_url = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("可选：B 站 DASH 音频流地址")
-        });
+        let audio_url =
+            cx.new(|cx| InputState::new(window, cx).placeholder("可选：B 站 DASH 音频流地址"));
         let progress = cx.new(|_| SliderState::new().min(0.0).max(1.0).step(0.1));
         let volume = cx.new(|_| {
             SliderState::new()
@@ -236,10 +235,11 @@ impl MainView {
                 .step(0.1)
                 .default_value(value)
         });
-        self._progress_sub = Some(cx.subscribe(
-            &self.progress,
-            |this, _, event: &SliderEvent, cx| this.on_progress(event, cx),
-        ));
+        self._progress_sub = Some(
+            cx.subscribe(&self.progress, |this, _, event: &SliderEvent, cx| {
+                this.on_progress(event, cx)
+            }),
+        );
     }
 
     fn header(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -259,7 +259,12 @@ impl MainView {
                 h_flex()
                     .items_center()
                     .gap_2()
-                    .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child("播放器"))
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("播放器"),
+                    )
                     .child(
                         div()
                             .text_sm()
@@ -299,7 +304,7 @@ impl MainView {
         let resolution = self
             .status
             .video_size
-            .map(|(width, height)| format!("{width}×{height}"))
+            .map(|size| format!("{}×{}", size.width, size.height))
             .unwrap_or_else(|| "—".into());
         let decoder = decoder_label(&self.status.hwdec);
         let state = if self.status.loading {
@@ -377,7 +382,11 @@ impl MainView {
                     .text_color(muted)
                     .child(format_time(display_time)),
             )
-            .child(Slider::new(&self.progress).flex_1().accessibility_label("播放进度"))
+            .child(
+                Slider::new(&self.progress)
+                    .flex_1()
+                    .accessibility_label("播放进度"),
+            )
             .child(
                 div()
                     .text_sm()
@@ -440,17 +449,15 @@ impl Render for MainView {
             .min_h_0()
             .overflow_hidden()
             .bg(background)
-            .children(
-                frame.map(|frame| img(frame).size_full().object_fit(ObjectFit::Contain)),
-            )
+            .children(frame.map(|frame| img(frame).size_full().object_fit(ObjectFit::Contain)))
             .child(
                 canvas(
                     move |bounds, window, _| {
                         let scale = window.scale_factor();
-                        player.set_viewport(
+                        player.set_viewport(VideoSize::new(
                             (f32::from(bounds.size.width) * scale).round().max(0.0) as u32,
                             (f32::from(bounds.size.height) * scale).round().max(0.0) as u32,
-                        );
+                        ));
                     },
                     |_, _, _, _| {},
                 )
