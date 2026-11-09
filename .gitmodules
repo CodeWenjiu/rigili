@@ -1,0 +1,3 @@
+[submodule "bilibili-linux"]
+	path = bilibili-linux
+	url = https://github.com/msojocs/bilibili-linux
