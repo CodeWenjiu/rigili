@@ -73,6 +73,7 @@
           ];
 
           buildTools = with pkgs; [
+            just
             pkg-config
             cmake
             clang
