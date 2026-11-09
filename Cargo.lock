@@ -2927,6 +2927,8 @@ version = "0.1.0"
 dependencies = [
  "gpui-kit",
  "gpuili_macro",
+ "gpuili_player",
+ "image",
 ]
 
 [[package]]
@@ -2945,6 +2947,7 @@ name = "gpuili_player"
 version = "0.1.0"
 dependencies = [
  "gpuili_macro",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

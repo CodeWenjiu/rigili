@@ -6,3 +6,4 @@ publish = false
 
 [dependencies]
 gpuili_macro.workspace = true
+thiserror.workspace = true

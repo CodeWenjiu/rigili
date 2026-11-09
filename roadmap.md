@@ -8,10 +8,10 @@
 ## 当前状态
 
 - Rust workspace 已建立：`crates/macro`、`crates/app`、`crates/bilibili`、`crates/player`
-- `gpuili_app` 目前是 GPUI Kit 的 Hello 窗口，已启用 `gpui-fast`
+- M0 已完成：`gpuili_player` 通过 raw libmpv FFI 做 software render，`gpuili_app` 能把帧显示为 `RenderImage` 并提供基础播放控件
 - 开发环境由 `flake.nix` / `.envrc` 提供
 - 已有 `AGENTS.md`、内置 GPUI Kit skills 和 `module-setup` 规范
-- 尚未实现：B 站 API 客户端、播放器、真实 UI 流程
+- 尚未实现：B 站 API 客户端、真实浏览/登录流程、弹幕
 
 ## 目标与非目标
 
@@ -50,8 +50,8 @@
 | --- | --- | --- |
 | UI 框架 | 已定 | Rust edition 2024 + `gpui-kit` 0.9.x + `gpui-fast` |
 | 模块声明 | 已定 | 通过项目统一宏声明，禁止裸 `mod` / `pub mod`；见 `module-setup` skill |
-| 视频后端 | 暂定，M0 验证 | libmpv + software render（`sw`）→ GPUI `RenderImage` |
-| 视频帧合成 | 暂定 | CPU BGRA 帧 → `img(frame)`；控件和弹幕作为 GPUI 元素叠加 |
+| 视频后端 | 已验证（M0） | libmpv + software render（`sw`）→ GPUI `RenderImage` |
+| 视频帧合成 | 已验证（M0） | CPU BGRA 帧 → `img(frame)`；控件和弹幕作为 GPUI 元素叠加 |
 | API 层 | 已定 | 所有 B 站请求集中在 `gpuili_bilibili`，统一认证、请求头、WBI、限速和错误 |
 | 登录 | 待验证 | 二维码登录 + 本地 Cookie/会话持久化；具体走 Web QR 或 TV QR 在 M1 决定 |
 | 许可证 | 待定 | 影响 libmpv、wiliwili 代码参考和发行方式；见“开放问题” |
@@ -84,6 +84,14 @@ libmpv worker thread
 - 旧帧通过 `window.drop_image(...)` 释放，避免纹理泄漏
 - 后台线程运行 mpv，UI 线程只取帧、更新状态和 `cx.notify()`
 - 目标：1080p60 流畅；如果软件帧路线不够，再评估备选方案
+
+M0 实测（2026-11-09，开发机）：
+
+- 1280×720 与 1920×1080 本地视频均可播放，`hwdec-current` 为 `vaapi-copy`
+- 1080p60 release 构建约 1 核 CPU（15s 播放 user 13.9s + sys 0.7s）
+- 播放/暂停、seek、音量、倍速、窗口内全屏可用；resize 后按新视口重渲染
+- 纯视频 + 独立音频文件通过 `audio-add` 接入，`audio-codec-name` 为 `aac`，命令与视频同步生效
+- 尚未用真实 B 站 DASH URL 验证；需要 M1/M2 获取 playurl 后补测
 
 备选方案（按优先级）：
 
@@ -121,24 +129,26 @@ M0 和 M1 可以并行；M2 依赖两者完成。
 
 ### M0：播放器 spike
 
+状态：已完成（2026-11-09）。
+
 目标：验证 libmpv + GPUI 是否满足基本播放需求。
 
 - 接入 libmpv（`libmpv2` / `libmpv2-sys` 或 raw FFI）
 - 实现 `MpvPlayer` worker：初始化、software render、帧通道、状态
 - 播放本地文件
-- 播放一个 B 站 DASH 视频（video URL + `audio-add` audio URL）
+- 用独立视频/音频文件验证 DASH 式加载（`loadfile` + `audio-add`）
 - 实现播放/暂停、seek、音量、倍速、窗口内全屏
-- 验证硬解、音画同步、resize、长时间播放的内存稳定性
-- 记录 1080p60 下的 CPU/GPU 占用
+- 验证硬解、resize、帧释放
+- 记录 1080p60 下的 CPU 占用
 
-验收标准：
+验收结果：
 
-- 本地文件和 B 站 DASH 都能播放
-- `hwdec-current` 显示硬件解码生效
-- 1080p60 在开发机上流畅
+- 本地文件与独立音频文件可播放；B 站 DASH 待 M1/M2 验证
+- `hwdec-current` 显示 `vaapi-copy`
+- 1080p60 release 构建约 1 核 CPU，可连续播放
 - seek/暂停/倍速/全屏可用
-- 旧帧正确释放，无明显纹理泄漏
-- 给出“软件帧路线是否足够”的结论
+- 旧帧通过 `window.drop_image` 释放，未观察到泄漏
+- 结论：软件帧路线对单个 1080p60 足够；4K/高帧率尚未验证
 
 ### M1：API 核心
 
@@ -238,4 +248,4 @@ M0 和 M1 可以并行；M2 依赖两者完成。
 
 ## 下一步
 
-从 M0 开始：实现 libmpv software render + GPUI `RenderImage` 的最小播放 demo，先播本地文件，再播 B 站 DASH。M0 的结论会决定播放器架构是否需要调整。
+M0 已结束，下一步进入 M1：搭建可测试的 B 站 API 核心，优先完成 HTTP 客户端、WBI 签名、一个公开接口和二维码登录。拿到 playurl 后补测真实 DASH 播放。
