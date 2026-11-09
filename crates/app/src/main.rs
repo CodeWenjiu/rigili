@@ -1,4 +1,4 @@
-gpuili_macro::mod_prv!(backend, format, home, playback, platform, shell);
+gpuili_macro::mod_prv!(backend, format, home, login, playback, platform, shell);
 
 use crate::platform::assets::AppAssets;
 

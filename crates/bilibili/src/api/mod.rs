@@ -1,1 +1,1 @@
-gpuili_macro::mod_pub!(playurl, popular, view);
+gpuili_macro::mod_pub!(login, playurl, popular, view);

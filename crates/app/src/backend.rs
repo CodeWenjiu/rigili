@@ -1,4 +1,8 @@
-use gpuili_bilibili::{ApiError, Client, PlayUrl, Popular, VideoInfo, api};
+use std::collections::BTreeMap;
+
+use gpuili_bilibili::{
+    ApiError, Client, Nav, PlayUrl, Popular, QrCode, QrPoll, SessionError, VideoInfo, api,
+};
 
 #[derive(Clone)]
 pub struct Backend {
@@ -22,5 +26,33 @@ impl Backend {
 
     pub async fn playurl(&self, bvid: &str, cid: u64) -> Result<PlayUrl, ApiError> {
         api::playurl::fetch(&self.client, bvid, cid).await
+    }
+
+    pub async fn qr_generate(&self) -> Result<QrCode, ApiError> {
+        api::login::generate(&self.client).await
+    }
+
+    pub async fn qr_poll(&self, qrcode_key: &str) -> Result<QrPoll, ApiError> {
+        api::login::poll(&self.client, qrcode_key).await
+    }
+
+    pub async fn nav(&self) -> Result<Nav, ApiError> {
+        api::login::nav(&self.client).await
+    }
+
+    pub fn apply_cookies(&self, cookies: BTreeMap<String, String>) {
+        self.client.set_cookies(cookies);
+    }
+
+    pub fn cookie_jar_values(&self) -> BTreeMap<String, String> {
+        self.client.jar_cookies()
+    }
+
+    pub fn save_session(&self) -> Result<(), SessionError> {
+        self.client.save_session()
+    }
+
+    pub fn has_session(&self) -> bool {
+        !self.client.cookie_values().is_empty()
     }
 }

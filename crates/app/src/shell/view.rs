@@ -1,4 +1,6 @@
 use gpui_kit::assets::IconName;
+use gpui_kit::component::avatar::Avatar;
+use gpui_kit::component::button::*;
 use gpui_kit::component::sidebar::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
@@ -6,10 +8,12 @@ use gpui_kit::*;
 
 use super::playback::Playback;
 use crate::home::{HomeEvent, HomeView};
+use crate::login::{self, LoginStatus};
 use crate::playback::PlaybackRequest;
 
 pub struct MainView {
     home: Entity<HomeView>,
+    login: Entity<LoginStatus>,
     playback: Option<Playback>,
 }
 
@@ -23,6 +27,8 @@ pub fn open_main(cx: &mut App) -> Result<()> {
 impl MainView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let home = cx.new(HomeView::new);
+        let login = cx.new(|_| LoginStatus::new());
+        login::restore(window, cx, login.clone());
 
         cx.subscribe_in(&home, window, |this, _, event: &HomeEvent, window, cx| {
             let HomeEvent::Open { bvid, cid, title } = event;
@@ -57,8 +63,36 @@ impl MainView {
 
         Self {
             home,
+            login,
             playback: None,
         }
+    }
+
+    fn account(&self, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(user) = &self.login.read(cx).user {
+            return h_flex()
+                .w_full()
+                .min_w_0()
+                .items_center()
+                .gap_2()
+                .child(
+                    Avatar::new()
+                        .src(user.face.clone())
+                        .name(user.uname.clone())
+                        .xsmall(),
+                )
+                .child(div().text_sm().truncate().child(user.uname.clone()))
+                .into_any_element();
+        }
+
+        Button::new("sign-in")
+            .ghost()
+            .icon(IconName::CircleUser)
+            .label("登录")
+            .on_click(cx.listener(|this, _, window, cx| {
+                login::open(window, cx, this.login.clone());
+            }))
+            .into_any_element()
     }
 
     fn play(&mut self, request: PlaybackRequest, window: &mut Window, cx: &mut Context<Self>) {
@@ -97,8 +131,7 @@ impl Render for MainView {
                     .border_color(border)
                     .header(
                         v_flex()
-                            .px_3()
-                            .py_4()
+                            .py_2()
                             .gap_1()
                             .child(
                                 div()
@@ -115,7 +148,8 @@ impl Render for MainView {
                                 .icon(Icon::new(IconName::Flame))
                                 .active(true),
                         ),
-                    ),
+                    )
+                    .footer(self.account(cx)),
             )
             .child(div().flex_1().min_w_0().h_full().child(self.home.clone()))
     }
