@@ -1,0 +1,14 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+default-members = ["crates/app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+gpui-kit = { version = "0.9.1", features = ["gpui-fast"] }
+gpuili_macro = { path = "crates/macro" }
+gpuili_bilibili = { path = "crates/bilibili" }
+gpuili_player = { path = "crates/player" }

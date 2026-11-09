@@ -1,0 +1,13 @@
+[package]
+name = "gpuili_app"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "gpuili"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit.workspace = true
+gpuili_macro.workspace = true

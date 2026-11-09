@@ -1,0 +1,8 @@
+[package]
+name = "gpuili_bilibili"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+gpuili_macro.workspace = true
