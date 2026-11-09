@@ -11,7 +11,9 @@
 - M0 已完成：`gpuili_player` 通过 raw libmpv FFI 做 software render，`gpuili_app` 能把帧显示为 `RenderImage` 并提供基础播放控件
 - 开发环境由 `flake.nix` / `.envrc` 提供
 - 已有 `AGENTS.md`、内置 GPUI Kit skills 和 `module-setup` 规范
-- 尚未实现：B 站 API 客户端、真实浏览/登录流程、弹幕
+- 尚未实现：登录/会话持久化、真实浏览流程、弹幕
+- M1 已开始：`gpuili_bilibili` 已有 async HTTP client（Tokio 桥）、WBI 签名、热门接口和 fixture 测试；登录与风控路径待完成
+- M2 已开始：app 有热门页、封面网格和「热门/播放器」侧边栏，播放器页保持可用
 
 ## 目标与非目标
 
@@ -53,6 +55,7 @@
 | 视频后端 | 已验证（M0） | libmpv + software render（`sw`）→ GPUI `RenderImage` |
 | 视频帧合成 | 已验证（M0） | CPU BGRA 帧 → `img(frame)`；控件和弹幕作为 GPUI 元素叠加 |
 | API 层 | 已定 | 所有 B 站请求集中在 `gpuili_bilibili`，统一认证、请求头、WBI、限速和错误 |
+| 异步运行时 | 已定（M1） | app 持有 2 worker Tokio runtime，按 Zed `gpui_tokio` 模式桥接 GPUI `Task`；API 使用 async reqwest |
 | 登录 | 待验证 | 二维码登录 + 本地 Cookie/会话持久化；具体走 Web QR 或 TV QR 在 M1 决定 |
 | 许可证 | 待定 | 影响 libmpv、wiliwili 代码参考和发行方式；见“开放问题” |
 
@@ -163,6 +166,13 @@ M0 和 M1 可以并行；M2 依赖两者完成。
 - 风控/未登录/网络失败路径
 - 限速和并发上限
 
+当前进度（2026-11-09）：
+
+- 已完成：async reqwest client（UA/Referer/Cookie/超时/重试/限速/并发上限）、WBI 签名、热门接口和 fixture 测试
+- GPUI 侧已有 2 worker Tokio runtime 和 `Tokio::spawn` 桥接；API 调用不会占用 UI/后台执行器线程
+- 手动验证：热门接口返回真实数据，WBI 签名被 `wbi/index/top/feed/rcmd` 接受
+- 待完成：二维码登录、会话持久化、风控/未登录的恢复路径、按接口细化限速
+
 验收标准：
 
 - `cargo test` 不访问真实接口
@@ -180,6 +190,12 @@ M0 和 M1 可以并行；M2 依赖两者完成。
 - 视频详情页
 - 获取 playurl 并交给 M0 播放器
 - 基本键盘/鼠标操作
+
+当前进度（2026-11-09）：
+
+- 已完成：侧边栏（热门/播放器）、热门页真实数据、封面/标题/UP 主/播放量、加载/错误/空状态
+- 封面通过 GPUI `HttpClient` + Tokio 桥加载，图片并发上限 8
+- 待完成：视频详情、playurl、点击卡片播放、列表虚拟化
 
 验收标准：
 

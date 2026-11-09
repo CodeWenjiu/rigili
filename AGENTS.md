@@ -59,7 +59,8 @@ cargo test --workspace
 - 模块声明遵循 `.agents/skills/module-setup/SKILL.md`：通过项目统一的模块声明宏
   完成，禁止裸 `mod` / `pub mod` 作为模块管道。
 - 提交前格式化、lint 和测试必须通过。
-- 使用合适的错误类型并在边界汇总；避免 `unwrap()` / `expect()`（启动期不变量除外）。
+- 错误类型：lib crate 用 `thiserror` 定义领域错误，bin 在边界用 `anyhow` 汇总；避免
+  `unwrap()` / `expect()`（启动期不变量除外）。
 - 不要无理由引入新依赖；新增前确认许可证、维护状态和 Nix 构建可行性。
 - 不要提交 `target/`、`.direnv/`、日志、Cookie、下载内容或缓存。
 - 一个提交 / PR 只做一件事，不要顺手重构无关代码。
