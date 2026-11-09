@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use gpuili_bilibili::{
     ApiError, Client, Nav, PlayUrl, Popular, QrCode, QrPoll, SessionError, VideoInfo, api,
@@ -6,13 +6,13 @@ use gpuili_bilibili::{
 
 #[derive(Clone)]
 pub struct Backend {
-    client: Client,
+    client: Arc<Client>,
 }
 
 impl Backend {
     pub fn new() -> Result<Self, ApiError> {
         Ok(Self {
-            client: Client::new()?,
+            client: Arc::new(Client::new()?),
         })
     }
 
