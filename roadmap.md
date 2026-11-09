@@ -88,10 +88,11 @@ libmpv worker thread
 M0 实测（2026-11-09，开发机）：
 
 - 1280×720 与 1920×1080 本地视频均可播放，`hwdec-current` 为 `vaapi-copy`
+- 真实 B 站 DASH（匿名 480p playurl）已验证：视频 + 独立音频、`vaapi-copy`、`aac`
 - 1080p60 release 构建约 1 核 CPU（15s 播放 user 13.9s + sys 0.7s）
 - 播放/暂停、seek、音量、倍速、窗口内全屏可用；resize 后按新视口重渲染
 - 纯视频 + 独立音频文件通过 `audio-add` 接入，`audio-codec-name` 为 `aac`，命令与视频同步生效
-- 尚未用真实 B 站 DASH URL 验证；需要 M1/M2 获取 playurl 后补测
+- 匿名访问只能拿到 480p；更高清晰度需要登录态，留到 M1 验证
 
 备选方案（按优先级）：
 
@@ -143,7 +144,7 @@ M0 和 M1 可以并行；M2 依赖两者完成。
 
 验收结果：
 
-- 本地文件与独立音频文件可播放；B 站 DASH 待 M1/M2 验证
+- 本地文件、独立音频和真实 B 站 DASH（480p）均可播放
 - `hwdec-current` 显示 `vaapi-copy`
 - 1080p60 release 构建约 1 核 CPU，可连续播放
 - seek/暂停/倍速/全屏可用
