@@ -1,0 +1,57 @@
+{
+  "code": 0,
+  "message": "OK",
+  "ttl": 1,
+  "data": {
+    "bvid": "BV1TgWp6MEHJ",
+    "aid": 117583286110058,
+    "videos": 8,
+    "pic": "http://i0.hdslb.com/bfs/archive/342a910266c83a5ebaa76e9a04f6c684f672b5cb.jpg",
+    "title": "【2026全球总决赛】11月9日 BLG vs T1",
+    "pubdate": 1794178689,
+    "desc": "【2026全球总决赛】11月9日 BLG vs T1",
+    "duration": 15510,
+    "owner": {
+      "mid": 50329118,
+      "name": "哔哩哔哩英雄联盟赛事",
+      "face": "https://i2.hdslb.com/bfs/face/544c89e68f2b1f12ffcbb8b3c062a3328e8692d9.jpg"
+    },
+    "stat": {
+      "aid": 117583286110058,
+      "view": 10788785,
+      "danmaku": 126312,
+      "reply": 47018,
+      "favorite": 33946,
+      "coin": 89241,
+      "share": 8675,
+      "like": 130578
+    },
+    "cid": 43448467681,
+    "pages": [
+      {
+        "cid": 43448467681,
+        "page": 1,
+        "from": "vupload",
+        "part": "第一局",
+        "duration": 3061,
+        "dimension": {
+          "width": 1280,
+          "height": 720,
+          "rotate": 0
+        }
+      },
+      {
+        "cid": 43448861470,
+        "page": 2,
+        "from": "vupload",
+        "part": "第二局",
+        "duration": 2881,
+        "dimension": {
+          "width": 1280,
+          "height": 720,
+          "rotate": 0
+        }
+      }
+    ]
+  }
+}

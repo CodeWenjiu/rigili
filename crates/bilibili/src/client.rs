@@ -187,9 +187,11 @@ fn unix_timestamp() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Popular;
+    use crate::{PlayUrl, Popular, VideoInfo};
 
     const POPULAR_FIXTURE: &str = include_str!("../fixtures/popular.json");
+    const VIEW_FIXTURE: &str = include_str!("../fixtures/view.json");
+    const PLAYURL_FIXTURE: &str = include_str!("../fixtures/playurl.json");
 
     #[test]
     fn parses_popular_fixture() {
@@ -197,6 +199,26 @@ mod tests {
         assert!(!popular.list.is_empty());
         assert_eq!(popular.list[0].bvid, "BV1TgWp6MEHJ");
         assert_eq!(popular.list[0].owner.name, "哔哩哔哩英雄联盟赛事");
+    }
+
+    #[test]
+    fn parses_view_fixture() {
+        let video: VideoInfo = parse_envelope(VIEW_FIXTURE).expect("view fixture");
+        assert_eq!(video.bvid, "BV1TgWp6MEHJ");
+        assert_eq!(video.cid, 43_448_467_681);
+        assert_eq!(video.pages.len(), 2);
+        assert_eq!(video.pages[1].part, "第二局");
+    }
+
+    #[test]
+    fn parses_playurl_fixture_and_prefers_avc() {
+        let playurl: PlayUrl = parse_envelope(PLAYURL_FIXTURE).expect("playurl fixture");
+        let dash = playurl.dash.as_ref().expect("dash");
+        let video = dash.best_video().expect("video");
+        let audio = dash.best_audio().expect("audio");
+        assert_eq!(video.codecid, 7);
+        assert_eq!((video.width, video.height), (852, 480));
+        assert_eq!(audio.bandwidth, 196_608);
     }
 
     #[test]
