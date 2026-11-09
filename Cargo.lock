@@ -3028,6 +3028,7 @@ dependencies = [
  "gpuili_player",
  "image",
  "reqwest",
+ "serde_json",
  "tokio",
 ]
 

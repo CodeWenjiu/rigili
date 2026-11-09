@@ -43,8 +43,11 @@ impl MainView {
 
 impl Render for MainView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let background = cx.theme().background;
         let border = cx.theme().border;
         let foreground = cx.theme().foreground;
+        let muted = cx.theme().muted_foreground;
+        let primary = cx.theme().primary;
         let weak = cx.entity().downgrade();
         let route = self.route;
         let home = self.home.clone();
@@ -52,20 +55,27 @@ impl Render for MainView {
 
         h_flex()
             .size_full()
-            .bg(cx.theme().background)
+            .bg(background)
             .text_color(foreground)
             .child(
                 Sidebar::new("app-sidebar")
-                    .w(px(210.))
+                    .w(px(200.))
                     .collapsible(false)
                     .border_r_1()
                     .border_color(border)
                     .header(
-                        div()
-                            .p_3()
-                            .text_lg()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("gpuili"),
+                        v_flex()
+                            .px_3()
+                            .py_4()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_lg()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(primary)
+                                    .child("gpuili"),
+                            )
+                            .child(div().text_xs().text_color(muted).child("哔哩哔哩")),
                     )
                     .child(
                         SidebarMenu::new()
@@ -100,7 +110,7 @@ fn nav_item(
     weak: WeakEntity<MainView>,
 ) -> SidebarMenuItem {
     SidebarMenuItem::new(label)
-        .icon(icon)
+        .icon(Icon::new(icon))
         .active(active)
         .on_click(move |_, _, cx| {
             let _ = weak.update(cx, |this, cx| {
