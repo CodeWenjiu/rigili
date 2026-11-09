@@ -38,6 +38,16 @@ pub(crate) fn format_date(unix: i64) -> String {
     format!("{month}-{day}")
 }
 
+pub(crate) fn format_datetime(unix: i64) -> String {
+    let (year, month, day) = civil_from_days(unix.div_euclid(86_400));
+    let seconds = unix.rem_euclid(86_400);
+    format!(
+        "{year}-{month:02}-{day:02} {:02}:{:02}",
+        seconds / 3600,
+        seconds % 3600 / 60
+    )
+}
+
 fn clock(duration: Duration, pad_minutes: bool) -> String {
     let total = duration.as_secs();
     let hours = total / 3600;
@@ -71,7 +81,10 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{api_error_message, format_clock, format_count, format_date, format_duration};
+    use super::{
+        api_error_message, format_clock, format_count, format_date, format_datetime,
+        format_duration,
+    };
     use gpuili_bilibili::ApiError;
 
     #[test]
@@ -123,5 +136,10 @@ mod tests {
     #[test]
     fn formats_publish_dates() {
         assert_eq!(format_date(1_762_646_400), "11-9");
+        assert_eq!(format_datetime(1_762_646_400), "2025-11-09 00:00");
+        assert_eq!(
+            format_datetime(1_762_646_400 + 13 * 3600 + 16 * 60),
+            "2025-11-09 13:16"
+        );
     }
 }

@@ -1,4 +1,4 @@
-use gpuili_bilibili::{ApiError, Dash};
+use gpuili_bilibili::{ApiError, Dash, VideoInfo};
 
 use crate::backend::Backend;
 
@@ -7,6 +7,12 @@ pub struct PlaybackRequest {
     pub title: String,
     pub bvid: String,
     pub cid: Option<u64>,
+}
+
+pub(super) struct Resolved {
+    pub(super) info: VideoInfo,
+    pub(super) cid: u64,
+    pub(super) streams: Streams,
 }
 
 pub(super) struct Streams {
@@ -18,22 +24,24 @@ pub(super) async fn resolve(
     backend: Backend,
     bvid: String,
     cid: Option<u64>,
-) -> Result<(Option<String>, Streams), ApiError> {
-    let (cid, title) = match cid {
-        Some(cid) => (cid, None),
-        None => {
-            let info = backend.view(&bvid).await?;
-            (info.cid, Some(info.title))
-        }
-    };
-    let playurl = backend.playurl(&bvid, cid).await?;
+) -> Result<Resolved, ApiError> {
+    let info = backend.view(&bvid).await?;
+    let cid = cid.unwrap_or(info.cid);
+    let streams = resolve_streams(&backend, &bvid, cid).await?;
+    Ok(Resolved { info, cid, streams })
+}
+
+pub(super) async fn resolve_streams(
+    backend: &Backend,
+    bvid: &str,
+    cid: u64,
+) -> Result<Streams, ApiError> {
+    let playurl = backend.playurl(bvid, cid).await?;
     let dash = playurl
         .dash
         .as_ref()
         .ok_or_else(|| ApiError::InvalidResponse("该视频没有可用的 DASH 流".into()))?;
-    let streams =
-        best_streams(dash).ok_or_else(|| ApiError::InvalidResponse("没有可用的视频流".into()))?;
-    Ok((title, streams))
+    best_streams(dash).ok_or_else(|| ApiError::InvalidResponse("没有可用的视频流".into()))
 }
 
 fn best_streams(dash: &Dash) -> Option<Streams> {

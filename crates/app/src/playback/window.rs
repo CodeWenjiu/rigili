@@ -5,19 +5,26 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use super::request::{PlaybackRequest, resolve};
+use super::info::{InfoEvent, InfoPanel};
+use super::request::{PlaybackRequest, resolve, resolve_streams};
 use super::surface::PlayerView;
 use crate::backend::Backend;
 use crate::platform::runtime::Tokio;
 
+const INFO_MIN_WINDOW: Pixels = px(1000.);
+
 pub struct PlayerWindow {
     player: Entity<PlayerView>,
+    info: Entity<InfoPanel>,
     title: SharedString,
     main_window: Option<AnyWindowHandle>,
     backend: Option<Backend>,
     request: Option<PlaybackRequest>,
     loading: bool,
     error: Option<String>,
+    show_info: bool,
+    generation: u64,
+    _info_sub: Subscription,
 }
 
 impl PlayerWindow {
@@ -28,18 +35,27 @@ impl PlayerWindow {
         main_window: Option<AnyWindowHandle>,
     ) -> Self {
         let player = cx.new(|cx| PlayerView::new(window, cx));
+        let info = cx.new(|_| InfoPanel::new());
+        let info_sub = cx.subscribe(&info, |this, _, event: &InfoEvent, cx| {
+            let InfoEvent::SelectPage(cid) = event;
+            this.select_page(*cid, cx);
+        });
         let (backend, error) = match Backend::new() {
             Ok(backend) => (Some(backend), None),
             Err(error) => (None, Some(error.to_string())),
         };
         let mut view = Self {
             player,
+            info,
             title: request.title.clone().into(),
             main_window,
             backend,
             request: None,
             loading: false,
             error,
+            show_info: true,
+            generation: 0,
+            _info_sub: info_sub,
         };
         if view.backend.is_some() {
             view.start(request, cx);
@@ -57,29 +73,105 @@ impl PlayerWindow {
             return;
         };
 
+        self.generation += 1;
+        let generation = self.generation;
         let bvid = request.bvid.clone();
         let cid = request.cid;
         self.request = Some(request);
         self.loading = true;
         self.error = None;
+        self.info.update(cx, |info, cx| info.clear(cx));
+        self.info.update(cx, |info, cx| info.set_busy(true, cx));
         cx.notify();
 
         let task = Tokio::spawn(&*cx, async move { resolve(backend, bvid, cid).await });
         cx.spawn(async move |weak, cx| {
             let result = task.await;
             let _ = weak.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
                 this.loading = false;
                 match result {
-                    Ok(Ok((title, streams))) => {
-                        if let Some(title) = title {
-                            this.title = title.into();
+                    Ok(Ok(resolved)) => {
+                        let cid = resolved.cid;
+                        this.title = resolved.info.title.clone().into();
+                        if let Some(request) = this.request.as_mut() {
+                            request.cid = Some(cid);
                         }
+                        this.info
+                            .update(cx, |info, cx| info.set(resolved.info, cid, cx));
+                        this.player.update(cx, |player, cx| {
+                            player.load_urls(resolved.streams.video, resolved.streams.audio, cx)
+                        });
+                    }
+                    Ok(Err(error)) => {
+                        this.info.update(cx, |info, cx| info.set_busy(false, cx));
+                        this.handle_error(&error, cx);
+                    }
+                    Err(error) => {
+                        this.info.update(cx, |info, cx| info.set_busy(false, cx));
+                        this.error = Some(format!("加载任务失败：{error}"));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn select_page(&mut self, cid: u64, cx: &mut Context<Self>) {
+        if self.loading
+            || self
+                .request
+                .as_ref()
+                .is_some_and(|request| request.cid == Some(cid))
+        {
+            return;
+        }
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let Some(bvid) = self.request.as_ref().map(|request| request.bvid.clone()) else {
+            return;
+        };
+
+        if let Some(request) = self.request.as_mut() {
+            request.cid = Some(cid);
+        }
+        self.generation += 1;
+        let generation = self.generation;
+        self.loading = true;
+        self.error = None;
+        self.info.update(cx, |info, cx| info.set_busy(true, cx));
+        cx.notify();
+
+        let task = Tokio::spawn(
+            &*cx,
+            async move { resolve_streams(&backend, &bvid, cid).await },
+        );
+        cx.spawn(async move |weak, cx| {
+            let result = task.await;
+            let _ = weak.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                this.loading = false;
+                match result {
+                    Ok(Ok(streams)) => {
+                        this.info.update(cx, |info, cx| info.select(cid, cx));
                         this.player.update(cx, |player, cx| {
                             player.load_urls(streams.video, streams.audio, cx)
                         });
                     }
-                    Ok(Err(error)) => this.handle_error(&error, cx),
-                    Err(error) => this.error = Some(format!("加载任务失败：{error}")),
+                    Ok(Err(error)) => {
+                        this.info.update(cx, |info, cx| info.set_busy(false, cx));
+                        this.handle_error(&error, cx);
+                    }
+                    Err(error) => {
+                        this.info.update(cx, |info, cx| info.set_busy(false, cx));
+                        this.error = Some(format!("加载任务失败：{error}"));
+                    }
                 }
                 cx.notify();
             });
@@ -107,6 +199,19 @@ impl Render for PlayerWindow {
         let foreground = cx.theme().foreground;
         let muted = cx.theme().muted_foreground;
         let danger = cx.theme().danger;
+        let fullscreen = window.is_fullscreen();
+        let info_loaded = self.info.read(cx).is_loaded();
+        let wide_enough = window.viewport_size().width >= INFO_MIN_WINDOW;
+        let show_info = self.show_info && !fullscreen && info_loaded && wide_enough;
+        let info_hint = if !info_loaded {
+            "视频信息加载中"
+        } else if !wide_enough {
+            "窗口加宽后可显示视频信息"
+        } else if self.show_info {
+            "隐藏视频信息"
+        } else {
+            "显示视频信息"
+        };
         let main_window = self.main_window;
         let title = self.title.clone();
         let weak = cx.entity().downgrade();
@@ -114,6 +219,19 @@ impl Render for PlayerWindow {
         if window.window_title() != title.as_ref() {
             window.set_window_title(&title);
         }
+
+        let toggle_info = Button::new("toggle-info")
+            .ghost()
+            .xsmall()
+            .icon(IconName::Info)
+            .accessibility_label("视频信息")
+            .tooltip(info_hint)
+            .selected(self.show_info)
+            .disabled(!info_loaded || !wide_enough)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.show_info = !this.show_info;
+                cx.notify();
+            }));
 
         v_flex()
             .size_full()
@@ -139,43 +257,66 @@ impl Render for PlayerWindow {
                                     }),
                             )
                         })
-                        .child(div().text_sm().text_color(muted).truncate().child(title)),
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_sm()
+                                .text_color(muted)
+                                .truncate()
+                                .child(title),
+                        )
+                        .when(!fullscreen, |this| this.child(toggle_info)),
                 ),
             )
             .child(
-                div()
-                    .relative()
+                h_flex()
+                    .items_stretch()
                     .flex_1()
                     .min_h_0()
-                    .child(self.player.clone())
-                    .when(self.loading, |this| {
-                        this.child(overlay(
-                            v_flex()
-                                .items_center()
-                                .gap_3()
-                                .child(Spinner::new().large())
-                                .child(div().text_sm().text_color(muted).child("正在获取视频流…")),
-                        ))
-                    })
-                    .children(self.error.clone().map(|error| {
-                        overlay(
-                            v_flex()
-                                .items_center()
-                                .gap_3()
-                                .child(div().text_sm().text_color(danger).child(error))
-                                .child(
-                                    Button::new("retry-playback")
-                                        .primary()
-                                        .label("重试")
-                                        .on_click({
-                                            let weak = weak.clone();
-                                            move |_, _, cx| {
-                                                let _ = weak.update(cx, |this, cx| this.retry(cx));
-                                            }
-                                        }),
-                                ),
-                        )
-                    })),
+                    .child(
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .min_h_0()
+                            .child(self.player.clone())
+                            .when(self.loading, |this| {
+                                this.child(overlay(
+                                    v_flex()
+                                        .items_center()
+                                        .gap_3()
+                                        .child(Spinner::new().large())
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(muted)
+                                                .child("正在获取视频流…"),
+                                        ),
+                                ))
+                            })
+                            .children(self.error.clone().map(|error| {
+                                overlay(
+                                    v_flex()
+                                        .items_center()
+                                        .gap_3()
+                                        .child(div().text_sm().text_color(danger).child(error))
+                                        .child(
+                                            Button::new("retry-playback")
+                                                .primary()
+                                                .label("重试")
+                                                .on_click({
+                                                    let weak = weak.clone();
+                                                    move |_, _, cx| {
+                                                        let _ = weak
+                                                            .update(cx, |this, cx| this.retry(cx));
+                                                    }
+                                                }),
+                                        ),
+                                )
+                            })),
+                    )
+                    .when(show_info, |this| this.child(self.info.clone())),
             )
     }
 }
