@@ -125,7 +125,7 @@ impl Render for MainView {
             .text_color(foreground)
             .child(
                 Sidebar::new("app-sidebar")
-                    .w(px(200.))
+                    .w(px(160.))
                     .collapsible(false)
                     .border_r_1()
                     .border_color(border)
