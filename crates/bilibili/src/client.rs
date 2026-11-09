@@ -1,17 +1,19 @@
 use std::{
+    collections::BTreeMap,
+    path::PathBuf,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use reqwest::{
-    Client as HttpClient, RequestBuilder, Response, StatusCode,
-    cookie::Jar,
+    Client as HttpClient, RequestBuilder, Response, StatusCode, Url,
+    cookie::{CookieStore, Jar},
     header::{ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderValue, REFERER},
 };
 use serde::{Deserialize, de::DeserializeOwned};
 use tokio::sync::{Mutex, Semaphore};
 
-use crate::{ApiError, WbiSigner};
+use crate::{ApiError, Session, SessionError, WbiSigner, session};
 
 const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const API_REFERER: &str = "https://www.bilibili.com/";
@@ -21,18 +23,36 @@ const RETRY_LIMIT: usize = 3;
 const RETRY_DELAY: Duration = Duration::from_millis(250);
 const MIN_REQUEST_INTERVAL: Duration = Duration::from_millis(200);
 const MAX_CONCURRENT_REQUESTS: usize = 8;
+const COOKIE_URL: &str = "https://api.bilibili.com/";
 
 #[derive(Clone)]
 pub struct Client {
     http: HttpClient,
-    cookies: Arc<Jar>,
+    jar: Arc<Jar>,
+    cookies: Arc<std::sync::Mutex<BTreeMap<String, String>>>,
+    session_dir: Option<PathBuf>,
     next_request: Arc<Mutex<Option<Instant>>>,
     requests: Arc<Semaphore>,
 }
 
 impl Client {
     pub fn new() -> Result<Self, ApiError> {
-        let cookies = Arc::new(Jar::default());
+        Self::with_data_dir(session::data_dir())
+    }
+
+    pub fn with_data_dir(session_dir: Option<PathBuf>) -> Result<Self, ApiError> {
+        let jar = Arc::new(Jar::default());
+        let mut cookies = BTreeMap::new();
+
+        if let Some(dir) = session_dir.as_deref()
+            && let Ok(Some(session)) = Session::load(dir)
+        {
+            for (name, value) in session.cookies() {
+                add_cookie(&jar, name, value);
+            }
+            cookies = session.cookies().clone();
+        }
+
         let mut headers = HeaderMap::new();
         headers.insert(REFERER, HeaderValue::from_static(API_REFERER));
         headers.insert(
@@ -44,21 +64,62 @@ impl Client {
         let http = HttpClient::builder()
             .user_agent(USER_AGENT)
             .default_headers(headers)
-            .cookie_provider(Arc::clone(&cookies))
+            .cookie_provider(Arc::clone(&jar))
             .timeout(REQUEST_TIMEOUT)
             .connect_timeout(CONNECT_TIMEOUT)
             .build()?;
 
         Ok(Self {
             http,
-            cookies,
+            jar,
+            cookies: Arc::new(std::sync::Mutex::new(cookies)),
+            session_dir,
             next_request: Arc::new(Mutex::new(None)),
             requests: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
         })
     }
 
-    pub fn cookies(&self) -> &Arc<Jar> {
-        &self.cookies
+    pub fn set_cookies(&self, cookies: impl IntoIterator<Item = (String, String)>) {
+        let mut stored = lock_cookies(&self.cookies);
+        for (name, value) in cookies {
+            add_cookie(&self.jar, &name, &value);
+            stored.insert(name, value);
+        }
+    }
+
+    pub fn cookie_values(&self) -> BTreeMap<String, String> {
+        lock_cookies(&self.cookies).clone()
+    }
+
+    pub fn jar_cookies(&self) -> BTreeMap<String, String> {
+        let Ok(url) = Url::parse(COOKIE_URL) else {
+            return BTreeMap::new();
+        };
+        let Some(header) = CookieStore::cookies(&*self.jar, &url) else {
+            return BTreeMap::new();
+        };
+        let Ok(text) = header.to_str() else {
+            return BTreeMap::new();
+        };
+        text.split(';')
+            .filter_map(|pair| pair.trim().split_once('='))
+            .map(|(name, value)| (name.trim().to_owned(), value.trim().to_owned()))
+            .collect()
+    }
+
+    pub fn save_session(&self) -> Result<(), SessionError> {
+        let Some(dir) = self.session_dir.as_deref() else {
+            return Ok(());
+        };
+        Session::new(self.cookie_values()).save(dir)
+    }
+
+    pub fn clear_session(&self) -> Result<(), SessionError> {
+        lock_cookies(&self.cookies).clear();
+        match self.session_dir.as_deref() {
+            Some(dir) => Session::clear(dir),
+            None => Ok(()),
+        }
     }
 
     pub async fn get_json<T>(&self, url: &str, params: &[(&str, String)]) -> Result<T, ApiError>
@@ -184,14 +245,82 @@ fn unix_timestamp() -> u64 {
         .unwrap_or(0)
 }
 
+fn add_cookie(jar: &Jar, name: &str, value: &str) {
+    let cookie = format!("{name}={value}; Domain=.bilibili.com; Path=/; Secure");
+    let url = Url::parse(COOKIE_URL).expect("cookie url is a constant");
+    jar.add_cookie_str(&cookie, &url);
+}
+
+fn lock_cookies(
+    cookies: &std::sync::Mutex<BTreeMap<String, String>>,
+) -> std::sync::MutexGuard<'_, BTreeMap<String, String>> {
+    cookies
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PlayUrl, Popular, VideoInfo};
+    use crate::{PlayUrl, Popular, Session, VideoInfo};
+    use std::{collections::BTreeMap, fs, path::PathBuf};
 
     const POPULAR_FIXTURE: &str = include_str!("../fixtures/popular.json");
     const VIEW_FIXTURE: &str = include_str!("../fixtures/view.json");
     const PLAYURL_FIXTURE: &str = include_str!("../fixtures/playurl.json");
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("gpuili-client-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn session_cookies() -> BTreeMap<String, String> {
+        BTreeMap::from([("SESSDATA".to_string(), "value".to_string())])
+    }
+
+    #[test]
+    fn loads_a_saved_session() {
+        let dir = temp_dir("load");
+        Session::new(session_cookies()).save(&dir).expect("save");
+
+        let client = Client::with_data_dir(Some(dir.clone())).expect("client");
+        assert_eq!(client.cookie_values(), session_cookies());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn reads_cookies_back_from_the_jar() {
+        let client = Client::with_data_dir(None).expect("client");
+        client.set_cookies([("SESSDATA".to_string(), "value".to_string())]);
+        assert_eq!(
+            client.jar_cookies().get("SESSDATA").map(String::as_str),
+            Some("value")
+        );
+    }
+
+    #[test]
+    fn saves_and_clears_a_session() {
+        let dir = temp_dir("save-clear");
+        let client = Client::with_data_dir(Some(dir.clone())).expect("client");
+        client.set_cookies(session_cookies());
+        client.save_session().expect("save session");
+        assert_eq!(
+            Session::load(&dir)
+                .expect("load")
+                .expect("session")
+                .cookies(),
+            &session_cookies()
+        );
+
+        client.clear_session().expect("clear session");
+        assert!(client.cookie_values().is_empty());
+        assert!(Session::load(&dir).expect("load").is_none());
+
+        fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn parses_popular_fixture() {
