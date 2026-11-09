@@ -128,7 +128,7 @@ impl Client {
     {
         let response = self.send(|| self.http.get(url).query(params)).await?;
         let body = response.text().await?;
-        parse_envelope(&body)
+        self.parse(&body)
     }
 
     pub async fn get_signed<T>(
@@ -159,7 +159,22 @@ impl Client {
     {
         let response = self.send(|| self.http.get(url)).await?;
         let body = response.text().await?;
-        parse_envelope(&body)
+        self.parse(&body)
+    }
+
+    fn parse<T>(&self, body: &str) -> Result<T, ApiError>
+    where
+        T: DeserializeOwned,
+    {
+        match parse_envelope(body) {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                if error.is_login_required() {
+                    let _ = self.clear_session();
+                }
+                Err(error)
+            }
+        }
     }
 
     async fn send(
@@ -299,6 +314,25 @@ mod tests {
             client.jar_cookies().get("SESSDATA").map(String::as_str),
             Some("value")
         );
+    }
+
+    #[test]
+    fn clears_the_session_when_login_is_required() {
+        let dir = temp_dir("login-required");
+        Session::new(session_cookies())
+            .save(&dir)
+            .expect("save session");
+        let client = Client::with_data_dir(Some(dir.clone())).expect("client");
+        assert!(!client.cookie_values().is_empty());
+
+        let error = client
+            .parse::<Popular>(r#"{"code":-101,"message":"账号未登录"}"#)
+            .expect_err("login required");
+        assert!(error.is_login_required());
+        assert!(client.cookie_values().is_empty());
+        assert!(Session::load(&dir).expect("load").is_none());
+
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

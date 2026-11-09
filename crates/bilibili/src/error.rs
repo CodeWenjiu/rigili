@@ -16,6 +16,10 @@ pub enum ApiError {
 }
 
 impl ApiError {
+    pub fn is_login_required(&self) -> bool {
+        matches!(self, Self::Bilibili { code: -101, .. })
+    }
+
     pub fn is_risk_control(&self) -> bool {
         matches!(
             self,

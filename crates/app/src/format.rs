@@ -1,5 +1,17 @@
 use std::time::Duration;
 
+use gpuili_bilibili::ApiError;
+
+pub(crate) fn api_error_message(error: &ApiError) -> String {
+    if error.is_login_required() {
+        "登录已过期，请重新登录".into()
+    } else if error.is_risk_control() {
+        "请求过于频繁，请稍后再试".into()
+    } else {
+        error.to_string()
+    }
+}
+
 pub(crate) fn format_count(value: u64) -> String {
     if value >= 100_000_000 {
         format!("{:.1}亿", value as f64 / 100_000_000.0)
@@ -59,7 +71,29 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_clock, format_count, format_date, format_duration};
+    use super::{api_error_message, format_clock, format_count, format_date, format_duration};
+    use gpuili_bilibili::ApiError;
+
+    #[test]
+    fn explains_login_and_rate_limit_errors() {
+        let login = ApiError::Bilibili {
+            code: -101,
+            message: "账号未登录".into(),
+        };
+        assert_eq!(api_error_message(&login), "登录已过期，请重新登录");
+
+        let risk = ApiError::Bilibili {
+            code: -352,
+            message: "风控校验失败".into(),
+        };
+        assert_eq!(api_error_message(&risk), "请求过于频繁，请稍后再试");
+
+        let other = ApiError::Bilibili {
+            code: -400,
+            message: "请求错误".into(),
+        };
+        assert!(api_error_message(&other).contains("-400"));
+    }
 
     #[test]
     fn formats_counts() {

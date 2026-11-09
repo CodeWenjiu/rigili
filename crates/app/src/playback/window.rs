@@ -78,13 +78,20 @@ impl PlayerWindow {
                             player.load_urls(streams.video, streams.audio, cx)
                         });
                     }
-                    Ok(Err(error)) => this.error = Some(error.to_string()),
+                    Ok(Err(error)) => this.handle_error(&error, cx),
                     Err(error) => this.error = Some(format!("加载任务失败：{error}")),
                 }
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    fn handle_error(&mut self, error: &gpuili_bilibili::ApiError, cx: &mut Context<Self>) {
+        if error.is_login_required() {
+            crate::login::expire(cx);
+        }
+        self.error = Some(crate::format::api_error_message(error));
     }
 
     fn retry(&mut self, cx: &mut Context<Self>) {

@@ -5,6 +5,7 @@ use crate::platform::assets::AppAssets;
 fn main() {
     gpui_kit::application().with_assets(AppAssets).run(|cx| {
         gpui_kit::init(cx);
+        cx.set_global(login::LoginState::default());
         platform::init(cx);
 
         if let Err(error) = shell::open_main(cx) {

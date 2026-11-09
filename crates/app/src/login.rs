@@ -28,32 +28,43 @@ enum Phase {
     Done,
 }
 
-pub(crate) struct LoginStatus {
+#[derive(Default)]
+pub(crate) struct LoginState {
     pub(crate) user: Option<Nav>,
 }
 
-impl LoginStatus {
-    pub(crate) fn new() -> Self {
-        Self { user: None }
+impl Global for LoginState {}
+
+pub(crate) fn user(cx: &App) -> Option<Nav> {
+    cx.global::<LoginState>().user.clone()
+}
+
+pub(crate) fn set_user(user: Option<Nav>, cx: &mut App) {
+    cx.set_global(LoginState { user });
+    cx.refresh_windows();
+}
+
+pub(crate) fn expire(cx: &mut App) {
+    if user(cx).is_some() {
+        set_user(None, cx);
     }
 }
 
 struct LoginView {
     backend: Option<Backend>,
-    status: Entity<LoginStatus>,
     phase: Phase,
     qr: Option<Arc<RenderImage>>,
     _task: Option<Task<()>>,
 }
 
-pub(crate) fn open(window: &mut Window, cx: &mut App, status: Entity<LoginStatus>) {
-    let view = cx.new(|cx| LoginView::new(window, cx, status));
+pub(crate) fn open(window: &mut Window, cx: &mut App) {
+    let view = cx.new(|cx| LoginView::new(window, cx));
     window.open_dialog(cx, move |dialog, _, _| {
         dialog.w(px(280.)).title("登录").child(view.clone())
     });
 }
 
-pub(crate) fn restore(_window: &mut Window, cx: &mut App, status: Entity<LoginStatus>) {
+pub(crate) fn restore(_window: &mut Window, cx: &mut App) {
     let Ok(backend) = Backend::new() else {
         return;
     };
@@ -65,24 +76,20 @@ pub(crate) fn restore(_window: &mut Window, cx: &mut App, status: Entity<LoginSt
         if let Ok(nav) = nav
             && nav.is_login
         {
-            status.update(cx, |status, cx| {
-                status.user = Some(nav);
-                cx.notify();
-            });
+            cx.update(|cx| set_user(Some(nav), cx));
         }
     })
     .detach();
 }
 
 impl LoginView {
-    fn new(window: &mut Window, cx: &mut Context<Self>, status: Entity<LoginStatus>) -> Self {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (backend, phase) = match Backend::new() {
             Ok(backend) => (Some(backend), Phase::Starting),
             Err(error) => (None, Phase::Failed(error.to_string())),
         };
         let mut view = Self {
             backend,
-            status,
             phase,
             qr: None,
             _task: None,
@@ -215,10 +222,7 @@ impl LoginView {
         match nav {
             Ok(nav) if nav.is_login => {
                 self.phase = Phase::Done;
-                self.status.update(cx, |status, cx| {
-                    status.user = Some(nav);
-                    cx.notify();
-                });
+                set_user(Some(nav), cx);
             }
             Ok(_) => self.fail("登录状态未生效，请重试".into(), cx),
             Err(message) => self.fail(message, cx),

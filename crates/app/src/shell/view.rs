@@ -8,12 +8,11 @@ use gpui_kit::*;
 
 use super::playback::Playback;
 use crate::home::{HomeEvent, HomeView};
-use crate::login::{self, LoginStatus};
+use crate::login;
 use crate::playback::PlaybackRequest;
 
 pub struct MainView {
     home: Entity<HomeView>,
-    login: Entity<LoginStatus>,
     playback: Option<Playback>,
 }
 
@@ -27,8 +26,7 @@ pub fn open_main(cx: &mut App) -> Result<()> {
 impl MainView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let home = cx.new(HomeView::new);
-        let login = cx.new(|_| LoginStatus::new());
-        login::restore(window, cx, login.clone());
+        login::restore(window, cx);
 
         cx.subscribe_in(&home, window, |this, _, event: &HomeEvent, window, cx| {
             let HomeEvent::Open { bvid, cid, title } = event;
@@ -63,13 +61,12 @@ impl MainView {
 
         Self {
             home,
-            login,
             playback: None,
         }
     }
 
     fn account(&self, cx: &mut Context<Self>) -> AnyElement {
-        if let Some(user) = &self.login.read(cx).user {
+        if let Some(user) = login::user(cx) {
             return h_flex()
                 .w_full()
                 .min_w_0()
@@ -89,8 +86,8 @@ impl MainView {
             .ghost()
             .icon(IconName::CircleUser)
             .label("登录")
-            .on_click(cx.listener(|this, _, window, cx| {
-                login::open(window, cx, this.login.clone());
+            .on_click(cx.listener(|_, _, window, cx| {
+                login::open(window, cx);
             }))
             .into_any_element()
     }
