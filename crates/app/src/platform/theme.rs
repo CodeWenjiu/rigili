@@ -55,12 +55,12 @@ const THEME: &str = r##"{
   }
 }"##;
 
-pub fn apply(cx: &mut App) {
+pub(crate) fn apply(cx: &mut App) {
     let config = serde_json::from_str::<ThemeConfig>(THEME).expect("built-in theme must be valid");
     Theme::update(cx, |theme| theme.apply_config(&Rc::new(config)));
 }
 
-pub fn cover_scrim() -> Background {
+pub(crate) fn cover_scrim() -> Background {
     linear_gradient(
         180.,
         linear_color_stop(hsla(0., 0., 0., 0.), 0.),

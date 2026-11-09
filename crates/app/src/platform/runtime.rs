@@ -2,7 +2,7 @@ use std::future::Future;
 
 use gpui_kit::*;
 
-pub fn init(cx: &mut App) {
+pub(crate) fn init(cx: &mut App) {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -31,10 +31,10 @@ impl Drop for GlobalTokio {
     }
 }
 
-pub struct Tokio;
+pub(crate) struct Tokio;
 
 impl Tokio {
-    pub fn spawn<C, Fut, R>(cx: &C, future: Fut) -> Task<Result<R, tokio::task::JoinError>>
+    pub(crate) fn spawn<C, Fut, R>(cx: &C, future: Fut) -> Task<Result<R, tokio::task::JoinError>>
     where
         C: AppContext,
         Fut: Future<Output = R> + Send + 'static,
@@ -52,7 +52,7 @@ impl Tokio {
         })
     }
 
-    pub fn handle(cx: &App) -> tokio::runtime::Handle {
+    pub(crate) fn handle(cx: &App) -> tokio::runtime::Handle {
         cx.read_global(|tokio: &GlobalTokio, _| tokio.handle.clone())
     }
 }

@@ -1,12 +1,19 @@
 use crate::VideoSize;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PlaybackPhase {
+    #[default]
+    Idle,
+    Loading,
+    Buffering,
+    Playing,
+    Ended,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlayerStatus {
-    pub idle: bool,
+    pub phase: PlaybackPhase,
     pub paused: bool,
-    pub loading: bool,
-    pub ended: bool,
-    pub buffering: bool,
     pub time_pos: f64,
     pub duration: f64,
     pub volume: f64,
@@ -20,11 +27,8 @@ pub struct PlayerStatus {
 impl Default for PlayerStatus {
     fn default() -> Self {
         Self {
-            idle: true,
+            phase: PlaybackPhase::Idle,
             paused: false,
-            loading: false,
-            ended: false,
-            buffering: false,
             time_pos: 0.0,
             duration: 0.0,
             volume: 100.0,
@@ -34,6 +38,18 @@ impl Default for PlayerStatus {
             video_size: None,
             error: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PlaybackPhase, PlayerStatus};
+
+    #[test]
+    fn starts_idle() {
+        let status = PlayerStatus::default();
+        assert_eq!(status.phase, PlaybackPhase::Idle);
+        assert!(!status.paused);
     }
 }
 

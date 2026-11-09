@@ -1,18 +1,20 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::*;
-use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use gpuili_bilibili::PopularVideo;
 
-use crate::{
-    Backend, cover_url, format_count, format_date, format_duration, runtime::Tokio,
-    theme::cover_scrim,
-};
+use super::card::{CardStyle, skeleton_card, video_card};
+use crate::backend::Backend;
+use crate::platform::runtime::Tokio;
 
 pub enum HomeEvent {
-    Open(String),
+    Open {
+        bvid: String,
+        cid: u64,
+        title: String,
+    },
 }
 
 pub struct HomeView {
@@ -84,10 +86,9 @@ impl Render for HomeView {
         let background = cx.theme().background;
         let foreground = cx.theme().foreground;
         let muted = cx.theme().muted_foreground;
-        let muted_bg = cx.theme().muted;
-        let primary = cx.theme().primary;
         let danger = cx.theme().danger;
         let radius = cx.theme().radius;
+        let style = CardStyle::new(cx);
         let weak = cx.entity().downgrade();
 
         let content = if self.loading {
@@ -121,10 +122,16 @@ impl Render for HomeView {
                 .gap_y_6()
                 .children(self.videos.iter().map(|video| {
                     let bvid = video.bvid.clone();
+                    let cid = video.cid;
+                    let title = video.title.clone();
                     let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| {
-                        cx.emit(HomeEvent::Open(bvid.clone()));
+                        cx.emit(HomeEvent::Open {
+                            bvid: bvid.clone(),
+                            cid,
+                            title: title.clone(),
+                        });
                     });
-                    video_card(video, foreground, muted, muted_bg, primary, radius, on_open)
+                    video_card(video, style, on_open)
                 }))
                 .into_any_element()
         };
@@ -169,93 +176,4 @@ impl Render for HomeView {
                     .child(content),
             )
     }
-}
-
-fn video_card(
-    video: &PopularVideo,
-    foreground: Hsla,
-    muted: Hsla,
-    placeholder: Hsla,
-    primary: Hsla,
-    radius: Pixels,
-    on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    let meta = format!("{} · {}", video.owner.name, format_date(video.pubdate));
-
-    v_flex()
-        .group("video-card")
-        .w(px(240.))
-        .gap_2()
-        .id(SharedString::from(video.bvid.clone()))
-        .cursor_pointer()
-        .on_click(on_open)
-        .child(
-            div()
-                .w_full()
-                .aspect_ratio(16. / 9.)
-                .relative()
-                .rounded(radius)
-                .overflow_hidden()
-                .bg(placeholder)
-                .child(
-                    img(cover_url(&video.pic, 480))
-                        .size_full()
-                        .object_fit(ObjectFit::Cover),
-                )
-                .child(
-                    h_flex()
-                        .absolute()
-                        .bottom_0()
-                        .left_0()
-                        .right_0()
-                        .items_center()
-                        .gap_3()
-                        .px_2()
-                        .pt_4()
-                        .pb_1()
-                        .text_xs()
-                        .text_color(Hsla::white())
-                        .bg(cover_scrim())
-                        .child(
-                            h_flex()
-                                .items_center()
-                                .gap_1()
-                                .child(IconName::Play)
-                                .child(format_count(video.stat.view)),
-                        )
-                        .child(
-                            h_flex()
-                                .items_center()
-                                .gap_1()
-                                .child(IconName::MessageCircle)
-                                .child(format_count(video.stat.danmaku)),
-                        )
-                        .child(div().flex_1())
-                        .child(format_duration(video.duration)),
-                ),
-        )
-        .child(
-            div()
-                .text_sm()
-                .line_clamp(2)
-                .text_color(foreground)
-                .group_hover("video-card", |style| style.text_color(primary))
-                .child(video.title.clone()),
-        )
-        .child(div().text_xs().text_color(muted).child(meta))
-}
-
-fn skeleton_card(radius: Pixels) -> impl IntoElement {
-    v_flex()
-        .w(px(240.))
-        .gap_2()
-        .child(
-            Skeleton::new()
-                .w_full()
-                .h_auto()
-                .aspect_ratio(16. / 9.)
-                .rounded(radius),
-        )
-        .child(Skeleton::new().h_4().w_3_4())
-        .child(Skeleton::new().h_3().w_1_3())
 }

@@ -5,14 +5,14 @@ use gpui_kit::http_client::{AsyncBody, HttpClient, Url, http};
 use gpui_kit::*;
 use tokio::sync::Semaphore;
 
-use crate::runtime::Tokio;
+use crate::platform::runtime::Tokio;
 
 const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const REFERER: &str = "https://www.bilibili.com/";
 const TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_CONCURRENT_IMAGES: usize = 8;
 
-pub fn init(cx: &mut App) {
+pub(crate) fn init(cx: &mut App) {
     cx.set_http_client(Arc::new(ImageHttpClient::new(Tokio::handle(cx))));
 }
 
