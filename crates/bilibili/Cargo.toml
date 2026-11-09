@@ -6,3 +6,14 @@ publish = false
 
 [dependencies]
 gpuili_macro.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+hex = "0.4"
+md-5 = "0.10"
+percent-encoding = "2"
+reqwest = { version = "0.12", default-features = false, features = ["brotli", "cookies", "gzip", "rustls-tls"] }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
