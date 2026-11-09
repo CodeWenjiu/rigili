@@ -1,63 +1,56 @@
-use std::rc::Rc;
-
-use gpui_kit::component::theme::{Theme, ThemeConfig};
-use gpui_kit::{App, Background, hsla, linear_color_stop, linear_gradient};
-
-const THEME: &str = r##"{
-  "name": "gpuili",
-  "mode": "dark",
-  "font.family": "Source Han Sans SC",
-  "font.size": 16,
-  "radius": 6,
-  "radius.lg": 10,
-  "shadow": false,
-  "colors": {
-    "background": "#18191c",
-    "foreground": "#e3e5e7",
-    "border": "#2b2c30",
-    "muted.background": "#232427",
-    "muted.foreground": "#9499a0",
-    "primary.background": "#fb7299",
-    "primary.foreground": "#ffffff",
-    "primary.hover.background": "#ff85a2",
-    "primary.active.background": "#e05c80",
-    "accent.background": "#2a2b30",
-    "accent.foreground": "#e3e5e7",
-    "danger.background": "#f56c6c",
-    "danger.foreground": "#ffffff",
-    "warning.background": "#f5a623",
-    "warning.foreground": "#ffffff",
-    "success.background": "#67c23a",
-    "success.foreground": "#ffffff",
-    "info.background": "#00aeec",
-    "info.foreground": "#ffffff",
-    "link": "#00aeec",
-    "link.hover": "#33beef",
-    "link.active": "#0096c9",
-    "sidebar.background": "#16171a",
-    "sidebar.foreground": "#c9ccd0",
-    "sidebar.accent.background": "#2a2b30",
-    "sidebar.accent.foreground": "#fb7299",
-    "sidebar.primary.background": "#fb7299",
-    "sidebar.primary.foreground": "#ffffff",
-    "sidebar.border": "#24252a",
-    "popover.background": "#202124",
-    "popover.foreground": "#e3e5e7",
-    "input.border": "#3a3c40",
-    "ring": "#fb7299",
-    "selection.background": "#4a2e39",
-    "skeleton.background": "#242529",
-    "scrollbar.background": "#18191c",
-    "scrollbar.thumb.background": "#3a3c40",
-    "scrollbar.thumb.hover.background": "#4a4c52",
-    "title_bar.background": "#18191c",
-    "title_bar.border": "#2b2c30"
-  }
-}"##;
+use gpui_kit::component::theme::{Theme, ThemeMode};
+use gpui_kit::{App, Background, hsla, linear_color_stop, linear_gradient, px, rgb};
 
 pub(crate) fn apply(cx: &mut App) {
-    let config = serde_json::from_str::<ThemeConfig>(THEME).expect("built-in theme must be valid");
-    Theme::update(cx, |theme| theme.apply_config(&Rc::new(config)));
+    Theme::change(ThemeMode::Dark, None, cx);
+    Theme::update(cx, |theme| {
+        theme.font_family = "Source Han Sans SC".into();
+        theme.font_size = px(16.);
+        theme.radius = px(6.);
+        theme.radius_lg = px(10.);
+        theme.shadow = false;
+
+        theme.background = rgb(0x18191c).into();
+        theme.foreground = rgb(0xe3e5e7).into();
+        theme.border = rgb(0x2b2c30).into();
+        theme.muted = rgb(0x232427).into();
+        theme.muted_foreground = rgb(0x9499a0).into();
+        theme.primary = rgb(0xfb7299).into();
+        theme.primary_foreground = rgb(0xffffff).into();
+        theme.primary_hover = rgb(0xff85a2).into();
+        theme.primary_active = rgb(0xe05c80).into();
+        theme.accent = rgb(0x2a2b30).into();
+        theme.accent_foreground = rgb(0xe3e5e7).into();
+        theme.danger = rgb(0xf56c6c).into();
+        theme.danger_foreground = rgb(0xffffff).into();
+        theme.warning = rgb(0xf5a623).into();
+        theme.warning_foreground = rgb(0xffffff).into();
+        theme.success = rgb(0x67c23a).into();
+        theme.success_foreground = rgb(0xffffff).into();
+        theme.info = rgb(0x00aeec).into();
+        theme.info_foreground = rgb(0xffffff).into();
+        theme.link = rgb(0x00aeec).into();
+        theme.link_hover = rgb(0x33beef).into();
+        theme.link_active = rgb(0x0096c9).into();
+        theme.sidebar = rgb(0x16171a).into();
+        theme.sidebar_foreground = rgb(0xc9ccd0).into();
+        theme.sidebar_accent = rgb(0x2a2b30).into();
+        theme.sidebar_accent_foreground = rgb(0xfb7299).into();
+        theme.sidebar_primary = rgb(0xfb7299).into();
+        theme.sidebar_primary_foreground = rgb(0xffffff).into();
+        theme.sidebar_border = rgb(0x24252a).into();
+        theme.popover = rgb(0x202124).into();
+        theme.popover_foreground = rgb(0xe3e5e7).into();
+        theme.input = rgb(0x3a3c40).into();
+        theme.ring = rgb(0xfb7299).into();
+        theme.selection = rgb(0x4a2e39).into();
+        theme.skeleton = rgb(0x242529).into();
+        theme.scrollbar = rgb(0x18191c).into();
+        theme.scrollbar_thumb = rgb(0x3a3c40).into();
+        theme.scrollbar_thumb_hover = rgb(0x4a4c52).into();
+        theme.title_bar = rgb(0x18191c).into();
+        theme.title_bar_border = rgb(0x2b2c30).into();
+    });
 }
 
 pub(crate) fn cover_scrim() -> Background {
@@ -66,16 +59,4 @@ pub(crate) fn cover_scrim() -> Background {
         linear_color_stop(hsla(0., 0., 0., 0.), 0.),
         linear_color_stop(hsla(0., 0., 0., 0.75), 1.),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use gpui_kit::component::theme::ThemeConfig;
-
-    #[test]
-    fn built_in_theme_parses() {
-        let config = serde_json::from_str::<ThemeConfig>(super::THEME).expect("theme");
-        assert_eq!(config.name.as_ref(), "gpuili");
-        assert!(config.mode.is_dark());
-    }
 }
