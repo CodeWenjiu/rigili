@@ -8,6 +8,18 @@ use gpuili_bilibili::{PopularVideo, thumbnail};
 use crate::format::{format_count, format_date, format_duration};
 use crate::platform::theme::cover_scrim;
 
+pub(super) const MIN_CARD_WIDTH: f32 = 200.;
+const CARD_TEXT_HEIGHT_REMS: f32 = 4.25;
+const CARD_BODY_GAP: f32 = 8.;
+
+pub(super) fn card_text_height(window: &Window) -> Pixels {
+    rems(CARD_TEXT_HEIGHT_REMS).to_pixels(window.rem_size())
+}
+
+pub(super) fn card_height(width: Pixels, text_height: Pixels) -> Pixels {
+    px(width.as_f32() * 9. / 16.) + px(CARD_BODY_GAP) + text_height
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct CardStyle {
     pub(super) foreground: Hsla,
@@ -33,14 +45,17 @@ impl CardStyle {
 pub(super) fn video_card(
     video: &PopularVideo,
     style: CardStyle,
+    width: Pixels,
+    text_height: Pixels,
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let meta = format!("{} · {}", video.owner.name, format_date(video.pubdate));
 
     v_flex()
         .group("video-card")
-        .w(px(240.))
-        .gap_2()
+        .w(width)
+        .h(card_height(width, text_height))
+        .gap(px(CARD_BODY_GAP))
         .id(SharedString::from(video.bvid.clone()))
         .cursor_pointer()
         .on_click(on_open)
@@ -90,19 +105,32 @@ pub(super) fn video_card(
                 ),
         )
         .child(
-            div()
-                .text_sm()
-                .line_clamp(2)
-                .text_color(style.foreground)
-                .group_hover("video-card", |this| this.text_color(style.primary))
-                .child(video.title.clone()),
+            v_flex()
+                .h(text_height)
+                .gap_2()
+                .justify_between()
+                .overflow_hidden()
+                .child(
+                    div()
+                        .text_sm()
+                        .line_clamp(2)
+                        .text_color(style.foreground)
+                        .group_hover("video-card", |this| this.text_color(style.primary))
+                        .child(video.title.clone()),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(style.muted)
+                        .truncate()
+                        .child(meta),
+                ),
         )
-        .child(div().text_xs().text_color(style.muted).child(meta))
 }
 
-pub(super) fn skeleton_card(radius: Pixels) -> impl IntoElement {
+pub(super) fn skeleton_card(width: Pixels, radius: Pixels) -> impl IntoElement {
     v_flex()
-        .w(px(240.))
+        .w(width)
         .gap_2()
         .child(
             Skeleton::new()

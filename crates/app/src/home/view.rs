@@ -1,3 +1,5 @@
+gpuili_macro::mod_prv!(feed, list);
+
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::*;
 use gpui_kit::component::*;
@@ -5,9 +7,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use gpuili_bilibili::PopularVideo;
 
-use super::card::{CardStyle, skeleton_card, video_card};
 use crate::backend::Backend;
-use crate::platform::runtime::Tokio;
 
 pub enum HomeEvent {
     Open {
@@ -20,8 +20,15 @@ pub enum HomeEvent {
 pub struct HomeView {
     backend: Option<Backend>,
     videos: Vec<PopularVideo>,
+    page: u32,
+    has_more: bool,
     loading: bool,
+    loading_more: bool,
     error: Option<String>,
+    more_error: Option<String>,
+    generation: u64,
+    list_width: Pixels,
+    scroll: VirtualListScrollHandle,
 }
 
 impl EventEmitter<HomeEvent> for HomeView {}
@@ -35,115 +42,29 @@ impl HomeView {
         let mut view = Self {
             backend,
             videos: Vec::new(),
+            page: 0,
+            has_more: false,
             loading: false,
+            loading_more: false,
             error,
+            more_error: None,
+            generation: 0,
+            list_width: px(0.),
+            scroll: VirtualListScrollHandle::new(),
         };
         if view.backend.is_some() {
             view.load(cx);
         }
         view
     }
-
-    fn handle_error(&mut self, error: &gpuili_bilibili::ApiError, cx: &mut Context<Self>) {
-        if error.is_login_required() {
-            crate::login::expire(cx);
-        }
-        self.error = Some(crate::format::api_error_message(error));
-    }
-
-    fn load(&mut self, cx: &mut Context<Self>) {
-        if self.backend.is_none() {
-            match Backend::new() {
-                Ok(backend) => self.backend = Some(backend),
-                Err(error) => {
-                    self.loading = false;
-                    self.error = Some(error.to_string());
-                    cx.notify();
-                    return;
-                }
-            }
-        }
-
-        let Some(backend) = self.backend.clone() else {
-            return;
-        };
-        self.loading = true;
-        self.error = None;
-        cx.notify();
-
-        let task = Tokio::spawn(&*cx, async move { backend.popular(1, 30).await });
-        cx.spawn(async move |weak, cx| {
-            let result = task.await;
-            let _ = weak.update(cx, |this, cx| {
-                this.loading = false;
-                match result {
-                    Ok(Ok(popular)) => this.videos = popular.list,
-                    Ok(Err(error)) => {
-                        this.handle_error(&error, cx);
-                    }
-                    Err(error) => this.error = Some(format!("加载任务失败：{error}")),
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
 }
 
 impl Render for HomeView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let background = cx.theme().background;
         let foreground = cx.theme().foreground;
-        let muted = cx.theme().muted_foreground;
-        let danger = cx.theme().danger;
-        let radius = cx.theme().radius;
-        let style = CardStyle::new(cx);
         let weak = cx.entity().downgrade();
-
-        let content = if self.loading {
-            h_flex()
-                .flex_wrap()
-                .gap_x_4()
-                .gap_y_6()
-                .children((0..8).map(|_| skeleton_card(radius)))
-                .into_any_element()
-        } else if let Some(error) = self.error.clone() {
-            v_flex()
-                .gap_3()
-                .child(div().text_sm().text_color(danger).child(error))
-                .child(Button::new("retry").primary().label("重试").on_click({
-                    let weak = weak.clone();
-                    move |_, _, cx| {
-                        let _ = weak.update(cx, |this, cx| this.load(cx));
-                    }
-                }))
-                .into_any_element()
-        } else if self.videos.is_empty() {
-            div()
-                .text_sm()
-                .text_color(muted)
-                .child("暂无内容")
-                .into_any_element()
-        } else {
-            h_flex()
-                .flex_wrap()
-                .gap_x_4()
-                .gap_y_6()
-                .children(self.videos.iter().map(|video| {
-                    let bvid = video.bvid.clone();
-                    let cid = (video.cid != 0).then_some(video.cid);
-                    let title = video.title.clone();
-                    let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| {
-                        cx.emit(HomeEvent::Open {
-                            bvid: bvid.clone(),
-                            cid,
-                            title: title.clone(),
-                        });
-                    });
-                    video_card(video, style, on_open)
-                }))
-                .into_any_element()
-        };
+        let content = self.render_content(window, cx);
 
         v_flex()
             .size_full()
@@ -168,21 +89,11 @@ impl Render for HomeView {
                             .ghost()
                             .icon(IconName::RefreshCw)
                             .label("刷新")
-                            .on_click({
-                                let weak = weak.clone();
-                                move |_, _, cx| {
-                                    let _ = weak.update(cx, |this, cx| this.load(cx));
-                                }
+                            .on_click(move |_, _, cx| {
+                                let _ = weak.update(cx, |this, cx| this.load(cx));
                             }),
                     ),
             )
-            .child(
-                div()
-                    .id("home-content")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .child(content),
-            )
+            .child(content)
     }
 }
