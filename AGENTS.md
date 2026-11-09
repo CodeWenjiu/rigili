@@ -107,3 +107,4 @@ cargo test --workspace
 - 参考实现：<https://github.com/msojocs/bilibili-linux>
 - 内置 skills：`.agents/skills/`（gpui-kit skills 的来源见 `.agents/skills/README.md`）
 - 模块声明规范：`.agents/skills/module-setup/SKILL.md`
+- 路线图：`roadmap.md`
