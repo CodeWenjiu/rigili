@@ -6,9 +6,14 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use gpuili_bilibili::PopularVideo;
 
-use crate::{Backend, runtime::Tokio, theme::cover_scrim};
+use crate::{
+    Backend, cover_url, format_count, format_date, format_duration, runtime::Tokio,
+    theme::cover_scrim,
+};
 
-const COVER_VARIANT: &str = "@480w_270h_1c.webp";
+pub enum HomeEvent {
+    Open(String),
+}
 
 pub struct HomeView {
     backend: Option<Backend>,
@@ -16,6 +21,8 @@ pub struct HomeView {
     loading: bool,
     error: Option<String>,
 }
+
+impl EventEmitter<HomeEvent> for HomeView {}
 
 impl HomeView {
     pub fn new(cx: &mut Context<Self>) -> Self {
@@ -78,6 +85,7 @@ impl Render for HomeView {
         let foreground = cx.theme().foreground;
         let muted = cx.theme().muted_foreground;
         let muted_bg = cx.theme().muted;
+        let primary = cx.theme().primary;
         let danger = cx.theme().danger;
         let radius = cx.theme().radius;
         let weak = cx.entity().downgrade();
@@ -111,11 +119,13 @@ impl Render for HomeView {
                 .flex_wrap()
                 .gap_x_4()
                 .gap_y_6()
-                .children(
-                    self.videos
-                        .iter()
-                        .map(|video| video_card(video, foreground, muted, muted_bg, radius)),
-                )
+                .children(self.videos.iter().map(|video| {
+                    let bvid = video.bvid.clone();
+                    let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        cx.emit(HomeEvent::Open(bvid.clone()));
+                    });
+                    video_card(video, foreground, muted, muted_bg, primary, radius, on_open)
+                }))
                 .into_any_element()
         };
 
@@ -166,13 +176,19 @@ fn video_card(
     foreground: Hsla,
     muted: Hsla,
     placeholder: Hsla,
+    primary: Hsla,
     radius: Pixels,
+    on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let meta = format!("{} · {}", video.owner.name, format_date(video.pubdate));
 
     v_flex()
+        .group("video-card")
         .w(px(240.))
         .gap_2()
+        .id(SharedString::from(video.bvid.clone()))
+        .cursor_pointer()
+        .on_click(on_open)
         .child(
             div()
                 .w_full()
@@ -182,7 +198,7 @@ fn video_card(
                 .overflow_hidden()
                 .bg(placeholder)
                 .child(
-                    img(cover_url(&video.pic))
+                    img(cover_url(&video.pic, 480))
                         .size_full()
                         .object_fit(ObjectFit::Cover),
                 )
@@ -223,6 +239,7 @@ fn video_card(
                 .text_sm()
                 .line_clamp(2)
                 .text_color(foreground)
+                .group_hover("video-card", |style| style.text_color(primary))
                 .child(video.title.clone()),
         )
         .child(div().text_xs().text_color(muted).child(meta))
@@ -241,92 +258,4 @@ fn skeleton_card(radius: Pixels) -> impl IntoElement {
         )
         .child(Skeleton::new().h_4().w_3_4())
         .child(Skeleton::new().h_3().w_1_3())
-}
-
-fn cover_url(url: &str) -> SharedString {
-    let rest = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("https://"))
-        .unwrap_or(url);
-    let base = rest.split('@').next().unwrap_or(rest);
-    format!("https://{base}{COVER_VARIANT}").into()
-}
-
-fn format_duration(seconds: u64) -> String {
-    let hours = seconds / 3600;
-    let minutes = seconds % 3600 / 60;
-    let seconds = seconds % 60;
-    if hours > 0 {
-        format!("{hours}:{minutes:02}:{seconds:02}")
-    } else {
-        format!("{minutes:02}:{seconds:02}")
-    }
-}
-
-fn format_date(unix: i64) -> String {
-    let (_, month, day) = civil_from_days(unix.div_euclid(86_400));
-    format!("{month}-{day}")
-}
-
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let year = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    (
-        if month <= 2 { year + 1 } else { year },
-        month as u32,
-        day as u32,
-    )
-}
-
-fn format_count(value: u64) -> String {
-    if value >= 100_000_000 {
-        format!("{:.1}亿", value as f64 / 100_000_000.0)
-    } else if value >= 10_000 {
-        format!("{:.1}万", value as f64 / 10_000.0)
-    } else {
-        value.to_string()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{cover_url, format_count, format_date, format_duration};
-
-    #[test]
-    fn formats_view_counts() {
-        assert_eq!(format_count(999), "999");
-        assert_eq!(format_count(12_345), "1.2万");
-        assert_eq!(format_count(123_456_789), "1.2亿");
-    }
-
-    #[test]
-    fn formats_durations() {
-        assert_eq!(format_duration(0), "00:00");
-        assert_eq!(format_duration(156), "02:36");
-        assert_eq!(format_duration(3_600), "1:00:00");
-    }
-
-    #[test]
-    fn formats_publish_dates() {
-        assert_eq!(format_date(1_762_646_400), "11-9");
-    }
-
-    #[test]
-    fn normalizes_cover_urls() {
-        assert_eq!(
-            cover_url("http://i0.hdslb.com/cover.jpg"),
-            "https://i0.hdslb.com/cover.jpg@480w_270h_1c.webp"
-        );
-        assert_eq!(
-            cover_url("https://i0.hdslb.com/cover.jpg@320w_200h_1c.webp"),
-            "https://i0.hdslb.com/cover.jpg@480w_270h_1c.webp"
-        );
-    }
 }

@@ -1,7 +1,24 @@
 use gpui_kit::*;
 
-gpuili_macro::mod_flat!(app, app_assets, backend, home, http, player_view, runtime);
+gpuili_macro::mod_flat!(
+    app,
+    app_assets,
+    backend,
+    detail,
+    format,
+    home,
+    http,
+    player_view,
+    runtime
+);
 gpuili_macro::mod_prv!(theme);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Route {
+    Home,
+    Detail,
+    Player,
+}
 
 fn main() {
     let mut args = std::env::args().skip(1);

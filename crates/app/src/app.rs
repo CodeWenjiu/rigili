@@ -4,16 +4,11 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use crate::{HomeView, PlayerView};
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Route {
-    Home,
-    Player,
-}
+use crate::{DetailEvent, DetailView, HomeEvent, HomeView, PlayerView, Route};
 
 pub struct MainView {
     home: Entity<HomeView>,
+    detail: Entity<DetailView>,
     player: Entity<PlayerView>,
     route: Route,
 }
@@ -25,16 +20,62 @@ impl MainView {
         initial_video: Option<String>,
         initial_audio: Option<String>,
     ) -> Self {
-        let route = if initial_video.is_some() {
+        let bvid = initial_video
+            .as_deref()
+            .filter(|arg| arg.starts_with("BV"))
+            .map(str::to_owned);
+        let initial_video = initial_video.filter(|_| bvid.is_none());
+        let route = if bvid.is_some() {
+            Route::Detail
+        } else if initial_video.is_some() {
             Route::Player
         } else {
             Route::Home
         };
         let home = cx.new(HomeView::new);
+        let detail = cx.new(DetailView::new);
         let player = cx.new(|cx| PlayerView::new(window, cx, initial_video, initial_audio));
+
+        if let Some(bvid) = bvid {
+            detail.update(cx, |detail, cx| detail.open(&bvid, window, cx));
+        }
+
+        cx.subscribe_in(
+            &home,
+            window,
+            |this, _, event: &HomeEvent, window, cx| match event {
+                HomeEvent::Open(bvid) => {
+                    this.route = Route::Detail;
+                    this.detail
+                        .update(cx, |detail, cx| detail.open(bvid, window, cx));
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
+
+        cx.subscribe_in(
+            &detail,
+            window,
+            |this, _, event: &DetailEvent, window, cx| match event {
+                DetailEvent::Back => {
+                    this.route = Route::Home;
+                    cx.notify();
+                }
+                DetailEvent::Play { video, audio } => {
+                    this.route = Route::Player;
+                    this.player.update(cx, |player, cx| {
+                        player.load_urls(video.clone(), audio.clone(), window, cx)
+                    });
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
 
         Self {
             home,
+            detail,
             player,
             route,
         }
@@ -51,6 +92,7 @@ impl Render for MainView {
         let weak = cx.entity().downgrade();
         let route = self.route;
         let home = self.home.clone();
+        let detail = self.detail.clone();
         let player = self.player.clone();
 
         h_flex()
@@ -82,7 +124,7 @@ impl Render for MainView {
                             .child(nav_item(
                                 "热门",
                                 IconName::Flame,
-                                route == Route::Home,
+                                matches!(route, Route::Home | Route::Detail),
                                 Route::Home,
                                 weak.clone(),
                             ))
@@ -97,6 +139,7 @@ impl Render for MainView {
             )
             .child(div().flex_1().min_w_0().h_full().child(match route {
                 Route::Home => home.into_any_element(),
+                Route::Detail => detail.into_any_element(),
                 Route::Player => player.into_any_element(),
             }))
     }

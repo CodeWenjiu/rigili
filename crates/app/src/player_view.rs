@@ -122,6 +122,25 @@ impl PlayerView {
         let audio = self.audio_url.read(cx).value().trim().to_string();
         let audio = (!audio.is_empty()).then_some(audio);
 
+        self.start(video, audio, cx);
+    }
+
+    pub fn load_urls(
+        &mut self,
+        video: String,
+        audio: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.video_url
+            .update(cx, |state, cx| state.set_value(video.clone(), window, cx));
+        self.audio_url.update(cx, |state, cx| {
+            state.set_value(audio.clone().unwrap_or_default(), window, cx)
+        });
+        self.start(video, audio, cx);
+    }
+
+    fn start(&mut self, video: String, audio: Option<String>, cx: &mut Context<Self>) {
         if let Some(frame) = self.frame.take() {
             self.retired_frames.push(frame);
         }
