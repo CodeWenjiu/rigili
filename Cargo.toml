@@ -7,6 +7,9 @@ default-members = ["crates/app"]
 version = "0.1.0"
 edition = "2024"
 
+[profile.dev]
+debug = "line-tables-only"
+
 [workspace.dependencies]
 gpui-kit = { version = "0.9.1", features = ["gpui-fast"] }
 thiserror = "2"
