@@ -327,12 +327,26 @@ impl MainView {
                                     this.focus_search(window, cx);
                                 }),
                             )
-                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                                if event.keystroke.key == "escape" && this.search_box_is_open() {
-                                    this.dismiss_search_box(window, cx);
-                                    cx.stop_propagation();
-                                }
-                            }))
+                            .capture_key_down(cx.listener(
+                                |this, event: &KeyDownEvent, window, cx| {
+                                    let handled = match event.keystroke.key.as_str() {
+                                        "escape" => {
+                                            let open = this.search_box_is_open();
+                                            if open {
+                                                this.dismiss_search_box(window, cx);
+                                            }
+                                            open
+                                        }
+                                        "down" => this.move_suggestion_selection(true, cx),
+                                        "up" => this.move_suggestion_selection(false, cx),
+                                        "enter" => this.pick_active_suggestion(window, cx),
+                                        _ => false,
+                                    };
+                                    if handled {
+                                        cx.stop_propagation();
+                                    }
+                                },
+                            ))
                             .child(
                                 Input::new(&self.search_input)
                                     .large()

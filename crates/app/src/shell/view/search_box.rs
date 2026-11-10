@@ -29,6 +29,7 @@ pub(super) struct SearchBox {
     hot_loading: bool,
     hot_loaded: bool,
     suggestions: Vec<SearchSuggestion>,
+    active_suggestion: Option<usize>,
     suggestion_generation: u64,
 }
 
@@ -44,12 +45,14 @@ impl SearchBox {
             hot_loading: false,
             hot_loaded: false,
             suggestions: Vec::new(),
+            active_suggestion: None,
             suggestion_generation: 0,
         }
     }
 
     pub(super) fn close(&mut self) {
         self.open = false;
+        self.active_suggestion = None;
     }
 
     pub(super) fn record(&mut self, keyword: &str) {
@@ -95,7 +98,7 @@ impl MainView {
             .read(cx)
             .focus_handle(cx)
             .is_focused(window);
-        self.search_box.open = false;
+        self.search_box.close();
         if focused {
             window.blur(cx);
         }
@@ -104,6 +107,37 @@ impl MainView {
 
     pub(super) fn search_box_is_open(&self) -> bool {
         self.search_box.open
+    }
+
+    pub(super) fn move_suggestion_selection(&mut self, down: bool, cx: &mut Context<Self>) -> bool {
+        if !self.search_box.open || self.search_box.suggestions.is_empty() {
+            return false;
+        }
+        let next = next_selection(
+            self.search_box.active_suggestion,
+            self.search_box.suggestions.len(),
+            down,
+        );
+        if next != self.search_box.active_suggestion {
+            self.search_box.active_suggestion = next;
+            cx.notify();
+        }
+        true
+    }
+
+    pub(super) fn pick_active_suggestion(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(index) = self.search_box.active_suggestion else {
+            return false;
+        };
+        let Some(suggestion) = self.search_box.suggestions.get(index).cloned() else {
+            return false;
+        };
+        self.pick_search(suggestion.value, window, cx);
+        true
     }
 
     fn search_changed(&mut self, cx: &mut Context<Self>) {
@@ -119,6 +153,7 @@ impl MainView {
     }
 
     fn refresh_suggestions(&mut self, cx: &mut Context<Self>) {
+        self.search_box.active_suggestion = None;
         let term = self.search_input.read(cx).value().trim().to_owned();
         if term.is_empty() {
             self.search_box.suggestion_generation += 1;
@@ -152,6 +187,7 @@ impl MainView {
                     }
                     Err(_) => this.search_box.suggestions.clear(),
                 }
+                this.search_box.active_suggestion = None;
                 cx.notify();
             },
         );
@@ -453,6 +489,7 @@ impl MainView {
                     .map(|(index, suggestion)| {
                         let value = suggestion.value.clone();
                         let segments = suggestion.segments.clone();
+                        let active = self.search_box.active_suggestion == Some(index);
 
                         h_flex()
                             .id(("search-suggestion", index))
@@ -461,6 +498,7 @@ impl MainView {
                             .px_3()
                             .rounded(cx.theme().radius)
                             .cursor_pointer()
+                            .when(active, |this| this.bg(hover))
                             .hover(move |this| this.bg(hover))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.pick_search(value.clone(), window, cx);
@@ -480,6 +518,17 @@ impl MainView {
             )
             .into_any_element()
     }
+}
+
+fn next_selection(current: Option<usize>, count: usize, down: bool) -> Option<usize> {
+    if count == 0 {
+        return None;
+    }
+    Some(if down {
+        current.map_or(0, |index| (index + 1).min(count - 1))
+    } else {
+        current.map_or(count - 1, |index| index.saturating_sub(1))
+    })
 }
 
 fn history_chip(cx: &App) -> ButtonCustomVariant {
@@ -506,4 +555,25 @@ fn hot_badge(badge: HotBadge, cx: &App) -> AnyElement {
         .text_xs()
         .child(label)
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_selection;
+
+    #[test]
+    fn selects_the_first_suggestion_on_down_and_the_last_on_up() {
+        assert_eq!(next_selection(None, 3, true), Some(0));
+        assert_eq!(next_selection(None, 3, false), Some(2));
+        assert_eq!(next_selection(None, 0, true), None);
+        assert_eq!(next_selection(Some(0), 0, false), None);
+    }
+
+    #[test]
+    fn clamps_selection_to_the_available_suggestions() {
+        assert_eq!(next_selection(Some(0), 3, true), Some(1));
+        assert_eq!(next_selection(Some(2), 3, true), Some(2));
+        assert_eq!(next_selection(Some(0), 3, false), Some(0));
+        assert_eq!(next_selection(Some(2), 3, false), Some(1));
+    }
 }
