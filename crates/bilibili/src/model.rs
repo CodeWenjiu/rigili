@@ -24,6 +24,109 @@ pub struct PopularVideo {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResult {
+    #[serde(default)]
+    pub page: u32,
+    #[serde(default)]
+    pub num_pages: u32,
+    #[serde(default)]
+    pub num_results: u64,
+    #[serde(default, rename = "result")]
+    pub videos: Vec<SearchVideo>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(from = "RawSearchVideo")]
+pub struct SearchVideo {
+    pub bvid: String,
+    pub title: String,
+    pub pic: String,
+    pub author: String,
+    pub duration: u64,
+    pub pubdate: i64,
+    pub play: u64,
+    pub danmaku: u64,
+}
+
+#[derive(Deserialize)]
+struct RawSearchVideo {
+    #[serde(default)]
+    bvid: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    pic: String,
+    #[serde(default)]
+    author: String,
+    #[serde(default)]
+    duration: String,
+    #[serde(default)]
+    pubdate: i64,
+    #[serde(default)]
+    play: u64,
+    #[serde(default)]
+    video_review: u64,
+    #[serde(default, rename = "danmaku")]
+    danmaku_count: u64,
+}
+
+impl From<RawSearchVideo> for SearchVideo {
+    fn from(raw: RawSearchVideo) -> Self {
+        Self {
+            bvid: raw.bvid,
+            title: clean_text(&raw.title),
+            pic: normalize_pic(&raw.pic),
+            author: raw.author,
+            duration: parse_duration(&raw.duration),
+            pubdate: raw.pubdate,
+            play: raw.play,
+            danmaku: raw.video_review.max(raw.danmaku_count),
+        }
+    }
+}
+
+fn clean_text(text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut in_tag = false;
+    for character in text.chars() {
+        match character {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            character if !in_tag => plain.push(character),
+            _ => {}
+        }
+    }
+
+    plain
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+}
+
+fn parse_duration(text: &str) -> u64 {
+    let mut total = 0u64;
+    for part in text.trim().split(':') {
+        let Ok(value) = part.trim().parse::<u64>() else {
+            return 0;
+        };
+        total = total.saturating_mul(60).saturating_add(value);
+    }
+    total
+}
+
+fn normalize_pic(url: &str) -> String {
+    match url.strip_prefix("//") {
+        Some(rest) => format!("https://{rest}"),
+        None => url.to_owned(),
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct VideoInfo {
     pub bvid: String,
     pub aid: u64,
@@ -204,7 +307,7 @@ pub struct Stat {
 
 #[cfg(test)]
 mod tests {
-    use super::{Dash, DashAudio, DashVideo};
+    use super::{Dash, DashAudio, DashVideo, SearchVideo};
 
     fn video(codecid: u32, bandwidth: u64) -> DashVideo {
         DashVideo {
@@ -255,5 +358,36 @@ mod tests {
             dash.best_audio().map(|audio| audio.bandwidth),
             Some(196_608)
         );
+    }
+
+    #[test]
+    fn cleans_search_result_fields() {
+        let video: SearchVideo = serde_json::from_str(
+            r#"{
+                "bvid": "BV1xx411c7mD",
+                "title": "【<em class=\"keyword\">测试</em>】A&amp;B",
+                "pic": "//i0.hdslb.com/bfs/archive/example.jpg",
+                "author": "UP主",
+                "duration": "1:02:03",
+                "pubdate": 1762646400,
+                "play": 12345,
+                "video_review": 678
+            }"#,
+        )
+        .expect("search video");
+
+        assert_eq!(video.title, "【测试】A&B");
+        assert_eq!(video.pic, "https://i0.hdslb.com/bfs/archive/example.jpg");
+        assert_eq!(video.duration, 3_723);
+        assert_eq!(video.danmaku, 678);
+    }
+
+    #[test]
+    fn tolerates_missing_search_duration_and_counts() {
+        let video: SearchVideo = serde_json::from_str(r#"{"bvid":"BV1"}"#).expect("search video");
+        assert_eq!(video.duration, 0);
+        assert_eq!(video.play, 0);
+        assert_eq!(video.danmaku, 0);
+        assert_eq!(video.pic, "");
     }
 }

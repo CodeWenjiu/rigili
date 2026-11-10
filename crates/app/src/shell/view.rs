@@ -1,19 +1,26 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::sidebar::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::playback::Playback;
-use crate::home::{HomeEvent, HomeView};
+use crate::grid::OpenVideo;
+use crate::home::HomeView;
 use crate::login;
 use crate::playback::PlaybackRequest;
+use crate::search::SearchView;
 
 pub struct MainView {
     home: Entity<HomeView>,
+    search: Entity<SearchView>,
+    search_input: Entity<InputState>,
+    search_active: bool,
     playback: Option<Playback>,
+    _search_input_sub: Subscription,
 }
 
 pub fn open_main(cx: &mut App) -> Result<()> {
@@ -26,19 +33,22 @@ pub fn open_main(cx: &mut App) -> Result<()> {
 impl MainView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let home = cx.new(HomeView::new);
+        let search = cx.new(SearchView::new);
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索视频"));
+        let input_sub = cx.subscribe_in(&search_input, window, |this, _, event, _, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                this.submit_search(cx);
+            }
+        });
         login::restore(window, cx);
 
-        cx.subscribe_in(&home, window, |this, _, event: &HomeEvent, window, cx| {
-            let HomeEvent::Open { bvid, cid, title } = event;
-            this.play(
-                PlaybackRequest {
-                    title: title.clone(),
-                    bvid: bvid.clone(),
-                    cid: *cid,
-                },
-                window,
-                cx,
-            );
+        cx.subscribe_in(&home, window, |this, _, event: &OpenVideo, window, cx| {
+            this.play(event.clone(), window, cx);
+        })
+        .detach();
+
+        cx.subscribe_in(&search, window, |this, _, event: &OpenVideo, window, cx| {
+            this.play(event.clone(), window, cx);
         })
         .detach();
 
@@ -61,38 +71,105 @@ impl MainView {
 
         Self {
             home,
+            search,
+            search_input,
+            search_active: false,
             playback: None,
+            _search_input_sub: input_sub,
         }
+    }
+
+    fn submit_search(&mut self, cx: &mut Context<Self>) {
+        let keyword = self.search_input.read(cx).value().trim().to_owned();
+        if keyword.is_empty() {
+            self.search_active = false;
+            cx.notify();
+            return;
+        }
+
+        self.search_active = true;
+        self.search
+            .update(cx, |search, cx| search.search(keyword, cx));
+        cx.notify();
+    }
+
+    fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search_input
+            .update(cx, |input, cx| input.focus(window, cx));
     }
 
     fn account(&self, cx: &mut Context<Self>) -> AnyElement {
         if let Some(user) = login::user(cx) {
-            return h_flex()
-                .w_full()
-                .min_w_0()
-                .items_center()
-                .gap_2()
-                .child(
-                    Avatar::new()
-                        .src(user.face.clone())
-                        .name(user.uname.clone())
-                        .xsmall(),
-                )
-                .child(div().text_sm().truncate().child(user.uname.clone()))
+            return Avatar::new()
+                .src(user.face)
+                .name(user.uname)
+                .size(px(32.))
                 .into_any_element();
         }
 
         Button::new("sign-in")
             .ghost()
+            .small()
             .icon(IconName::CircleUser)
-            .label("登录")
+            .accessibility_label("登录")
+            .tooltip("登录")
             .on_click(cx.listener(|_, _, window, cx| {
                 login::open(window, cx);
             }))
             .into_any_element()
     }
 
-    fn play(&mut self, request: PlaybackRequest, window: &mut Window, cx: &mut Context<Self>) {
+    fn render_top_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let background = cx.theme().background;
+        let border = cx.theme().border;
+        let foreground = cx.theme().foreground;
+        let muted = cx.theme().muted_foreground;
+
+        h_flex()
+            .h_16()
+            .w_full()
+            .flex_shrink_0()
+            .items_center()
+            .justify_center()
+            .border_b_1()
+            .border_color(border)
+            .bg(background)
+            .text_color(foreground)
+            .px_6()
+            .child(
+                h_flex()
+                    .w_full()
+                    .max_w(rems(40.))
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div().flex_1().min_w_0().child(
+                            Input::new(&self.search_input)
+                                .large()
+                                .cleanable(true)
+                                .prefix(Icon::new(IconName::Search).text_color(muted)),
+                        ),
+                    )
+                    .child(
+                        Button::new("search-submit")
+                            .large()
+                            .primary()
+                            .label("搜索")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.submit_search(cx);
+                                this.focus_search(window, cx);
+                            })),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn play(&mut self, video: OpenVideo, window: &mut Window, cx: &mut Context<Self>) {
+        let request = PlaybackRequest {
+            title: video.title,
+            bvid: video.bvid,
+            cid: video.cid,
+        };
         if let Some(playback) = self.playback.as_ref() {
             if playback.load(request.clone(), cx).is_ok() {
                 return;
@@ -113,41 +190,61 @@ impl Render for MainView {
         let background = cx.theme().background;
         let border = cx.theme().border;
         let foreground = cx.theme().foreground;
-        let muted = cx.theme().muted_foreground;
-        let primary = cx.theme().primary;
+        let weak = cx.entity().downgrade();
 
-        h_flex()
+        v_flex()
             .size_full()
             .bg(background)
             .text_color(foreground)
+            .child(self.render_top_bar(cx))
             .child(
-                Sidebar::new("app-sidebar")
-                    .w(px(160.))
-                    .collapsible(false)
-                    .border_r_1()
-                    .border_color(border)
-                    .header(
-                        v_flex()
-                            .py_2()
-                            .gap_1()
+                h_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .child(
+                        Sidebar::new("app-sidebar")
+                            .collapsible(true)
+                            .collapsed(true)
+                            .border_r_1()
+                            .border_color(border)
                             .child(
-                                div()
-                                    .text_lg()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(primary)
-                                    .child("gpuili"),
+                                SidebarMenu::new().child(
+                                    SidebarMenuItem::new("热门")
+                                        .icon(Icon::new(IconName::Flame))
+                                        .active(true)
+                                        .on_click({
+                                            let weak = weak.clone();
+                                            move |_, _, cx| {
+                                                let _ = weak.update(cx, |this, cx| {
+                                                    if this.search_active {
+                                                        this.search_active = false;
+                                                        cx.notify();
+                                                    }
+                                                });
+                                            }
+                                        }),
+                                ),
                             )
-                            .child(div().text_xs().text_color(muted).child("哔哩哔哩")),
+                            .footer(
+                                div()
+                                    .w_full()
+                                    .flex()
+                                    .justify_center()
+                                    .child(self.account(cx)),
+                            ),
                     )
                     .child(
-                        SidebarMenu::new().child(
-                            SidebarMenuItem::new("热门")
-                                .icon(Icon::new(IconName::Flame))
-                                .active(true),
-                        ),
-                    )
-                    .footer(self.account(cx)),
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .child(if self.search_active {
+                                self.search.clone().into_any_element()
+                            } else {
+                                self.home.clone().into_any_element()
+                            }),
+                    ),
             )
-            .child(div().flex_1().min_w_0().h_full().child(self.home.clone()))
     }
 }

@@ -1,22 +1,21 @@
-use std::collections::HashSet;
-
 use gpui_kit::*;
-use gpuili_bilibili::{ApiError, Popular, PopularVideo};
+use gpuili_bilibili::Popular;
 
 use super::HomeView;
-use crate::backend::Backend;
-use crate::platform::runtime::Tokio;
+use crate::backend;
+use crate::grid::{VideoCard, append_unique};
+use crate::platform::runtime::{ApiTaskError, spawn_api};
 
 const PAGE_SIZE: u32 = 30;
 
 impl HomeView {
     pub(super) fn load(&mut self, cx: &mut Context<Self>) {
         if self.backend.is_none() {
-            match Backend::new() {
+            match backend::get(cx) {
                 Ok(backend) => self.backend = Some(backend),
                 Err(error) => {
                     self.loading = false;
-                    self.error = Some(error.to_string());
+                    self.error = Some(error);
                     cx.notify();
                     return;
                 }
@@ -37,28 +36,26 @@ impl HomeView {
         self.has_more = false;
         cx.notify();
 
-        let task = Tokio::spawn(&*cx, async move { backend.popular(1, PAGE_SIZE).await });
-        cx.spawn(async move |weak, cx| {
-            let result = task.await;
-            let _ = weak.update(cx, |this, cx| {
+        spawn_api(
+            cx,
+            async move { backend.popular(1, PAGE_SIZE).await },
+            move |this, result, cx| {
                 if this.generation != generation {
                     return;
                 }
                 this.loading = false;
                 match result {
-                    Ok(Ok(popular)) => {
+                    Ok(popular) => {
                         this.page = 1;
                         this.has_more = has_more(&popular);
-                        this.videos = popular.list;
+                        this.videos = popular.list.into_iter().map(VideoCard::from).collect();
                         this.scroll.scroll_to_item(0, ScrollStrategy::Top);
                     }
-                    Ok(Err(error)) => this.fail(&error, cx),
-                    Err(error) => this.error = Some(format!("加载任务失败：{error}")),
+                    Err(error) => this.fail(error, cx),
                 }
                 cx.notify();
-            });
-        })
-        .detach();
+            },
+        );
     }
 
     fn load_more(&mut self, cx: &mut Context<Self>) {
@@ -74,27 +71,28 @@ impl HomeView {
         self.loading_more = true;
         cx.notify();
 
-        let task = Tokio::spawn(&*cx, async move { backend.popular(page, PAGE_SIZE).await });
-        cx.spawn(async move |weak, cx| {
-            let result = task.await;
-            let _ = weak.update(cx, |this, cx| {
+        spawn_api(
+            cx,
+            async move { backend.popular(page, PAGE_SIZE).await },
+            move |this, result, cx| {
                 if this.generation != generation {
                     return;
                 }
                 this.loading_more = false;
                 match result {
-                    Ok(Ok(popular)) => {
+                    Ok(popular) => {
                         this.page = page;
                         this.has_more = has_more(&popular);
-                        append_unique(&mut this.videos, popular.list);
+                        append_unique(
+                            &mut this.videos,
+                            popular.list.into_iter().map(VideoCard::from).collect(),
+                        );
                     }
-                    Ok(Err(error)) => this.more_error = Some(api_error(&error, cx)),
-                    Err(error) => this.more_error = Some(format!("加载任务失败：{error}")),
+                    Err(error) => this.more_error = Some(api_error(error, cx)),
                 }
                 cx.notify();
-            });
-        })
-        .detach();
+            },
+        );
     }
 
     pub(super) fn retry_more(&mut self, cx: &mut Context<Self>) {
@@ -113,56 +111,31 @@ impl HomeView {
         }
     }
 
-    fn fail(&mut self, error: &ApiError, cx: &mut Context<Self>) {
+    fn fail(&mut self, error: ApiTaskError, cx: &mut Context<Self>) {
         self.error = Some(api_error(error, cx));
     }
 }
 
-fn api_error(error: &ApiError, cx: &mut App) -> String {
-    if error.is_login_required() {
-        crate::login::expire(cx);
+fn api_error(error: ApiTaskError, cx: &mut App) -> String {
+    match error {
+        ApiTaskError::Api(error) => {
+            if error.is_login_required() {
+                crate::login::expire(cx);
+            }
+            crate::format::api_error_message(&error)
+        }
+        ApiTaskError::Join(error) => format!("加载任务失败：{error}"),
     }
-    crate::format::api_error_message(error)
 }
 
 fn has_more(popular: &Popular) -> bool {
     !popular.no_more && !popular.list.is_empty()
 }
 
-fn append_unique(videos: &mut Vec<PopularVideo>, incoming: Vec<PopularVideo>) {
-    let mut seen = videos
-        .iter()
-        .map(|video| video.bvid.clone())
-        .collect::<HashSet<_>>();
-    for video in incoming {
-        if seen.insert(video.bvid.clone()) {
-            videos.push(video);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{append_unique, has_more};
-    use gpuili_bilibili::{Owner, Popular, PopularVideo, Stat};
-
-    fn video(bvid: &str) -> PopularVideo {
-        PopularVideo {
-            aid: 0,
-            bvid: bvid.into(),
-            cid: 0,
-            pic: String::new(),
-            title: String::new(),
-            duration: 0,
-            pubdate: 0,
-            owner: Owner {
-                mid: 0,
-                name: String::new(),
-                face: String::new(),
-            },
-            stat: Stat::default(),
-        }
-    }
+    use super::has_more;
+    use gpuili_bilibili::Popular;
 
     #[test]
     fn stops_when_the_feed_is_empty_or_exhausted() {
@@ -173,28 +146,33 @@ mod tests {
         assert!(!has_more(&empty));
 
         let last = Popular {
-            list: vec![video("BV1")],
+            list: vec![popular_video("BV1")],
             no_more: true,
         };
         assert!(!has_more(&last));
 
         let more = Popular {
-            list: vec![video("BV1")],
+            list: vec![popular_video("BV1")],
             no_more: false,
         };
         assert!(has_more(&more));
     }
 
-    #[test]
-    fn appends_only_new_videos() {
-        let mut videos = vec![video("BV1")];
-        append_unique(&mut videos, vec![video("BV1"), video("BV2")]);
-        assert_eq!(
-            videos
-                .iter()
-                .map(|video| video.bvid.as_str())
-                .collect::<Vec<_>>(),
-            ["BV1", "BV2"]
-        );
+    fn popular_video(bvid: &str) -> gpuili_bilibili::PopularVideo {
+        gpuili_bilibili::PopularVideo {
+            aid: 0,
+            bvid: bvid.into(),
+            cid: 0,
+            pic: String::new(),
+            title: String::new(),
+            duration: 0,
+            pubdate: 0,
+            owner: gpuili_bilibili::Owner {
+                mid: 0,
+                name: String::new(),
+                face: String::new(),
+            },
+            stat: gpuili_bilibili::Stat::default(),
+        }
     }
 }

@@ -11,7 +11,7 @@ use reqwest::{
     header::{ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderValue, REFERER},
 };
 use serde::{Deserialize, de::DeserializeOwned};
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{Mutex, OnceCell, Semaphore};
 
 use crate::{ApiError, Session, SessionError, WbiSigner, session};
 
@@ -33,6 +33,7 @@ pub struct Client {
     session_dir: Option<PathBuf>,
     next_request: Arc<Mutex<Option<Instant>>>,
     requests: Arc<Semaphore>,
+    wbi: Arc<OnceCell<WbiSigner>>,
 }
 
 impl Client {
@@ -76,6 +77,7 @@ impl Client {
             session_dir,
             next_request: Arc::new(Mutex::new(None)),
             requests: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
+            wbi: Arc::new(OnceCell::new()),
         })
     }
 
@@ -131,16 +133,16 @@ impl Client {
         self.parse(&body)
     }
 
-    pub async fn get_signed<T>(
-        &self,
-        url: &str,
-        params: &[(String, String)],
-        signer: &WbiSigner,
-    ) -> Result<T, ApiError>
+    pub async fn get_wbi_json<T>(&self, url: &str, params: &[(&str, String)]) -> Result<T, ApiError>
     where
         T: DeserializeOwned,
     {
-        let query = signer.sign(params, unix_timestamp());
+        let signer = self.wbi.get_or_try_init(|| WbiSigner::fetch(self)).await?;
+        let params = params
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), value.clone()))
+            .collect::<Vec<_>>();
+        let query = signer.sign(&params, unix_timestamp());
         self.get_url_json(&format!("{url}?{query}")).await
     }
 

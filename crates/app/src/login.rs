@@ -9,7 +9,7 @@ use gpuili_bilibili::{Nav, api::login::cookies_from_login_url};
 use image::RgbaImage;
 use qrcodegen::{QrCode, QrCodeEcc};
 
-use crate::backend::Backend;
+use crate::backend::{self, Backend};
 use crate::platform::runtime::Tokio;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -65,7 +65,7 @@ pub(crate) fn open(window: &mut Window, cx: &mut App) {
 }
 
 pub(crate) fn restore(_window: &mut Window, cx: &mut App) {
-    let Ok(backend) = Backend::new() else {
+    let Ok(backend) = backend::get(cx) else {
         return;
     };
     if !backend.has_session() {
@@ -84,9 +84,9 @@ pub(crate) fn restore(_window: &mut Window, cx: &mut App) {
 
 impl LoginView {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let (backend, phase) = match Backend::new() {
+        let (backend, phase) = match backend::get(cx) {
             Ok(backend) => (Some(backend), Phase::Starting),
-            Err(error) => (None, Phase::Failed(error.to_string())),
+            Err(error) => (None, Phase::Failed(error)),
         };
         let mut view = Self {
             backend,

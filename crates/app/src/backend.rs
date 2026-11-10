@@ -1,7 +1,9 @@
 use std::{collections::BTreeMap, sync::Arc};
 
+use gpui_kit::*;
 use gpuili_bilibili::{
-    ApiError, Client, Nav, PlayUrl, Popular, QrCode, QrPoll, SessionError, VideoInfo, api,
+    ApiError, Client, Nav, PlayUrl, Popular, QrCode, QrPoll, SearchResult, SessionError, VideoInfo,
+    api, api::search::SearchOrder,
 };
 
 #[derive(Clone)]
@@ -9,8 +11,38 @@ pub struct Backend {
     client: Arc<Client>,
 }
 
+struct BackendState {
+    backend: Option<Backend>,
+    error: Option<String>,
+}
+
+impl Global for BackendState {}
+
+pub(crate) fn init(cx: &mut App) {
+    let state = match Backend::new() {
+        Ok(backend) => BackendState {
+            backend: Some(backend),
+            error: None,
+        },
+        Err(error) => BackendState {
+            backend: None,
+            error: Some(error.to_string()),
+        },
+    };
+    cx.set_global(state);
+}
+
+pub(crate) fn get(cx: &App) -> Result<Backend, String> {
+    let state = cx.global::<BackendState>();
+    match (&state.backend, &state.error) {
+        (Some(backend), _) => Ok(backend.clone()),
+        (None, Some(error)) => Err(error.clone()),
+        (None, None) => Err("客户端尚未初始化".into()),
+    }
+}
+
 impl Backend {
-    pub fn new() -> Result<Self, ApiError> {
+    fn new() -> Result<Self, ApiError> {
         Ok(Self {
             client: Arc::new(Client::new()?),
         })
@@ -18,6 +50,15 @@ impl Backend {
 
     pub async fn popular(&self, page: u32, page_size: u32) -> Result<Popular, ApiError> {
         api::popular::fetch(&self.client, page, page_size).await
+    }
+
+    pub async fn search(
+        &self,
+        keyword: &str,
+        page: u32,
+        order: SearchOrder,
+    ) -> Result<SearchResult, ApiError> {
+        api::search::fetch(&self.client, keyword, page, order).await
     }
 
     pub async fn view(&self, bvid: &str) -> Result<VideoInfo, ApiError> {

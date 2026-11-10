@@ -8,8 +8,8 @@ use gpui_kit::*;
 use super::info::{InfoEvent, InfoPanel};
 use super::request::{PlaybackRequest, resolve, resolve_streams};
 use super::surface::PlayerView;
-use crate::backend::Backend;
-use crate::platform::runtime::Tokio;
+use crate::backend::{self, Backend};
+use crate::platform::runtime::{ApiTaskError, spawn_api};
 
 const INFO_MIN_WINDOW: Pixels = px(1000.);
 
@@ -40,9 +40,9 @@ impl PlayerWindow {
             let InfoEvent::SelectPage(cid) = event;
             this.select_page(*cid, cx);
         });
-        let (backend, error) = match Backend::new() {
+        let (backend, error) = match backend::get(cx) {
             Ok(backend) => (Some(backend), None),
-            Err(error) => (None, Some(error.to_string())),
+            Err(error) => (None, Some(error)),
         };
         let mut view = Self {
             player,
@@ -84,16 +84,16 @@ impl PlayerWindow {
         self.info.update(cx, |info, cx| info.set_busy(true, cx));
         cx.notify();
 
-        let task = Tokio::spawn(&*cx, async move { resolve(backend, bvid, cid).await });
-        cx.spawn(async move |weak, cx| {
-            let result = task.await;
-            let _ = weak.update(cx, |this, cx| {
+        spawn_api(
+            cx,
+            async move { resolve(backend, bvid, cid).await },
+            move |this, result, cx| {
                 if this.generation != generation {
                     return;
                 }
                 this.loading = false;
                 match result {
-                    Ok(Ok(resolved)) => {
+                    Ok(resolved) => {
                         let cid = resolved.cid;
                         this.title = resolved.info.title.clone().into();
                         if let Some(request) = this.request.as_mut() {
@@ -105,19 +105,14 @@ impl PlayerWindow {
                             player.load_urls(resolved.streams.video, resolved.streams.audio, cx)
                         });
                     }
-                    Ok(Err(error)) => {
-                        this.info.update(cx, |info, cx| info.set_busy(false, cx));
-                        this.handle_error(&error, cx);
-                    }
                     Err(error) => {
                         this.info.update(cx, |info, cx| info.set_busy(false, cx));
-                        this.error = Some(format!("加载任务失败：{error}"));
+                        this.handle_error(error, cx);
                     }
                 }
                 cx.notify();
-            });
-        })
-        .detach();
+            },
+        );
     }
 
     fn select_page(&mut self, cid: u64, cx: &mut Context<Self>) {
@@ -146,44 +141,43 @@ impl PlayerWindow {
         self.info.update(cx, |info, cx| info.set_busy(true, cx));
         cx.notify();
 
-        let task = Tokio::spawn(
-            &*cx,
+        spawn_api(
+            cx,
             async move { resolve_streams(&backend, &bvid, cid).await },
-        );
-        cx.spawn(async move |weak, cx| {
-            let result = task.await;
-            let _ = weak.update(cx, |this, cx| {
+            move |this, result, cx| {
                 if this.generation != generation {
                     return;
                 }
                 this.loading = false;
                 match result {
-                    Ok(Ok(streams)) => {
+                    Ok(streams) => {
                         this.info.update(cx, |info, cx| info.select(cid, cx));
                         this.player.update(cx, |player, cx| {
                             player.load_urls(streams.video, streams.audio, cx)
                         });
                     }
-                    Ok(Err(error)) => {
-                        this.info.update(cx, |info, cx| info.set_busy(false, cx));
-                        this.handle_error(&error, cx);
-                    }
                     Err(error) => {
                         this.info.update(cx, |info, cx| info.set_busy(false, cx));
-                        this.error = Some(format!("加载任务失败：{error}"));
+                        this.handle_error(error, cx);
                     }
                 }
                 cx.notify();
-            });
-        })
-        .detach();
+            },
+        );
     }
 
-    fn handle_error(&mut self, error: &gpuili_bilibili::ApiError, cx: &mut Context<Self>) {
-        if error.is_login_required() {
-            crate::login::expire(cx);
+    fn handle_error(&mut self, error: ApiTaskError, cx: &mut Context<Self>) {
+        match error {
+            ApiTaskError::Api(error) => {
+                if error.is_login_required() {
+                    crate::login::expire(cx);
+                }
+                self.error = Some(crate::format::api_error_message(&error));
+            }
+            ApiTaskError::Join(error) => {
+                self.error = Some(format!("加载任务失败：{error}"));
+            }
         }
-        self.error = Some(crate::format::api_error_message(error));
     }
 
     fn retry(&mut self, cx: &mut Context<Self>) {

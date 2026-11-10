@@ -8,29 +8,13 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use super::super::card::{
-    CardStyle, MIN_CARD_WIDTH, card_height, card_text_height, skeleton_card, video_card,
+use super::HomeView;
+use crate::grid::{
+    CARD_GAP, CardMetrics, CardStyle, card_text_height, card_width_for_width, columns_for_width,
+    skeleton_card, video_card,
 };
-use super::{HomeEvent, HomeView};
 
-const CARD_GAP: Pixels = px(16.);
 const FOOTER_HEIGHT: Pixels = px(56.);
-
-#[derive(Clone, Copy)]
-struct CardMetrics {
-    width: Pixels,
-    text_height: Pixels,
-}
-
-impl CardMetrics {
-    fn new(width: Pixels, text_height: Pixels) -> Self {
-        Self { width, text_height }
-    }
-
-    fn height(self) -> Pixels {
-        card_height(self.width, self.text_height)
-    }
-}
 
 impl HomeView {
     fn columns(&self) -> usize {
@@ -53,15 +37,9 @@ impl HomeView {
             .gap(CARD_GAP)
             .children((start..end).map(|index| {
                 let video = &self.videos[index];
-                let bvid = video.bvid.clone();
-                let cid = (video.cid != 0).then_some(video.cid);
-                let title = video.title.clone();
+                let open = video.open();
                 let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| {
-                    cx.emit(HomeEvent::Open {
-                        bvid: bvid.clone(),
-                        cid,
-                        title: title.clone(),
-                    });
+                    cx.emit(open.clone());
                 });
                 video_card(video, style, metrics.width, metrics.text_height, on_open)
             }))
@@ -225,63 +203,5 @@ impl HomeView {
         }
 
         self.render_list(window, cx)
-    }
-}
-
-fn columns_for_width(width: Pixels) -> usize {
-    if width <= px(0.) {
-        return 1;
-    }
-    let gap = CARD_GAP.as_f32();
-    (((width.as_f32() + gap) / (MIN_CARD_WIDTH + gap)).floor() as usize).max(1)
-}
-
-fn card_width_for_width(width: Pixels, columns: usize) -> Pixels {
-    if width <= px(0.) || columns == 0 {
-        return px(MIN_CARD_WIDTH);
-    }
-    let gaps = CARD_GAP.as_f32() * (columns - 1) as f32;
-    px(((width.as_f32() - gaps) / columns as f32).max(0.))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{CARD_GAP, MIN_CARD_WIDTH, card_width_for_width, columns_for_width};
-    use gpui_kit::px;
-
-    #[test]
-    fn fits_cards_into_the_available_width() {
-        let min = MIN_CARD_WIDTH;
-        let gap = CARD_GAP.as_f32();
-
-        assert_eq!(columns_for_width(px(0.)), 1);
-        assert_eq!(columns_for_width(px(min)), 1);
-        assert_eq!(columns_for_width(px(min * 2. + gap - 1.)), 1);
-        assert_eq!(columns_for_width(px(min * 2. + gap)), 2);
-        assert_eq!(columns_for_width(px(min * 3. + gap * 2.)), 3);
-    }
-
-    #[test]
-    fn stretches_cards_to_fill_the_row() {
-        let gap = CARD_GAP.as_f32();
-
-        let width = px(MIN_CARD_WIDTH * 2. + gap + 1.);
-        let columns = columns_for_width(width);
-        let card_width = card_width_for_width(width, columns);
-        assert_eq!(columns, 2);
-        assert!((card_width.as_f32() - (MIN_CARD_WIDTH + 0.5)).abs() < 0.01);
-        assert!(
-            (card_width.as_f32() * columns as f32 + gap * (columns - 1) as f32 - width.as_f32())
-                .abs()
-                < 0.01
-        );
-
-        let width = px(MIN_CARD_WIDTH * 4. + gap * 3. + 1.);
-        let columns = columns_for_width(width);
-        let card_width = card_width_for_width(width, columns);
-        assert_eq!(columns, 4);
-        assert!((card_width.as_f32() - (MIN_CARD_WIDTH + 0.25)).abs() < 0.01);
-
-        assert_eq!(card_width_for_width(px(0.), 1), px(MIN_CARD_WIDTH));
     }
 }

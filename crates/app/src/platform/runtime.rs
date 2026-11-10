@@ -1,6 +1,31 @@
 use std::future::Future;
 
 use gpui_kit::*;
+use gpuili_bilibili::ApiError;
+
+pub(crate) enum ApiTaskError {
+    Api(ApiError),
+    Join(tokio::task::JoinError),
+}
+
+pub(crate) fn spawn_api<V, T, F, U>(cx: &mut Context<V>, future: F, on_done: U)
+where
+    V: 'static,
+    T: Send + 'static,
+    F: Future<Output = Result<T, ApiError>> + Send + 'static,
+    U: FnOnce(&mut V, Result<T, ApiTaskError>, &mut Context<V>) + 'static,
+{
+    let task = Tokio::spawn(&*cx, future);
+    cx.spawn(async move |weak, cx| {
+        let result = match task.await {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => Err(ApiTaskError::Api(error)),
+            Err(error) => Err(ApiTaskError::Join(error)),
+        };
+        let _ = weak.update(cx, |this, cx| on_done(this, result, cx));
+    })
+    .detach();
+}
 
 pub(crate) fn init(cx: &mut App) {
     let runtime = tokio::runtime::Builder::new_multi_thread()

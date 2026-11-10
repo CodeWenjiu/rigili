@@ -5,21 +5,13 @@ use gpui_kit::component::button::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use gpuili_bilibili::PopularVideo;
 
-use crate::backend::Backend;
-
-pub enum HomeEvent {
-    Open {
-        bvid: String,
-        cid: Option<u64>,
-        title: String,
-    },
-}
+use crate::backend::{self, Backend};
+use crate::grid::{OpenVideo, VideoCard};
 
 pub struct HomeView {
     backend: Option<Backend>,
-    videos: Vec<PopularVideo>,
+    videos: Vec<VideoCard>,
     page: u32,
     has_more: bool,
     loading: bool,
@@ -31,13 +23,13 @@ pub struct HomeView {
     scroll: VirtualListScrollHandle,
 }
 
-impl EventEmitter<HomeEvent> for HomeView {}
+impl EventEmitter<OpenVideo> for HomeView {}
 
 impl HomeView {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let (backend, error) = match Backend::new() {
+        let (backend, error) = match backend::get(cx) {
             Ok(backend) => (Some(backend), None),
-            Err(error) => (None, Some(error.to_string())),
+            Err(error) => (None, Some(error)),
         };
         let mut view = Self {
             backend,

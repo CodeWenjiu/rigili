@@ -19,6 +19,10 @@ pub(crate) fn apply(cx: &mut App) {
         theme.primary_foreground = rgb(0xffffff).into();
         theme.primary_hover = rgb(0xff85a2).into();
         theme.primary_active = rgb(0xe05c80).into();
+        theme.button_primary = rgb(0xfb7299).into();
+        theme.button_primary_foreground = rgb(0xffffff).into();
+        theme.button_primary_hover = rgb(0xff85a2).into();
+        theme.button_primary_active = rgb(0xe05c80).into();
         theme.accent = rgb(0x2a2b30).into();
         theme.accent_foreground = rgb(0xe3e5e7).into();
         theme.danger = rgb(0xf56c6c).into();
