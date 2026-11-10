@@ -36,13 +36,13 @@ pub(crate) fn apply(cx: &mut App) {
         theme.link = rgb(0x00aeec).into();
         theme.link_hover = rgb(0x33beef).into();
         theme.link_active = rgb(0x0096c9).into();
-        theme.sidebar = rgb(0x16171a).into();
+        theme.sidebar = rgb(0x212227).into();
         theme.sidebar_foreground = rgb(0xc9ccd0).into();
         theme.sidebar_accent = rgb(0x2a2b30).into();
         theme.sidebar_accent_foreground = rgb(0xfb7299).into();
         theme.sidebar_primary = rgb(0xfb7299).into();
         theme.sidebar_primary_foreground = rgb(0xffffff).into();
-        theme.sidebar_border = rgb(0x24252a).into();
+        theme.sidebar_border = rgb(0x2b2c30).into();
         theme.popover = rgb(0x202124).into();
         theme.popover_foreground = rgb(0xe3e5e7).into();
         theme.input = rgb(0x3a3c40).into();

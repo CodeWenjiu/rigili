@@ -6,7 +6,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::info::{InfoEvent, InfoPanel};
-use super::request::{PlaybackRequest, resolve, resolve_streams};
+use super::request::{PlaybackRequest, PlaybackSource, resolve, resolve_streams};
 use super::surface::PlayerView;
 use crate::backend::{self, Backend};
 use crate::platform::runtime::{ApiTaskError, spawn_api};
@@ -21,6 +21,7 @@ pub struct PlayerWindow {
     backend: Option<Backend>,
     request: Option<PlaybackRequest>,
     loading: bool,
+    is_live: bool,
     error: Option<String>,
     show_info: bool,
     generation: u64,
@@ -52,6 +53,7 @@ impl PlayerWindow {
             backend,
             request: None,
             loading: false,
+            is_live: false,
             error,
             show_info: true,
             generation: 0,
@@ -64,7 +66,6 @@ impl PlayerWindow {
     }
 
     pub fn play(&mut self, request: PlaybackRequest, cx: &mut Context<Self>) {
-        self.title = request.title.clone().into();
         self.start(request, cx);
     }
 
@@ -75,8 +76,9 @@ impl PlayerWindow {
 
         self.generation += 1;
         let generation = self.generation;
-        let bvid = request.bvid.clone();
-        let cid = request.cid;
+        let source = request.source.clone();
+        self.is_live = matches!(source, PlaybackSource::Live { .. });
+        self.title = request.title.clone().into();
         self.request = Some(request);
         self.loading = true;
         self.error = None;
@@ -84,55 +86,96 @@ impl PlayerWindow {
         self.info.update(cx, |info, cx| info.set_busy(true, cx));
         cx.notify();
 
-        spawn_api(
-            cx,
-            async move { resolve(backend, bvid, cid).await },
-            move |this, result, cx| {
-                if this.generation != generation {
-                    return;
-                }
-                this.loading = false;
-                match result {
-                    Ok(resolved) => {
-                        let cid = resolved.cid;
-                        this.title = resolved.info.title.clone().into();
-                        if let Some(request) = this.request.as_mut() {
-                            request.cid = Some(cid);
+        match source {
+            PlaybackSource::Video { bvid, cid } => spawn_api(
+                cx,
+                async move { resolve(backend, bvid, cid).await },
+                move |this, result, cx| {
+                    if this.generation != generation {
+                        return;
+                    }
+                    this.loading = false;
+                    match result {
+                        Ok(resolved) => {
+                            let cid = resolved.cid;
+                            this.title = resolved.info.title.clone().into();
+                            if let Some(PlaybackRequest {
+                                source:
+                                    PlaybackSource::Video {
+                                        cid: request_cid, ..
+                                    },
+                                ..
+                            }) = this.request.as_mut()
+                            {
+                                *request_cid = Some(cid);
+                            }
+                            this.info
+                                .update(cx, |info, cx| info.set(resolved.info, cid, cx));
+                            this.player.update(cx, |player, cx| {
+                                player.load_urls(
+                                    resolved.streams.video,
+                                    resolved.streams.audio,
+                                    false,
+                                    cx,
+                                )
+                            });
                         }
-                        this.info
-                            .update(cx, |info, cx| info.set(resolved.info, cid, cx));
-                        this.player.update(cx, |player, cx| {
-                            player.load_urls(resolved.streams.video, resolved.streams.audio, cx)
-                        });
+                        Err(error) => {
+                            this.info.update(cx, |info, cx| info.set_busy(false, cx));
+                            this.handle_error(error, cx);
+                        }
                     }
-                    Err(error) => {
-                        this.info.update(cx, |info, cx| info.set_busy(false, cx));
-                        this.handle_error(error, cx);
+                    cx.notify();
+                },
+            ),
+            PlaybackSource::Live { room_id } => spawn_api(
+                cx,
+                async move { backend.live_play_url(room_id).await },
+                move |this, result, cx| {
+                    if this.generation != generation {
+                        return;
                     }
-                }
-                cx.notify();
-            },
-        );
+                    this.loading = false;
+                    match result {
+                        Ok(url) => {
+                            this.info.update(cx, |info, cx| info.clear(cx));
+                            this.player
+                                .update(cx, |player, cx| player.load_urls(url, None, true, cx));
+                        }
+                        Err(error) => this.handle_error(error, cx),
+                    }
+                    cx.notify();
+                },
+            ),
+        }
     }
 
     fn select_page(&mut self, cid: u64, cx: &mut Context<Self>) {
-        if self.loading
-            || self
-                .request
-                .as_ref()
-                .is_some_and(|request| request.cid == Some(cid))
-        {
+        if self.is_live || self.loading {
             return;
         }
         let Some(backend) = self.backend.clone() else {
             return;
         };
-        let Some(bvid) = self.request.as_ref().map(|request| request.bvid.clone()) else {
+        let Some(PlaybackSource::Video {
+            bvid,
+            cid: current_cid,
+        }) = self.request.as_ref().map(|request| request.source.clone())
+        else {
             return;
         };
+        if current_cid == Some(cid) {
+            return;
+        }
 
-        if let Some(request) = self.request.as_mut() {
-            request.cid = Some(cid);
+        if let Some(PlaybackRequest {
+            source: PlaybackSource::Video {
+                cid: request_cid, ..
+            },
+            ..
+        }) = self.request.as_mut()
+        {
+            *request_cid = Some(cid);
         }
         self.generation += 1;
         let generation = self.generation;
@@ -153,7 +196,7 @@ impl PlayerWindow {
                     Ok(streams) => {
                         this.info.update(cx, |info, cx| info.select(cid, cx));
                         this.player.update(cx, |player, cx| {
-                            player.load_urls(streams.video, streams.audio, cx)
+                            player.load_urls(streams.video, streams.audio, false, cx)
                         });
                     }
                     Err(error) => {
@@ -194,10 +237,12 @@ impl Render for PlayerWindow {
         let muted = cx.theme().muted_foreground;
         let danger = cx.theme().danger;
         let fullscreen = window.is_fullscreen();
-        let info_loaded = self.info.read(cx).is_loaded();
+        let info_loaded = !self.is_live && self.info.read(cx).is_loaded();
         let wide_enough = window.viewport_size().width >= INFO_MIN_WINDOW;
         let show_info = self.show_info && !fullscreen && info_loaded && wide_enough;
-        let info_hint = if !info_loaded {
+        let info_hint = if self.is_live {
+            "直播不提供视频信息"
+        } else if !info_loaded {
             "视频信息加载中"
         } else if !wide_enough {
             "窗口加宽后可显示视频信息"

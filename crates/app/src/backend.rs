@@ -2,8 +2,8 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use gpui_kit::*;
 use rigili_bilibili::{
-    ApiError, Client, Nav, PlayUrl, Popular, QrCode, QrPoll, SearchResult, SessionError, VideoInfo,
-    api, api::search::SearchOrder,
+    ApiError, Client, LiveRoom, Nav, PgcIndex, PgcSeason, PlayUrl, Popular, QrCode, QrPoll,
+    Recommend, SearchResult, SessionError, VideoInfo, api, api::search::SearchOrder,
 };
 
 #[derive(Clone)]
@@ -50,6 +50,31 @@ impl Backend {
 
     pub async fn popular(&self, page: u32, page_size: u32) -> Result<Popular, ApiError> {
         api::popular::fetch(&self.client, page, page_size).await
+    }
+
+    pub async fn recommend(&self, fresh_idx: u32, page_size: u32) -> Result<Recommend, ApiError> {
+        api::recommend::fetch(&self.client, fresh_idx, page_size).await
+    }
+
+    pub async fn live_list(&self, page: u32, page_size: u32) -> Result<Vec<LiveRoom>, ApiError> {
+        api::live::list(&self.client, page, page_size).await
+    }
+
+    pub async fn live_play_url(&self, room_id: u64) -> Result<String, ApiError> {
+        api::live::play_url(&self.client, room_id).await
+    }
+
+    pub async fn pgc_index(
+        &self,
+        season_type: u32,
+        page: u32,
+        page_size: u32,
+    ) -> Result<PgcIndex, ApiError> {
+        api::pgc::index(&self.client, season_type, page, page_size).await
+    }
+
+    pub async fn pgc_season(&self, season_id: u64) -> Result<PgcSeason, ApiError> {
+        api::pgc::season(&self.client, season_id).await
     }
 
     pub async fn search(

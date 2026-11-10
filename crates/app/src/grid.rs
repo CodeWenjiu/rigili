@@ -5,7 +5,7 @@ use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_bilibili::{PopularVideo, SearchVideo, thumbnail};
+use rigili_bilibili::{PopularVideo, RecommendVideo, SearchVideo, thumbnail};
 
 use crate::format::{format_count, format_date, format_duration};
 use crate::platform::theme::cover_scrim;
@@ -39,11 +39,61 @@ impl VideoCard {
         &self.bvid
     }
 
+    pub(crate) fn cover(&self) -> &str {
+        &self.cover
+    }
+
+    pub(crate) fn title(&self) -> &str {
+        &self.title
+    }
+
+    pub(crate) fn meta(&self) -> &str {
+        &self.meta
+    }
+
+    pub(crate) fn duration(&self) -> &str {
+        &self.duration
+    }
+
+    pub(crate) fn views(&self) -> &str {
+        &self.views
+    }
+
+    pub(crate) fn danmaku(&self) -> &str {
+        &self.danmaku
+    }
+
     pub(crate) fn open(&self) -> OpenVideo {
         OpenVideo {
             bvid: self.bvid.clone(),
             cid: self.cid,
             title: self.title.clone(),
+        }
+    }
+}
+
+impl From<RecommendVideo> for VideoCard {
+    fn from(video: RecommendVideo) -> Self {
+        let RecommendVideo {
+            bvid,
+            cid,
+            pic,
+            title,
+            duration,
+            pubdate,
+            owner,
+            stat,
+        } = video;
+
+        Self {
+            bvid,
+            cid: (cid != 0).then_some(cid),
+            cover: pic,
+            title,
+            meta: format!("{} · {}", owner.name, format_date(pubdate)),
+            duration: format_duration(duration),
+            views: format_count(stat.view),
+            danmaku: format_count(stat.danmaku),
         }
     }
 }
@@ -159,19 +209,42 @@ impl CardStyle {
     }
 }
 
-pub(crate) fn video_card(
-    video: &VideoCard,
+pub(crate) struct MediaCard<'a> {
+    pub(crate) id: SharedString,
+    pub(crate) cover: &'a str,
+    pub(crate) title: &'a str,
+    pub(crate) footer: &'a str,
+    pub(crate) overlay: CardOverlay<'a>,
+}
+
+pub(crate) struct CardOverlay<'a> {
+    pub(crate) leading: Option<(IconName, &'a str)>,
+    pub(crate) secondary: Option<(Option<IconName>, &'a str)>,
+    pub(crate) trailing: Option<&'a str>,
+    pub(crate) badge: Option<&'a str>,
+}
+
+pub(crate) fn media_card(
+    card: MediaCard<'_>,
     style: CardStyle,
     width: Pixels,
     text_height: Pixels,
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
+    let MediaCard {
+        id,
+        cover,
+        title,
+        footer,
+        overlay,
+    } = card;
+
     v_flex()
-        .group("video-card")
+        .group("media-card")
         .w(width)
         .h(card_height(width, text_height))
         .gap(px(CARD_BODY_GAP))
-        .id(SharedString::from(video.bvid.clone()))
+        .id(id)
         .cursor_pointer()
         .on_click(on_open)
         .child(
@@ -183,10 +256,25 @@ pub(crate) fn video_card(
                 .overflow_hidden()
                 .bg(style.placeholder)
                 .child(
-                    img(thumbnail(&video.cover, 480))
+                    img(thumbnail(cover, 480))
                         .size_full()
                         .object_fit(ObjectFit::Cover),
                 )
+                .when_some(overlay.badge, |this, badge| {
+                    this.child(
+                        div()
+                            .absolute()
+                            .top_2()
+                            .left_2()
+                            .px_2()
+                            .py_1()
+                            .rounded(style.radius)
+                            .bg(style.primary)
+                            .text_xs()
+                            .text_color(Hsla::white())
+                            .child(badge.to_owned()),
+                    )
+                })
                 .child(
                     h_flex()
                         .absolute()
@@ -201,22 +289,28 @@ pub(crate) fn video_card(
                         .text_xs()
                         .text_color(Hsla::white())
                         .bg(cover_scrim())
-                        .child(
-                            h_flex()
-                                .items_center()
-                                .gap_1()
-                                .child(IconName::Play)
-                                .child(video.views.clone()),
-                        )
-                        .child(
-                            h_flex()
-                                .items_center()
-                                .gap_1()
-                                .child(IconName::MessageCircle)
-                                .child(video.danmaku.clone()),
-                        )
+                        .when_some(overlay.leading, |this, (icon, text)| {
+                            this.child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(icon)
+                                    .child(text.to_owned()),
+                            )
+                        })
+                        .when_some(overlay.secondary, |this, (icon, text)| {
+                            this.child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .when_some(icon, |this, icon| this.child(icon))
+                                    .child(text.to_owned()),
+                            )
+                        })
                         .child(div().flex_1())
-                        .child(video.duration.clone()),
+                        .when_some(overlay.trailing, |this, trailing| {
+                            this.child(trailing.to_owned())
+                        }),
                 ),
         )
         .child(
@@ -230,17 +324,44 @@ pub(crate) fn video_card(
                         .text_sm()
                         .line_clamp(2)
                         .text_color(style.foreground)
-                        .group_hover("video-card", |this| this.text_color(style.primary))
-                        .child(video.title.clone()),
+                        .group_hover("media-card", |this| this.text_color(style.primary))
+                        .child(title.to_owned()),
                 )
                 .child(
                     div()
                         .text_xs()
                         .text_color(style.muted)
                         .truncate()
-                        .child(video.meta.clone()),
+                        .child(footer.to_owned()),
                 ),
         )
+}
+
+pub(crate) fn video_card(
+    video: &VideoCard,
+    style: CardStyle,
+    width: Pixels,
+    text_height: Pixels,
+    on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    media_card(
+        MediaCard {
+            id: SharedString::from(video.bvid.clone()),
+            cover: &video.cover,
+            title: &video.title,
+            footer: &video.meta,
+            overlay: CardOverlay {
+                leading: Some((IconName::Play, &video.views)),
+                secondary: Some((Some(IconName::MessageCircle), &video.danmaku)),
+                trailing: Some(&video.duration),
+                badge: None,
+            },
+        },
+        style,
+        width,
+        text_height,
+        on_open,
+    )
 }
 
 pub(crate) fn skeleton_card(width: Pixels, radius: Pixels) -> impl IntoElement {

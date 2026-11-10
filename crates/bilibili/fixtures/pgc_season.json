@@ -1,0 +1,18 @@
+{
+  "code": 0,
+  "message": "success",
+  "result": {
+    "season_id": 47836,
+    "title": "鬼灭之刃 柱训练篇",
+    "episodes": [
+      {
+        "bvid": "BV15i421v7FQ",
+        "cid": 1602741036,
+        "ep_id": 826497,
+        "long_title": "为了消灭鬼舞辻无惨",
+        "cover": "https://i0.hdslb.com/bfs/bangumi/image/ep.png",
+        "duration": 2938060
+      }
+    ]
+  }
+}

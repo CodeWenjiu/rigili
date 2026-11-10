@@ -1,0 +1,20 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "has_next": 1,
+    "total": 4279,
+    "list": [
+      {
+        "season_id": 47836,
+        "title": "鬼灭之刃 柱训练篇",
+        "cover": "https://i0.hdslb.com/bfs/bangumi/image/test.png",
+        "index_show": "全8话",
+        "subTitle": "羁绊连结，传承信念",
+        "score": "9.7",
+        "badge": "大会员",
+        "season_type": 1
+      }
+    ]
+  }
+}

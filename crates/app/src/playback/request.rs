@@ -5,8 +5,29 @@ use crate::backend::Backend;
 #[derive(Clone, Debug)]
 pub struct PlaybackRequest {
     pub title: String,
-    pub bvid: String,
-    pub cid: Option<u64>,
+    pub source: PlaybackSource,
+}
+
+#[derive(Clone, Debug)]
+pub enum PlaybackSource {
+    Video { bvid: String, cid: Option<u64> },
+    Live { room_id: u64 },
+}
+
+impl PlaybackRequest {
+    pub fn video(title: String, bvid: String, cid: Option<u64>) -> Self {
+        Self {
+            title,
+            source: PlaybackSource::Video { bvid, cid },
+        }
+    }
+
+    pub fn live(title: String, room_id: u64) -> Self {
+        Self {
+            title,
+            source: PlaybackSource::Live { room_id },
+        }
+    }
 }
 
 pub(super) struct Resolved {

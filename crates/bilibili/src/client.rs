@@ -229,6 +229,7 @@ struct Envelope<T> {
     #[serde(default)]
     message: String,
     data: Option<T>,
+    result: Option<T>,
 }
 
 fn parse_envelope<T>(body: &str) -> Result<T, ApiError>
@@ -244,6 +245,7 @@ where
     }
     envelope
         .data
+        .or(envelope.result)
         .ok_or_else(|| ApiError::InvalidResponse("响应缺少 data".into()))
 }
 

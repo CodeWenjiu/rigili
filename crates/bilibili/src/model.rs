@@ -287,7 +287,7 @@ pub struct Nav {
     pub mid: u64,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct Owner {
     pub mid: u64,
     pub name: String,
@@ -303,6 +303,128 @@ pub struct Stat {
     pub danmaku: u64,
     #[serde(default)]
     pub like: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct Recommend {
+    #[serde(default)]
+    pub item: Vec<RecommendVideo>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct RecommendVideo {
+    #[serde(default)]
+    pub bvid: String,
+    #[serde(default)]
+    pub cid: u64,
+    #[serde(default)]
+    pub pic: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub duration: u64,
+    #[serde(default)]
+    pub pubdate: i64,
+    #[serde(default, deserialize_with = "null_or_default")]
+    pub owner: Owner,
+    #[serde(default, deserialize_with = "null_or_default")]
+    pub stat: Stat,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct LiveRoom {
+    #[serde(default)]
+    pub roomid: u64,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub uname: String,
+    #[serde(default)]
+    pub online: u64,
+    #[serde(default)]
+    pub cover: String,
+    #[serde(default)]
+    pub system_cover: String,
+    #[serde(default)]
+    pub area_name: String,
+    #[serde(default)]
+    pub face: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct LivePlayUrl {
+    #[serde(default)]
+    pub durl: Vec<LiveStream>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct LiveStream {
+    #[serde(default)]
+    pub url: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct PgcIndex {
+    #[serde(default)]
+    pub has_next: u32,
+    #[serde(default)]
+    pub list: Vec<PgcItem>,
+    #[serde(default)]
+    pub total: u64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct PgcItem {
+    #[serde(default)]
+    pub season_id: u64,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub cover: String,
+    #[serde(default)]
+    pub index_show: String,
+    #[serde(default, rename = "subTitle")]
+    pub subtitle: String,
+    #[serde(default)]
+    pub score: String,
+    #[serde(default)]
+    pub badge: String,
+    #[serde(default)]
+    pub season_type: u32,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct PgcSeason {
+    #[serde(default)]
+    pub season_id: u64,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub episodes: Vec<PgcEpisode>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct PgcEpisode {
+    #[serde(default)]
+    pub bvid: String,
+    #[serde(default)]
+    pub cid: u64,
+    #[serde(default)]
+    pub ep_id: u64,
+    #[serde(default)]
+    pub long_title: String,
+    #[serde(default)]
+    pub cover: String,
+    #[serde(default)]
+    pub duration: u64,
+}
+
+fn null_or_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 #[cfg(test)]

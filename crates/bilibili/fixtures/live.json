@@ -1,0 +1,19 @@
+{
+  "code": 0,
+  "msg": "success",
+  "message": "success",
+  "data": [
+    {
+      "roomid": 7734200,
+      "uid": 50329118,
+      "title": "测试直播",
+      "uname": "测试主播",
+      "online": 895359,
+      "user_cover": "https://i0.hdslb.com/bfs/live/cover.jpg",
+      "system_cover": "https://i0.hdslb.com/bfs/live/keyframe.jpg",
+      "cover": "https://i0.hdslb.com/bfs/live/cover.jpg",
+      "face": "https://i2.hdslb.com/bfs/face/face.jpg",
+      "area_name": "游戏赛事"
+    }
+  ]
+}

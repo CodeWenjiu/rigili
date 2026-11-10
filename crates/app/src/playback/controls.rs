@@ -14,6 +14,7 @@ pub(super) struct Transport<'a> {
     pub(super) seeking: Option<f64>,
     pub(super) progress: &'a Entity<SliderState>,
     pub(super) volume: &'a Entity<SliderState>,
+    pub(super) live: bool,
     pub(super) player: WeakEntity<PlayerView>,
 }
 
@@ -21,6 +22,7 @@ impl Transport<'_> {
     pub(super) fn render(&self, window: &Window, cx: &App) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
         let border = cx.theme().border;
+        let primary = cx.theme().primary;
         let weak = self.player.clone();
         let display_time = self.seeking.unwrap_or(self.status.time_pos);
         let duration = self.status.duration.max(0.0);
@@ -53,23 +55,37 @@ impl Transport<'_> {
                         }
                     }),
             )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(muted)
-                    .child(format_clock(display_time)),
-            )
-            .child(
-                Slider::new(self.progress)
-                    .flex_1()
-                    .accessibility_label("播放进度"),
-            )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(muted)
-                    .child(format_clock(duration)),
-            )
+            .when(!self.live, |this| {
+                this.child(
+                    div()
+                        .text_sm()
+                        .text_color(muted)
+                        .child(format_clock(display_time)),
+                )
+                .child(
+                    Slider::new(self.progress)
+                        .flex_1()
+                        .accessibility_label("播放进度"),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(muted)
+                        .child(format_clock(duration)),
+                )
+            })
+            .when(self.live, |this| {
+                this.child(
+                    h_flex()
+                        .items_center()
+                        .gap_2()
+                        .text_sm()
+                        .text_color(primary)
+                        .child(div().size_2().rounded_full().bg(primary))
+                        .child("直播中"),
+                )
+                .child(div().flex_1())
+            })
             .child(div().text_sm().text_color(muted).child("音量"))
             .child(
                 Slider::new(self.volume)

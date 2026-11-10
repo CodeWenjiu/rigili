@@ -1,0 +1,9 @@
+{
+  "code": 0,
+  "data": {
+    "durl": [
+      { "url": "https://example.invalid/live.flv" },
+      { "url": "https://example.invalid/live-2.flv" }
+    ]
+  }
+}

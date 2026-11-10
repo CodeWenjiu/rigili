@@ -1,0 +1,31 @@
+{
+  "code": 0,
+  "message": "0",
+  "data": {
+    "item": [
+      {
+        "id": 1001,
+        "bvid": "BV1TgWp6MEHJ",
+        "cid": 43448467681,
+        "pic": "https://i0.hdslb.com/bfs/archive/recommend.jpg",
+        "title": "推荐视频",
+        "duration": 175,
+        "pubdate": 1762243200,
+        "owner": { "mid": 1, "name": "测试UP", "face": "" },
+        "stat": { "view": 120000, "danmaku": 456, "like": 789 }
+      },
+      {
+        "id": 1002,
+        "goto": "live",
+        "bvid": "",
+        "cid": 0,
+        "pic": "https://i0.hdslb.com/bfs/live/live.jpg",
+        "title": "直播卡片",
+        "duration": 0,
+        "pubdate": 0,
+        "owner": { "mid": 2, "name": "主播", "face": "" },
+        "stat": { "view": 0, "danmaku": 0 }
+      }
+    ]
+  }
+}

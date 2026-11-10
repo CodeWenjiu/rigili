@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use gpui_kit::assets::IconName;
 use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
@@ -9,7 +11,7 @@ use gpui_kit::*;
 
 use super::playback::Playback;
 use crate::grid::OpenVideo;
-use crate::home::HomeView;
+use crate::home::{HomeView, OpenLive};
 use crate::login;
 use crate::playback::PlaybackRequest;
 use crate::search::SearchView;
@@ -21,6 +23,76 @@ pub struct MainView {
     search_active: bool,
     playback: Option<Playback>,
     _search_input_sub: Subscription,
+}
+
+type NavHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+
+#[derive(Clone)]
+struct NavItem {
+    label: SharedString,
+    icon: IconName,
+    active: bool,
+    on_click: NavHandler,
+}
+
+impl NavItem {
+    fn new(label: impl Into<SharedString>, icon: IconName) -> Self {
+        Self {
+            label: label.into(),
+            icon,
+            active: false,
+            on_click: Rc::new(|_: &ClickEvent, _: &mut Window, _: &mut App| {}),
+        }
+    }
+
+    fn active(mut self, active: bool) -> Self {
+        self.active = active;
+        self
+    }
+
+    fn on_click(mut self, on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
+        self.on_click = Rc::new(on_click);
+        self
+    }
+}
+
+impl Collapsible for NavItem {
+    fn is_collapsed(&self) -> bool {
+        false
+    }
+
+    fn collapsed(self, _: bool) -> Self {
+        self
+    }
+}
+
+impl SidebarItem for NavItem {
+    fn render(self, id: impl Into<ElementId>, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let active = self.active;
+        let icon = self.icon;
+        let label = self.label;
+        let on_click = self.on_click;
+        let color = if active {
+            cx.theme().sidebar_accent_foreground
+        } else {
+            cx.theme().sidebar_foreground
+        };
+
+        Button::new(id)
+            .ghost()
+            .w_full()
+            .h(px(60.))
+            .accessibility_label(label.clone())
+            .on_click(move |event, window, cx| on_click(event, window, cx))
+            .child(
+                v_flex()
+                    .items_center()
+                    .gap_1()
+                    .text_color(color)
+                    .child(Icon::new(icon).with_size(px(22.)))
+                    .child(div().text_sm().child(label)),
+            )
+    }
 }
 
 pub fn open_main(cx: &mut App) -> Result<()> {
@@ -51,6 +123,11 @@ impl MainView {
 
         cx.subscribe_in(&home, window, |this, _, event: &OpenVideo, window, cx| {
             this.play(event.clone(), window, cx);
+        })
+        .detach();
+
+        cx.subscribe_in(&home, window, |this, _, event: &OpenLive, window, cx| {
+            this.play_live(event.clone(), window, cx);
         })
         .detach();
 
@@ -126,6 +203,22 @@ impl MainView {
             .into_any_element()
     }
 
+    fn render_logo(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .h(px(40.))
+            .w_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                Icon::default()
+                    .data(include_bytes!("../../assets/rigili-mark.svg"))
+                    .with_size(px(36.))
+                    .text_color(cx.theme().sidebar_primary),
+            )
+            .into_any_element()
+    }
+
     fn render_top_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let background = cx.theme().background;
         let border = cx.theme().border;
@@ -172,11 +265,23 @@ impl MainView {
     }
 
     fn play(&mut self, video: OpenVideo, window: &mut Window, cx: &mut Context<Self>) {
-        let request = PlaybackRequest {
-            title: video.title,
-            bvid: video.bvid,
-            cid: video.cid,
-        };
+        self.open_playback(
+            PlaybackRequest::video(video.title, video.bvid, video.cid),
+            window,
+            cx,
+        );
+    }
+
+    fn play_live(&mut self, live: OpenLive, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_playback(PlaybackRequest::live(live.title, live.room_id), window, cx);
+    }
+
+    fn open_playback(
+        &mut self,
+        request: PlaybackRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(playback) = self.playback.as_ref() {
             if playback.load(request.clone(), cx).is_ok() {
                 return;
@@ -199,53 +304,51 @@ impl Render for MainView {
         let foreground = cx.theme().foreground;
         let weak = cx.entity().downgrade();
 
-        v_flex()
+        h_flex()
             .size_full()
             .bg(background)
             .text_color(foreground)
-            .child(self.render_top_bar(cx))
             .child(
-                h_flex()
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
+                Sidebar::new("app-sidebar")
+                    .collapsible(false)
+                    .w(px(88.))
+                    .border_r_1()
+                    .border_color(border)
+                    .header(self.render_logo(cx))
                     .child(
-                        Sidebar::new("app-sidebar")
-                            .collapsible(true)
-                            .collapsed(true)
-                            .border_r_1()
-                            .border_color(border)
-                            .child(
-                                SidebarMenu::new().child(
-                                    SidebarMenuItem::new("热门")
-                                        .icon(Icon::new(IconName::Flame))
-                                        .active(true)
-                                        .on_click({
-                                            let weak = weak.clone();
-                                            move |_, _, cx| {
-                                                let _ = weak.update(cx, |this, cx| {
-                                                    if this.search_active {
-                                                        this.search_active = false;
-                                                        cx.notify();
-                                                    }
-                                                });
-                                            }
-                                        }),
-                                ),
-                            )
-                            .footer(
-                                div()
-                                    .w_full()
-                                    .flex()
-                                    .justify_center()
-                                    .child(self.account(cx)),
-                            ),
+                        NavItem::new("首页", IconName::House)
+                            .active(true)
+                            .on_click({
+                                let weak = weak.clone();
+                                move |_, _, cx| {
+                                    let _ = weak.update(cx, |this, cx| {
+                                        if this.search_active {
+                                            this.search_active = false;
+                                            cx.notify();
+                                        }
+                                    });
+                                }
+                            }),
                     )
+                    .footer(
+                        div()
+                            .w_full()
+                            .flex()
+                            .justify_center()
+                            .child(self.account(cx)),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(self.render_top_bar(cx))
                     .child(
                         div()
                             .flex_1()
-                            .min_w_0()
-                            .h_full()
+                            .min_h_0()
+                            .w_full()
                             .child(if self.search_active {
                                 self.search.clone().into_any_element()
                             } else {

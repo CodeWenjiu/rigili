@@ -4,8 +4,8 @@ use gpui_kit::component::slider::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_player::{PlaybackPhase, Player, PlayerStatus, VideoFrame, VideoSize};
 use image::RgbaImage;
+use rigili_player::{PlaybackPhase, Player, PlayerStatus, VideoFrame, VideoSize};
 
 use super::controls::{Transport, status_bar};
 
@@ -22,6 +22,7 @@ pub(super) struct PlayerView {
     seeking: Option<f64>,
     volume_dragging: bool,
     progress_max: f64,
+    live: bool,
     _progress_sub: Option<Subscription>,
     _subscriptions: Vec<Subscription>,
     _poll_task: Task<()>,
@@ -68,6 +69,7 @@ impl PlayerView {
             seeking: None,
             volume_dragging: false,
             progress_max: 0.0,
+            live: false,
             _progress_sub: progress_sub,
             _subscriptions: subscriptions,
             _poll_task: poll_task,
@@ -78,11 +80,13 @@ impl PlayerView {
         &mut self,
         video: String,
         audio: Option<String>,
+        live: bool,
         cx: &mut Context<Self>,
     ) {
         if let Some(frame) = self.frame.take() {
             self.retired_frames.push(frame);
         }
+        self.live = live;
         self.seeking = None;
         self.progress_max = 0.0;
         self.status = PlayerStatus {
@@ -245,6 +249,7 @@ impl Render for PlayerView {
                     seeking: self.seeking,
                     progress: &self.progress,
                     volume: &self.volume,
+                    live: self.live,
                     player: cx.entity().downgrade(),
                 }
                 .render(window, cx),
