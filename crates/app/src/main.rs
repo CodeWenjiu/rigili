@@ -1,5 +1,5 @@
 rigili_macro::mod_prv!(
-    backend, format, grid, home, login, playback, platform, refresh, search, shell
+    backend, format, grid, home, login, mine, playback, platform, refresh, search, shell
 );
 
 use crate::platform::assets::AppAssets;

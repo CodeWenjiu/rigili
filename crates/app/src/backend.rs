@@ -2,9 +2,10 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use gpui_kit::*;
 use rigili_bilibili::{
-    ApiError, ArticleSearch, Client, HotWords, LiveRoom, LiveSearch, MediaSearch, Nav, PgcIndex,
-    PgcSeason, PlayUrl, Popular, QrCode, QrPoll, Recommend, SearchAll, SearchSuggestions,
-    SessionError, UserSearch, VideoInfo, VideoSearch, api,
+    ApiError, ArticleSearch, Client, FavFolders, FavItems, HistoryPage, HotWords, LiveRoom,
+    LiveSearch, MediaSearch, Nav, NavStat, PgcIndex, PgcSeason, PlayUrl, Popular, QrCode, QrPoll,
+    Recommend, SearchAll, SearchSuggestions, SessionError, UserSearch, VideoInfo, VideoSearch,
+    WatchLater, api,
     api::search::{SearchOrder, SearchType},
 };
 
@@ -135,6 +136,26 @@ impl Backend {
 
     pub async fn hot_words(&self) -> Result<HotWords, ApiError> {
         api::search::fetch_hot_words(&self.client).await
+    }
+
+    pub async fn nav_stat(&self) -> Result<NavStat, ApiError> {
+        api::mine::nav_stat(&self.client).await
+    }
+
+    pub async fn fav_folders(&self, mid: u64) -> Result<FavFolders, ApiError> {
+        api::mine::fav_folders(&self.client, mid).await
+    }
+
+    pub async fn fav_items(&self, media_id: u64, page: u32) -> Result<FavItems, ApiError> {
+        api::mine::fav_items(&self.client, media_id, page).await
+    }
+
+    pub async fn history(&self, max: u64, view_at: i64) -> Result<HistoryPage, ApiError> {
+        api::mine::history(&self.client, max, view_at).await
+    }
+
+    pub async fn watch_later(&self) -> Result<WatchLater, ApiError> {
+        api::mine::watch_later(&self.client).await
     }
 
     pub async fn view(&self, bvid: &str) -> Result<VideoInfo, ApiError> {

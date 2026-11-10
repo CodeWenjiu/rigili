@@ -7,7 +7,9 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_bilibili::{PopularVideo, RecommendVideo, SearchVideo, thumbnail};
+use rigili_bilibili::{
+    FavItem, HistoryItem, PopularVideo, RecommendVideo, SearchVideo, WatchLaterItem, thumbnail,
+};
 
 use crate::format::{format_count, format_date, format_duration};
 use crate::platform::theme::cover_scrim;
@@ -159,6 +161,54 @@ impl From<SearchVideo> for VideoCard {
             views: format_count(play),
             danmaku: format_count(danmaku),
             like: format_count(like),
+        }
+    }
+}
+
+impl From<FavItem> for VideoCard {
+    fn from(item: FavItem) -> Self {
+        Self {
+            bvid: item.bvid,
+            cid: None,
+            cover: item.cover,
+            title: item.title,
+            meta: format!("{} · {}", item.upper.name, format_date(item.pubtime)),
+            duration: format_duration(item.duration),
+            views: format_count(item.cnt_info.play),
+            danmaku: format_count(item.cnt_info.danmaku),
+            like: String::new(),
+        }
+    }
+}
+
+impl From<HistoryItem> for VideoCard {
+    fn from(item: HistoryItem) -> Self {
+        Self {
+            bvid: item.history.bvid,
+            cid: None,
+            cover: item.cover,
+            title: item.title,
+            meta: format!("{} · {}", item.author_name, format_date(item.view_at)),
+            duration: format_duration(item.duration),
+            views: String::new(),
+            danmaku: String::new(),
+            like: String::new(),
+        }
+    }
+}
+
+impl From<WatchLaterItem> for VideoCard {
+    fn from(item: WatchLaterItem) -> Self {
+        Self {
+            bvid: item.bvid,
+            cid: (item.cid != 0).then_some(item.cid),
+            cover: item.pic,
+            title: item.title,
+            meta: format!("{} · {}", item.owner.name, format_date(item.pubdate)),
+            duration: format_duration(item.duration),
+            views: format_count(item.stat.view),
+            danmaku: format_count(item.stat.danmaku),
+            like: format_count(item.stat.like),
         }
     }
 }

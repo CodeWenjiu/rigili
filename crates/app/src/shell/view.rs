@@ -15,6 +15,7 @@ use super::playback::Playback;
 use crate::grid::OpenVideo;
 use crate::home::{HomeTab, HomeView, OpenLive};
 use crate::login;
+use crate::mine::MineView;
 use crate::playback::PlaybackRequest;
 use crate::refresh::Refresh;
 use crate::search::SearchView;
@@ -23,10 +24,12 @@ use search_box::SearchBox;
 pub struct MainView {
     home: Entity<HomeView>,
     search: Entity<SearchView>,
+    mine: Entity<MineView>,
     search_input: Entity<InputState>,
     search_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     search_box: SearchBox,
     search_active: bool,
+    mine_active: bool,
     playback: Option<Playback>,
     _search_input_sub: Subscription,
 }
@@ -119,6 +122,7 @@ impl MainView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let home = cx.new(HomeView::new);
         let search = cx.new(SearchView::new);
+        let mine = cx.new(MineView::new);
         let search_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("搜索视频、番剧、用户"));
         let input_sub = cx.subscribe_in(&search_input, window, |this, _, event, _, cx| {
@@ -146,6 +150,11 @@ impl MainView {
         })
         .detach();
 
+        cx.subscribe_in(&mine, window, |this, _, event: &OpenVideo, window, cx| {
+            this.play(event.clone(), window, cx);
+        })
+        .detach();
+
         cx.on_window_closed({
             let weak = cx.entity().downgrade();
             move |cx, window_id| {
@@ -166,10 +175,12 @@ impl MainView {
         Self {
             home,
             search,
+            mine,
             search_input,
             search_bounds: Rc::new(Cell::new(None)),
             search_box: SearchBox::new(),
             search_active: false,
+            mine_active: false,
             playback: None,
             _search_input_sub: input_sub,
         }
@@ -178,6 +189,7 @@ impl MainView {
     fn submit_search(&mut self, cx: &mut Context<Self>) {
         let keyword = self.search_input.read(cx).value().trim().to_owned();
         self.search_box.close();
+        self.mine_active = false;
         if keyword.is_empty() {
             self.search_active = false;
             cx.notify();
@@ -271,6 +283,7 @@ impl MainView {
                             .accessibility_label(tab.label())
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.search_active = false;
+                                this.mine_active = false;
                                 this.home.update(cx, |home, cx| home.show_tab(tab, cx));
                                 cx.notify();
                             }))
@@ -308,7 +321,9 @@ impl MainView {
             .bg(background)
             .text_color(foreground)
             .px_6()
-            .child(self.render_home_tabs(home_tab, cx))
+            .when(!self.mine_active, |this| {
+                this.child(self.render_home_tabs(home_tab, cx))
+            })
             .child(
                 div().flex_1().min_w_0().flex().justify_center().child(
                     h_flex().w_full().max_w(rems(40.)).items_center().child(
@@ -374,7 +389,9 @@ impl MainView {
     }
 
     fn page_can_refresh(&self, cx: &App) -> bool {
-        if self.search_active {
+        if self.mine_active {
+            self.mine.read(cx).can_refresh()
+        } else if self.search_active {
             self.search.read(cx).can_refresh()
         } else {
             self.home.read(cx).can_refresh()
@@ -382,7 +399,9 @@ impl MainView {
     }
 
     fn refresh_page(&mut self, cx: &mut Context<Self>) {
-        if self.search_active {
+        if self.mine_active {
+            self.mine.update(cx, |mine, cx| mine.refresh(cx));
+        } else if self.search_active {
             self.search.update(cx, |search, cx| search.refresh(cx));
         } else {
             self.home.update(cx, |home, cx| home.refresh(cx));
@@ -442,12 +461,29 @@ impl Render for MainView {
                     .header(self.render_logo(cx))
                     .child(
                         NavItem::new("首页", IconName::House)
-                            .active(true)
+                            .active(!self.mine_active)
                             .on_click({
                                 let weak = weak.clone();
                                 move |_, _, cx| {
                                     let _ = weak.update(cx, |this, cx| {
-                                        if this.search_active {
+                                        if this.search_active || this.mine_active {
+                                            this.search_active = false;
+                                            this.mine_active = false;
+                                            cx.notify();
+                                        }
+                                    });
+                                }
+                            }),
+                    )
+                    .child(
+                        NavItem::new("我的", IconName::CircleUser)
+                            .active(self.mine_active)
+                            .on_click({
+                                let weak = weak.clone();
+                                move |_, _, cx| {
+                                    let _ = weak.update(cx, |this, cx| {
+                                        if !this.mine_active {
+                                            this.mine_active = true;
                                             this.search_active = false;
                                             cx.notify();
                                         }
@@ -475,7 +511,9 @@ impl Render for MainView {
                             .flex_1()
                             .min_h_0()
                             .w_full()
-                            .child(if self.search_active {
+                            .child(if self.mine_active {
+                                self.mine.clone().into_any_element()
+                            } else if self.search_active {
                                 self.search.clone().into_any_element()
                             } else {
                                 self.home.clone().into_any_element()
