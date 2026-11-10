@@ -29,7 +29,6 @@ pub(super) struct SearchBox {
     hot_loading: bool,
     hot_loaded: bool,
     suggestions: Vec<SearchSuggestion>,
-    suggestions_loading: bool,
     suggestion_generation: u64,
 }
 
@@ -45,7 +44,6 @@ impl SearchBox {
             hot_loading: false,
             hot_loaded: false,
             suggestions: Vec::new(),
-            suggestions_loading: false,
             suggestion_generation: 0,
         }
     }
@@ -91,8 +89,16 @@ impl MainView {
         cx.notify();
     }
 
-    pub(super) fn close_search_box(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn dismiss_search_box(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let focused = self
+            .search_input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window);
         self.search_box.open = false;
+        if focused {
+            window.blur(cx);
+        }
         cx.notify();
     }
 
@@ -117,7 +123,6 @@ impl MainView {
         if term.is_empty() {
             self.search_box.suggestion_generation += 1;
             self.search_box.suggestions.clear();
-            self.search_box.suggestions_loading = false;
             return;
         }
         self.request_suggestions(term, cx);
@@ -129,8 +134,6 @@ impl MainView {
         };
         self.search_box.suggestion_generation += 1;
         let generation = self.search_box.suggestion_generation;
-        self.search_box.suggestions_loading = true;
-        cx.notify();
 
         spawn_api(
             cx,
@@ -142,7 +145,6 @@ impl MainView {
                 if this.search_box.suggestion_generation != generation {
                     return;
                 }
-                this.search_box.suggestions_loading = false;
                 match result {
                     Ok(mut suggestions) => {
                         suggestions.items.truncate(SUGGESTION_LIMIT);
@@ -210,7 +212,7 @@ impl MainView {
             if !has_idle {
                 return None;
             }
-        } else if self.search_box.suggestions.is_empty() && !self.search_box.suggestions_loading {
+        } else if self.search_box.suggestions.is_empty() {
             return None;
         }
 
@@ -232,13 +234,13 @@ impl MainView {
             .border_color(cx.theme().border)
             .rounded(cx.theme().radius_lg)
             .p_4()
-            .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+            .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, window, cx| {
                 let inside_input = this
                     .search_bounds
                     .get()
                     .is_some_and(|bounds| bounds.contains(&event.position));
                 if !inside_input {
-                    this.close_search_box(cx);
+                    this.dismiss_search_box(window, cx);
                 }
             }))
             .child(content);
@@ -440,7 +442,6 @@ impl MainView {
         let foreground = cx.theme().foreground;
         let primary = cx.theme().primary;
         let hover = cx.theme().accent;
-        let muted = cx.theme().muted_foreground;
 
         v_flex()
             .gap_1()
@@ -476,19 +477,6 @@ impl MainView {
                             }))
                             .into_any_element()
                     }),
-            )
-            .when(
-                self.search_box.suggestions.is_empty() && self.search_box.suggestions_loading,
-                |this| {
-                    this.child(
-                        h_flex()
-                            .items_center()
-                            .gap_2()
-                            .p_2()
-                            .child(Spinner::new().small())
-                            .child(div().text_xs().text_color(muted).child("正在联想…")),
-                    )
-                },
             )
             .into_any_element()
     }

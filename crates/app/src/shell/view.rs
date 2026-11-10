@@ -326,16 +326,23 @@ impl MainView {
                                     let bounds = self.search_bounds.clone();
                                     move |value, _, _| bounds.set(Some(value))
                                 })
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.open_search_box(cx);
-                                }))
-                                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                                    if event.keystroke.key == "escape" && this.search_box_is_open()
-                                    {
-                                        this.close_search_box(cx);
-                                        cx.stop_propagation();
-                                    }
-                                }))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, window, cx| {
+                                        this.open_search_box(cx);
+                                        this.focus_search(window, cx);
+                                    }),
+                                )
+                                .on_key_down(cx.listener(
+                                    |this, event: &KeyDownEvent, window, cx| {
+                                        if event.keystroke.key == "escape"
+                                            && this.search_box_is_open()
+                                        {
+                                            this.dismiss_search_box(window, cx);
+                                            cx.stop_propagation();
+                                        }
+                                    },
+                                ))
                                 .child(
                                     Input::new(&self.search_input)
                                         .large()
