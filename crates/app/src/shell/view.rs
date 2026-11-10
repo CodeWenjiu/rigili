@@ -295,7 +295,6 @@ impl MainView {
         let background = cx.theme().background;
         let border = cx.theme().border;
         let foreground = cx.theme().foreground;
-        let muted = cx.theme().muted_foreground;
         let home_tab = self.home.read(cx).current_tab();
 
         h_flex()
@@ -312,54 +311,46 @@ impl MainView {
             .child(self.render_home_tabs(home_tab, cx))
             .child(
                 div().flex_1().min_w_0().flex().justify_center().child(
-                    h_flex()
-                        .w_full()
-                        .max_w(rems(40.))
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .id("search-input")
-                                .flex_1()
-                                .min_w_0()
-                                .on_prepaint({
-                                    let bounds = self.search_bounds.clone();
-                                    move |value, _, _| bounds.set(Some(value))
-                                })
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, window, cx| {
-                                        this.open_search_box(cx);
-                                        this.focus_search(window, cx);
-                                    }),
-                                )
-                                .on_key_down(cx.listener(
-                                    |this, event: &KeyDownEvent, window, cx| {
-                                        if event.keystroke.key == "escape"
-                                            && this.search_box_is_open()
-                                        {
-                                            this.dismiss_search_box(window, cx);
-                                            cx.stop_propagation();
-                                        }
-                                    },
-                                ))
-                                .child(
-                                    Input::new(&self.search_input)
-                                        .large()
-                                        .cleanable(true)
-                                        .prefix(Icon::new(IconName::Search).text_color(muted)),
-                                ),
-                        )
-                        .child(
-                            Button::new("search-submit")
-                                .large()
-                                .primary()
-                                .label("搜索")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.submit_search(cx);
+                    h_flex().w_full().max_w(rems(40.)).items_center().child(
+                        div()
+                            .id("search-input")
+                            .flex_1()
+                            .min_w_0()
+                            .on_prepaint({
+                                let bounds = self.search_bounds.clone();
+                                move |value, _, _| bounds.set(Some(value))
+                            })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    this.open_search_box(cx);
                                     this.focus_search(window, cx);
-                                })),
-                        ),
+                                }),
+                            )
+                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                                if event.keystroke.key == "escape" && this.search_box_is_open() {
+                                    this.dismiss_search_box(window, cx);
+                                    cx.stop_propagation();
+                                }
+                            }))
+                            .child(
+                                Input::new(&self.search_input)
+                                    .large()
+                                    .cleanable(true)
+                                    .suffix(
+                                        Button::new("search-submit")
+                                            .ghost()
+                                            .xsmall()
+                                            .icon(IconName::Search)
+                                            .accessibility_label("搜索")
+                                            .tooltip("搜索")
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.submit_search(cx);
+                                                this.focus_search(window, cx);
+                                            })),
+                                    ),
+                            ),
+                    ),
                 ),
             )
             .when_some(self.render_search_panel(cx), |this, panel| {
