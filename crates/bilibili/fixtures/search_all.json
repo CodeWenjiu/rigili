@@ -1,0 +1,98 @@
+{
+  "code": 0,
+  "message": "0",
+  "ttl": 1,
+  "data": {
+    "seid": "1234567890",
+    "page": 1,
+    "pagesize": 20,
+    "numResults": 1000,
+    "numPages": 50,
+    "pageinfo": {
+      "video": {
+        "numResults": 1000,
+        "pages": 50,
+        "total": 1000
+      },
+      "media_bangumi": {
+        "numResults": 1,
+        "pages": 1,
+        "total": 1
+      },
+      "media_ft": {
+        "numResults": 1,
+        "pages": 1,
+        "total": 1
+      },
+      "live": {
+        "numResults": 26,
+        "pages": 2,
+        "total": 26
+      },
+      "article": {
+        "numResults": 1000,
+        "pages": 50,
+        "total": 1000
+      },
+      "bili_user": {
+        "numResults": 1000,
+        "pages": 50,
+        "total": 1000
+      }
+    },
+    "result": [
+      {
+        "result_type": "tips",
+        "data": []
+      },
+      {
+        "result_type": "bili_user",
+        "data": [
+          {
+            "type": "bili_user",
+            "mid": 1561367430,
+            "uname": "安东森",
+            "upic": "//i1.hdslb.com/bfs/face/example.jpg",
+            "fans": 24841,
+            "videos": 32,
+            "level": 4,
+            "usign": "丹麦羽毛球运动员",
+            "official_verify": {
+              "type": 0,
+              "desc": "丹麦羽毛球运动员安东森"
+            },
+            "res": [
+              {
+                "aid": 1953836612,
+                "bvid": "BV1xC411J7QU",
+                "title": "2024 成都汤尤杯",
+                "pic": "//i0.hdslb.com/bfs/archive/a.jpg",
+                "duration": "0:12",
+                "pubdate": 1714565461,
+                "play": "19767",
+                "dm": 3
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "result_type": "video",
+        "data": [
+          {
+            "type": "video",
+            "bvid": "BV1xx411c7mD",
+            "title": "综合视频",
+            "pic": "//i0.hdslb.com/bfs/archive/a.jpg",
+            "author": "测试UP",
+            "duration": "1:00",
+            "pubdate": 1714565461,
+            "play": 1,
+            "danmaku": 2,
+            "like": 3
+          }
+        ]
+      }
+    ]
+  }
+}

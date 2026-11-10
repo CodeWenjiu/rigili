@@ -1,6 +1,9 @@
 use std::time::Duration;
 
+use gpui_kit::App;
 use rigili_bilibili::ApiError;
+
+use crate::platform::runtime::ApiTaskError;
 
 pub(crate) fn api_error_message(error: &ApiError) -> String {
     if error.is_login_required() {
@@ -9,6 +12,18 @@ pub(crate) fn api_error_message(error: &ApiError) -> String {
         "请求过于频繁，请稍后再试".into()
     } else {
         error.to_string()
+    }
+}
+
+pub(crate) fn api_task_error_message(error: ApiTaskError, cx: &mut App) -> String {
+    match error {
+        ApiTaskError::Api(error) => {
+            if error.is_login_required() {
+                crate::login::expire(cx);
+            }
+            api_error_message(&error)
+        }
+        ApiTaskError::Join(error) => format!("加载任务失败：{error}"),
     }
 }
 

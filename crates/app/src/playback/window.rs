@@ -210,17 +210,7 @@ impl PlayerWindow {
     }
 
     fn handle_error(&mut self, error: ApiTaskError, cx: &mut Context<Self>) {
-        match error {
-            ApiTaskError::Api(error) => {
-                if error.is_login_required() {
-                    crate::login::expire(cx);
-                }
-                self.error = Some(crate::format::api_error_message(&error));
-            }
-            ApiTaskError::Join(error) => {
-                self.error = Some(format!("加载任务失败：{error}"));
-            }
-        }
+        self.error = Some(crate::format::api_task_error_message(error, cx));
     }
 
     fn retry(&mut self, cx: &mut Context<Self>) {

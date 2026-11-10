@@ -113,7 +113,8 @@ impl MainView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let home = cx.new(HomeView::new);
         let search = cx.new(SearchView::new);
-        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索视频"));
+        let search_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("搜索视频、番剧、用户"));
         let input_sub = cx.subscribe_in(&search_input, window, |this, _, event, _, cx| {
             if matches!(event, InputEvent::PressEnter { .. }) {
                 this.submit_search(cx);
@@ -133,6 +134,11 @@ impl MainView {
 
         cx.subscribe_in(&search, window, |this, _, event: &OpenVideo, window, cx| {
             this.play(event.clone(), window, cx);
+        })
+        .detach();
+
+        cx.subscribe_in(&search, window, |this, _, event: &OpenLive, window, cx| {
+            this.play_live(event.clone(), window, cx);
         })
         .detach();
 

@@ -1,11 +1,10 @@
-use std::collections::HashSet;
-
 use gpui_kit::*;
 use rigili_bilibili::{LiveRoom, PgcIndex, Popular, Recommend};
 
 use super::{HomeItem, HomeTab, HomeView, OpenLive, OpenTarget};
 use crate::backend;
-use crate::grid::{OpenVideo, VideoCard};
+use crate::format::api_task_error_message;
+use crate::grid::{VideoCard, append_unique_by};
 use crate::platform::runtime::{ApiTaskError, spawn_api};
 
 const VIDEO_PAGE_SIZE: u32 = 30;
@@ -103,7 +102,7 @@ impl HomeView {
                 state.items = page.items;
                 state.scroll.scroll_to_item(0, ScrollStrategy::Top);
             }
-            Err(error) => state.error = Some(api_error(error, cx)),
+            Err(error) => state.error = Some(api_task_error_message(error, cx)),
         }
         cx.notify();
     }
@@ -190,9 +189,9 @@ impl HomeView {
             Ok(page) => {
                 state.page = page_number;
                 state.has_more = page.has_more;
-                append_unique_items(&mut state.items, page.items);
+                append_unique_by(&mut state.items, page.items, HomeItem::key);
             }
-            Err(error) => state.more_error = Some(api_error(error, cx)),
+            Err(error) => state.more_error = Some(api_task_error_message(error, cx)),
         }
         cx.notify();
     }
@@ -236,31 +235,13 @@ impl HomeView {
 
         spawn_api(
             cx,
-            async move { backend.pgc_season(season_id).await },
+            async move { crate::playback::resolve_season(backend, season_id).await },
             move |this, result, cx| {
                 this.opening = None;
                 match result {
-                    Ok(season) => {
-                        if let Some(episode) = season
-                            .episodes
-                            .into_iter()
-                            .find(|episode| !episode.bvid.is_empty())
-                        {
-                            let title = if episode.long_title.is_empty() {
-                                season.title
-                            } else {
-                                format!("{} {}", season.title, episode.long_title)
-                            };
-                            cx.emit(OpenVideo {
-                                bvid: episode.bvid,
-                                cid: (episode.cid != 0).then_some(episode.cid),
-                                title,
-                            });
-                        } else {
-                            this.notice = Some("该作品暂无可播放的剧集".into());
-                        }
-                    }
-                    Err(error) => this.notice = Some(api_error(error, cx)),
+                    Ok(Some(video)) => cx.emit(video),
+                    Ok(None) => this.notice = Some("该作品暂无可播放的剧集".into()),
+                    Err(error) => this.notice = Some(api_task_error_message(error, cx)),
                 }
                 cx.notify();
             },
@@ -304,31 +285,13 @@ fn pgc_page(index: PgcIndex) -> Page {
     }
 }
 
-fn append_unique_items(items: &mut Vec<HomeItem>, incoming: Vec<HomeItem>) {
-    let mut seen = items.iter().map(HomeItem::key).collect::<HashSet<_>>();
-    items.extend(incoming.into_iter().filter(|item| seen.insert(item.key())));
-}
-
-fn api_error(error: ApiTaskError, cx: &mut App) -> String {
-    match error {
-        ApiTaskError::Api(error) => {
-            if error.is_login_required() {
-                crate::login::expire(cx);
-            }
-            crate::format::api_error_message(&error)
-        }
-        ApiTaskError::Join(error) => format!("加载任务失败：{error}"),
-    }
-}
-
 fn has_more(popular: &Popular) -> bool {
     !popular.no_more && !popular.list.is_empty()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{HomeItem, append_unique_items, has_more, pgc_page, recommend_page};
-    use crate::grid::VideoCard;
+    use super::{HomeItem, has_more, pgc_page, recommend_page};
     use rigili_bilibili::{PgcIndex, PgcItem, Popular, PopularVideo, Recommend, RecommendVideo};
 
     #[test]
@@ -392,35 +355,6 @@ mod tests {
             total: 1,
         });
         assert!(!page.has_more);
-    }
-
-    #[test]
-    fn appends_only_new_items() {
-        let mut items = vec![HomeItem::Video(VideoCard::from(RecommendVideo {
-            bvid: "BV1".into(),
-            cid: 1,
-            ..Default::default()
-        }))];
-        append_unique_items(
-            &mut items,
-            vec![
-                HomeItem::Video(VideoCard::from(RecommendVideo {
-                    bvid: "BV1".into(),
-                    cid: 1,
-                    ..Default::default()
-                })),
-                HomeItem::Video(VideoCard::from(RecommendVideo {
-                    bvid: "BV2".into(),
-                    cid: 1,
-                    ..Default::default()
-                })),
-            ],
-        );
-
-        assert_eq!(
-            items.iter().map(HomeItem::key).collect::<Vec<_>>(),
-            ["video:BV1", "video:BV2"]
-        );
     }
 
     fn popular_video(bvid: &str) -> PopularVideo {

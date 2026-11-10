@@ -1,0 +1,35 @@
+{
+  "code": 0,
+  "message": "0",
+  "ttl": 1,
+  "data": {
+    "seid": "1234567890",
+    "page": 1,
+    "pagesize": 20,
+    "numResults": 26,
+    "numPages": 2,
+    "pageinfo": {
+      "live_room": {
+        "numResults": 26,
+        "pages": 2,
+        "total": 26
+      }
+    },
+    "result": {
+      "live_room": [
+        {
+          "roomid": 1963455165,
+          "uid": 443035615,
+          "uname": "人枉",
+          "uface": "//i1.hdslb.com/bfs/face/example.jpg",
+          "cover": "//i0.hdslb.com/bfs/live-key-frame/keyframe.jpg",
+          "user_cover": "//i0.hdslb.com/bfs/live/new_room_cover/cover.jpg",
+          "title": "26.3<em class=\"keyword\">aa</em>，欢迎指导",
+          "cate_name": "我的世界",
+          "online": 43,
+          "live_status": 1
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "code": 0,
+  "message": "0",
+  "ttl": 1,
+  "data": {
+    "seid": "1234567890",
+    "page": 1,
+    "pagesize": 20,
+    "numResults": 1000,
+    "numPages": 50,
+    "result": [
+      {
+        "id": 1234567,
+        "title": "专栏标题",
+        "desc": "专栏摘要",
+        "image_urls": "//i0.hdslb.com/cover.jpg,//i1.hdslb.com/other.jpg",
+        "author": "专栏作者",
+        "mid": 12345,
+        "view": 12345,
+        "like": 678,
+        "reply": 90,
+        "pubdate": 1714565461
+      }
+    ]
+  }
+}

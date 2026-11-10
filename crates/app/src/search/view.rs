@@ -1,34 +1,163 @@
-rigili_macro::mod_prv!(feed, list);
+rigili_macro::mod_prv!(cards, feed, items, list, toolbar, user);
 
-use gpui_kit::base::Selectable;
-use gpui_kit::component::button::*;
+use std::collections::BTreeMap;
+
+use gpui_kit::component::alert::Alert;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_bilibili::api::search::SearchOrder;
+use rigili_bilibili::api::search::{SearchOrder, SearchType};
 
 use crate::backend::{self, Backend};
-use crate::format::format_count;
-use crate::grid::{OpenVideo, VideoCard};
+use crate::grid::OpenVideo;
+use crate::home::OpenLive;
+use items::SearchItem;
 
-pub struct SearchView {
-    backend: Option<Backend>,
-    keyword: String,
-    order: SearchOrder,
-    videos: Vec<VideoCard>,
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum SearchTab {
+    #[default]
+    All,
+    Video,
+    Bangumi,
+    Film,
+    Live,
+    Article,
+    User,
+}
+
+impl SearchTab {
+    pub(crate) const ALL: [Self; 7] = [
+        Self::All,
+        Self::Video,
+        Self::Bangumi,
+        Self::Film,
+        Self::Live,
+        Self::Article,
+        Self::User,
+    ];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::All => "综合",
+            Self::Video => "视频",
+            Self::Bangumi => "番剧",
+            Self::Film => "影视",
+            Self::Live => "直播",
+            Self::Article => "专栏",
+            Self::User => "用户",
+        }
+    }
+
+    fn index(self) -> usize {
+        match self {
+            Self::All => 0,
+            Self::Video => 1,
+            Self::Bangumi => 2,
+            Self::Film => 3,
+            Self::Live => 4,
+            Self::Article => 5,
+            Self::User => 6,
+        }
+    }
+
+    fn search_type(self) -> Option<SearchType> {
+        match self {
+            Self::All => None,
+            Self::Video => Some(SearchType::Video),
+            Self::Bangumi => Some(SearchType::Bangumi),
+            Self::Film => Some(SearchType::Film),
+            Self::Live => Some(SearchType::Live),
+            Self::Article => Some(SearchType::Article),
+            Self::User => Some(SearchType::User),
+        }
+    }
+
+    fn count_key(self) -> Option<&'static str> {
+        self.search_type().map(SearchType::as_str)
+    }
+
+    fn supports_order(self) -> bool {
+        matches!(self, Self::All | Self::Video | Self::Article)
+    }
+
+    fn empty_label(self) -> &'static str {
+        match self {
+            Self::All => "内容",
+            _ => self.label(),
+        }
+    }
+
+    fn layout(self) -> SearchLayout {
+        match self {
+            Self::Article | Self::User => SearchLayout::Rows,
+            _ => SearchLayout::Grid,
+        }
+    }
+
+    fn list_id(self) -> &'static str {
+        match self {
+            Self::All => "search-all-list",
+            Self::Video => "search-video-list",
+            Self::Bangumi => "search-bangumi-list",
+            Self::Film => "search-film-list",
+            Self::Live => "search-live-list",
+            Self::Article => "search-article-list",
+            Self::User => "search-user-list",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SearchLayout {
+    Grid,
+    Rows,
+}
+
+struct TabState {
+    items: Vec<SearchItem>,
+    users: Vec<items::UserItem>,
     page: u32,
     num_pages: u32,
-    num_results: u64,
     loading: bool,
     loading_more: bool,
     error: Option<String>,
     more_error: Option<String>,
-    generation: u64,
-    list_width: Pixels,
+    loaded: bool,
     scroll: VirtualListScrollHandle,
 }
 
+impl TabState {
+    fn new() -> Self {
+        Self {
+            items: Vec::new(),
+            users: Vec::new(),
+            page: 0,
+            num_pages: 0,
+            loading: false,
+            loading_more: false,
+            error: None,
+            more_error: None,
+            loaded: false,
+            scroll: VirtualListScrollHandle::new(),
+        }
+    }
+}
+
+pub struct SearchView {
+    backend: Option<Backend>,
+    keyword: String,
+    tab: SearchTab,
+    order: SearchOrder,
+    tabs: [TabState; 7],
+    counts: BTreeMap<String, u64>,
+    opening: Option<u64>,
+    notice: Option<String>,
+    generation: u64,
+    list_width: Pixels,
+}
+
 impl EventEmitter<OpenVideo> for SearchView {}
+impl EventEmitter<OpenLive> for SearchView {}
 
 impl SearchView {
     pub fn new(cx: &mut Context<Self>) -> Self {
@@ -36,103 +165,93 @@ impl SearchView {
             Ok(backend) => (Some(backend), None),
             Err(error) => (None, Some(error)),
         };
-
-        Self {
+        let mut view = Self {
             backend,
             keyword: String::new(),
+            tab: SearchTab::default(),
             order: SearchOrder::Default,
-            videos: Vec::new(),
-            page: 0,
-            num_pages: 0,
-            num_results: 0,
-            loading: false,
-            loading_more: false,
-            error,
-            more_error: None,
+            tabs: std::array::from_fn(|_| TabState::new()),
+            counts: BTreeMap::new(),
+            opening: None,
+            notice: None,
             generation: 0,
             list_width: px(0.),
-            scroll: VirtualListScrollHandle::new(),
+        };
+        if let Some(error) = error {
+            view.state_mut(SearchTab::default()).error = Some(error);
         }
+        view
+    }
+
+    fn state(&self, tab: SearchTab) -> &TabState {
+        &self.tabs[tab.index()]
+    }
+
+    fn state_mut(&mut self, tab: SearchTab) -> &mut TabState {
+        &mut self.tabs[tab.index()]
     }
 
     pub(crate) fn search(&mut self, keyword: String, cx: &mut Context<Self>) {
-        self.keyword = keyword;
-        self.load(cx);
+        self.keyword = keyword.trim().to_owned();
+        self.tab = SearchTab::default();
+        self.generation += 1;
+        self.counts.clear();
+        self.opening = None;
+        self.notice = None;
+        self.tabs = std::array::from_fn(|_| TabState::new());
+
+        if self.keyword.is_empty() {
+            cx.notify();
+            return;
+        }
+
+        self.load_tab(SearchTab::All, cx);
     }
 
     pub(crate) fn set_order(&mut self, order: SearchOrder, cx: &mut Context<Self>) {
         if self.order == order {
             return;
         }
+
         self.order = order;
-        self.load(cx);
+        self.generation += 1;
+        self.tabs = std::array::from_fn(|_| TabState::new());
+        self.notice = None;
+
+        if self.keyword.is_empty() {
+            cx.notify();
+            return;
+        }
+
+        let tab = self.tab;
+        self.load_tab(tab, cx);
     }
 
-    fn render_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let border = cx.theme().border;
-        let primary = cx.theme().primary;
-        let muted = cx.theme().muted_foreground;
-        let show_count = !self.keyword.is_empty() && !self.loading && self.error.is_none();
+    pub(crate) fn show_tab(&mut self, tab: SearchTab, cx: &mut Context<Self>) {
+        if self.tab == tab {
+            return;
+        }
 
-        v_flex()
-            .gap_3()
-            .child(
-                h_flex()
-                    .items_end()
-                    .border_b_1()
-                    .border_color(border)
-                    .child(
-                        v_flex()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(primary)
-                                    .child("视频"),
-                            )
-                            .child(div().h(px(2.)).rounded_full().bg(primary)),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .child(h_flex().items_center().gap_1().children(
-                        SearchOrder::ALL.into_iter().map(|order| {
-                            let active = self.order == order;
-                            Button::new(order.as_str())
-                                .ghost()
-                                .small()
-                                .selected(active)
-                                .when(active, |this| this.text_color(primary))
-                                .label(order_label(order))
-                                .on_click(
-                                    cx.listener(move |this, _, _, cx| this.set_order(order, cx)),
-                                )
-                        }),
-                    ))
-                    .when(show_count, |this| {
-                        this.child(
-                            div()
-                                .text_xs()
-                                .text_color(muted)
-                                .child(format!("共 {} 个视频", format_count(self.num_results))),
-                        )
-                    }),
-            )
-            .into_any_element()
+        self.tab = tab;
+        self.notice = None;
+        let needs_load = {
+            let state = self.state(tab);
+            !state.loaded && !state.loading && state.error.is_none()
+        };
+        if needs_load {
+            self.load_tab(tab, cx);
+        } else {
+            cx.notify();
+        }
     }
-}
 
-fn order_label(order: SearchOrder) -> &'static str {
-    match order {
-        SearchOrder::Default => "综合排序",
-        SearchOrder::Clicks => "最多点击",
-        SearchOrder::Newest => "最新发布",
-        SearchOrder::Danmaku => "最多弹幕",
-        SearchOrder::Favorites => "最多收藏",
+    fn count(&self, tab: SearchTab) -> Option<u64> {
+        tab.count_key()
+            .and_then(|key| self.counts.get(key).copied())
+    }
+
+    fn user_content_width(&self) -> Pixels {
+        px((self.list_width.as_f32() - 32.).max(0.))
     }
 }
 
@@ -141,6 +260,8 @@ impl Render for SearchView {
         let background = cx.theme().background;
         let foreground = cx.theme().foreground;
         let content = self.render_content(window, cx);
+        let notice = self.notice.clone();
+        let orders = self.tab.supports_order().then(|| self.render_orders(cx));
 
         v_flex()
             .size_full()
@@ -150,7 +271,39 @@ impl Render for SearchView {
             .pb_6()
             .bg(background)
             .text_color(foreground)
-            .child(self.render_toolbar(cx))
+            .when_some(notice, |this, notice| {
+                this.child(
+                    Alert::error("search-notice", notice)
+                        .title("打开失败")
+                        .on_close(cx.listener(|this, _, _, cx| {
+                            this.notice = None;
+                            cx.notify();
+                        })),
+                )
+            })
+            .child(self.render_tabs(cx))
+            .when_some(orders, |this, orders| this.child(orders))
             .child(content)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SearchTab;
+
+    #[test]
+    fn orders_search_tabs_like_the_reference_layout() {
+        assert_eq!(
+            SearchTab::ALL.map(SearchTab::label),
+            ["综合", "视频", "番剧", "影视", "直播", "专栏", "用户"]
+        );
+        assert_eq!(SearchTab::default(), SearchTab::All);
+        for (index, tab) in SearchTab::ALL.into_iter().enumerate() {
+            assert_eq!(tab.index(), index);
+        }
+        assert!(SearchTab::All.supports_order());
+        assert!(SearchTab::Video.supports_order());
+        assert!(!SearchTab::Bangumi.supports_order());
+        assert!(!SearchTab::User.supports_order());
     }
 }

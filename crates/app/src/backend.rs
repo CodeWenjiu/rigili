@@ -2,8 +2,10 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use gpui_kit::*;
 use rigili_bilibili::{
-    ApiError, Client, LiveRoom, Nav, PgcIndex, PgcSeason, PlayUrl, Popular, QrCode, QrPoll,
-    Recommend, SearchResult, SessionError, VideoInfo, api, api::search::SearchOrder,
+    ApiError, ArticleSearch, Client, LiveRoom, LiveSearch, MediaSearch, Nav, PgcIndex, PgcSeason,
+    PlayUrl, Popular, QrCode, QrPoll, Recommend, SearchAll, SessionError, UserSearch, VideoInfo,
+    VideoSearch, api,
+    api::search::{SearchOrder, SearchType},
 };
 
 #[derive(Clone)]
@@ -77,13 +79,54 @@ impl Backend {
         api::pgc::season(&self.client, season_id).await
     }
 
-    pub async fn search(
+    pub async fn search_videos(
         &self,
         keyword: &str,
         page: u32,
         order: SearchOrder,
-    ) -> Result<SearchResult, ApiError> {
-        api::search::fetch(&self.client, keyword, page, order).await
+    ) -> Result<VideoSearch, ApiError> {
+        api::search::fetch_videos(&self.client, keyword, page, order).await
+    }
+
+    pub async fn search_users(
+        &self,
+        keyword: &str,
+        page: u32,
+        order: SearchOrder,
+    ) -> Result<UserSearch, ApiError> {
+        api::search::fetch_users(&self.client, keyword, page, order).await
+    }
+
+    pub async fn search_live(
+        &self,
+        keyword: &str,
+        page: u32,
+        order: SearchOrder,
+    ) -> Result<LiveSearch, ApiError> {
+        api::search::fetch_live(&self.client, keyword, page, order).await
+    }
+
+    pub async fn search_media(
+        &self,
+        keyword: &str,
+        page: u32,
+        order: SearchOrder,
+        search_type: SearchType,
+    ) -> Result<MediaSearch, ApiError> {
+        api::search::fetch_media(&self.client, keyword, page, order, search_type).await
+    }
+
+    pub async fn search_articles(
+        &self,
+        keyword: &str,
+        page: u32,
+        order: SearchOrder,
+    ) -> Result<ArticleSearch, ApiError> {
+        api::search::fetch_articles(&self.client, keyword, page, order).await
+    }
+
+    pub async fn search_all(&self, keyword: &str) -> Result<SearchAll, ApiError> {
+        api::search::fetch_all(&self.client, keyword).await
     }
 
     pub async fn view(&self, bvid: &str) -> Result<VideoInfo, ApiError> {

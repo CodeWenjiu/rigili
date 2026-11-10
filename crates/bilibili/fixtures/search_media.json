@@ -1,0 +1,38 @@
+{
+  "code": 0,
+  "message": "0",
+  "ttl": 1,
+  "data": {
+    "seid": "1234567890",
+    "page": 1,
+    "pagesize": 20,
+    "numResults": 1,
+    "numPages": 1,
+    "result": [
+      {
+        "type": "media_bangumi",
+        "media_id": 28228339,
+        "pgc_season_id": 47836,
+        "season_id": 47836,
+        "season_type": 1,
+        "season_type_name": "番剧",
+        "title": "鬼灭之刃",
+        "cover": "//i0.hdslb.com/cover.jpg",
+        "index_show": "全8话",
+        "styles": ["动画", "奇幻"],
+        "desc": "简介",
+        "media_score": {
+          "score": 9.7,
+          "user_count": 1000
+        },
+        "badges": [
+          {
+            "text": "独家",
+            "color": "#ff6699"
+          }
+        ],
+        "areas": ["日本"]
+      }
+    ]
+  }
+}

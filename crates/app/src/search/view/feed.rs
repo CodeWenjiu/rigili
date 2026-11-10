@@ -1,13 +1,30 @@
 use gpui_kit::*;
-use rigili_bilibili::SearchResult;
+use rigili_bilibili::ApiError;
+use rigili_bilibili::api::search::{SearchOrder, SearchType};
 
-use super::SearchView;
-use crate::backend;
-use crate::grid::{VideoCard, append_unique};
+use super::items::{SearchItem, UserItem};
+use super::{SearchTab, SearchView};
+use crate::backend::{self, Backend};
+use crate::format::api_task_error_message;
+use crate::grid::{VideoCard, append_unique_by};
 use crate::platform::runtime::{ApiTaskError, spawn_api};
 
+struct Page {
+    items: Vec<SearchItem>,
+    num_pages: u32,
+}
+
+impl Page {
+    fn new(items: impl IntoIterator<Item = SearchItem>, num_pages: u32) -> Self {
+        Self {
+            items: items.into_iter().collect(),
+            num_pages,
+        }
+    }
+}
+
 impl SearchView {
-    pub(super) fn load(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn load_tab(&mut self, tab: SearchTab, cx: &mut Context<Self>) {
         if self.keyword.is_empty() {
             return;
         }
@@ -15,8 +32,9 @@ impl SearchView {
             match backend::get(cx) {
                 Ok(backend) => self.backend = Some(backend),
                 Err(error) => {
-                    self.loading = false;
-                    self.error = Some(error);
+                    let state = self.state_mut(tab);
+                    state.loading = false;
+                    state.error = Some(error);
                     cx.notify();
                     return;
                 }
@@ -28,117 +46,235 @@ impl SearchView {
         };
         let keyword = self.keyword.clone();
         let order = self.order;
-        self.generation += 1;
         let generation = self.generation;
-        self.loading = true;
-        self.loading_more = false;
-        self.error = None;
-        self.more_error = None;
-        self.videos.clear();
-        self.page = 0;
-        self.num_pages = 0;
-        self.num_results = 0;
+
+        {
+            let state = self.state_mut(tab);
+            state.items.clear();
+            state.users.clear();
+            state.page = 0;
+            state.num_pages = 0;
+            state.loading = true;
+            state.loading_more = false;
+            state.error = None;
+            state.more_error = None;
+            state.loaded = false;
+        }
+        cx.notify();
+
+        if tab == SearchTab::All {
+            let header_backend = backend.clone();
+            let header_keyword = keyword.clone();
+            spawn_api(
+                cx,
+                async move { header_backend.search_all(&header_keyword).await },
+                move |this, result, cx| {
+                    if this.generation != generation {
+                        return;
+                    }
+                    if let Ok(all) = result {
+                        this.counts = all
+                            .pageinfo
+                            .into_iter()
+                            .map(|(key, info)| (key, info.num_results))
+                            .collect();
+                        let users = all.users.into_iter().map(UserItem::from).collect();
+                        this.state_mut(SearchTab::All).users = users;
+                    }
+                    cx.notify();
+                },
+            );
+        }
+
+        let fetch_backend = backend.clone();
+        let fetch_keyword = keyword.clone();
+        spawn_api(
+            cx,
+            async move { fetch_page(fetch_backend, tab, fetch_keyword, 1, order).await },
+            move |this, result, cx| this.finish_page(tab, 1, generation, result, cx),
+        );
+    }
+
+    fn finish_page(
+        &mut self,
+        tab: SearchTab,
+        page_number: u32,
+        generation: u64,
+        result: Result<Page, ApiTaskError>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.generation != generation {
+            return;
+        }
+
+        let state = self.state_mut(tab);
+        state.loading = false;
+        match result {
+            Ok(page) => {
+                state.page = page_number;
+                state.num_pages = page.num_pages;
+                state.items = page.items;
+                state.loaded = true;
+                state.scroll.scroll_to_item(0, ScrollStrategy::Top);
+            }
+            Err(error) => state.error = Some(api_task_error_message(error, cx)),
+        }
+        cx.notify();
+    }
+
+    pub(super) fn load_more(&mut self, tab: SearchTab, cx: &mut Context<Self>) {
+        let (page, generation) = {
+            let state = self.state(tab);
+            if state.loading
+                || state.loading_more
+                || !has_more(state.page, state.num_pages)
+                || state.more_error.is_some()
+            {
+                return;
+            }
+            (state.page + 1, self.generation)
+        };
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let keyword = self.keyword.clone();
+        let order = self.order;
+        self.state_mut(tab).loading_more = true;
         cx.notify();
 
         spawn_api(
             cx,
-            async move { backend.search(&keyword, 1, order).await },
+            async move { fetch_page(backend, tab, keyword, page, order).await },
             move |this, result, cx| {
                 if this.generation != generation {
                     return;
                 }
-                this.loading = false;
+                let state = this.state_mut(tab);
+                state.loading_more = false;
                 match result {
-                    Ok(result) => this.apply(result, 1),
-                    Err(error) => this.fail(error, cx),
+                    Ok(fetched) => {
+                        state.page = page;
+                        state.num_pages = fetched.num_pages;
+                        append_unique_by(&mut state.items, fetched.items, SearchItem::key);
+                    }
+                    Err(error) => state.more_error = Some(api_task_error_message(error, cx)),
                 }
                 cx.notify();
             },
         );
     }
 
-    fn load_more(&mut self, cx: &mut Context<Self>) {
-        if self.loading
-            || self.loading_more
-            || !has_more(self.page, self.num_pages)
-            || self.more_error.is_some()
-        {
+    pub(super) fn retry_more(&mut self, tab: SearchTab, cx: &mut Context<Self>) {
+        self.state_mut(tab).more_error = None;
+        self.load_more(tab, cx);
+    }
+
+    pub(super) fn maybe_load_more(
+        &mut self,
+        tab: SearchTab,
+        row: usize,
+        rows: usize,
+        header_offset: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if rows > 0 && row.saturating_sub(header_offset) + 1 >= rows {
+            self.load_more(tab, cx);
+        }
+    }
+
+    pub(super) fn open_season(&mut self, season_id: u64, cx: &mut Context<Self>) {
+        if self.opening.is_some() {
             return;
         }
         let Some(backend) = self.backend.clone() else {
             return;
         };
 
-        let keyword = self.keyword.clone();
-        let order = self.order;
-        let page = self.page + 1;
-        let generation = self.generation;
-        self.loading_more = true;
+        self.opening = Some(season_id);
+        self.notice = None;
         cx.notify();
 
         spawn_api(
             cx,
-            async move { backend.search(&keyword, page, order).await },
+            async move { crate::playback::resolve_season(backend, season_id).await },
             move |this, result, cx| {
-                if this.generation != generation {
-                    return;
-                }
-                this.loading_more = false;
+                this.opening = None;
                 match result {
-                    Ok(result) => {
-                        this.page = page;
-                        this.num_pages = result.num_pages;
-                        this.num_results = result.num_results;
-                        append_unique(
-                            &mut this.videos,
-                            result.videos.into_iter().map(VideoCard::from).collect(),
-                        );
-                    }
-                    Err(error) => this.more_error = Some(api_error(error, cx)),
+                    Ok(Some(video)) => cx.emit(video),
+                    Ok(None) => this.notice = Some("该作品暂无可播放的剧集".into()),
+                    Err(error) => this.notice = Some(api_task_error_message(error, cx)),
                 }
                 cx.notify();
             },
         );
     }
-
-    fn apply(&mut self, result: SearchResult, page: u32) {
-        self.page = page;
-        self.num_pages = result.num_pages;
-        self.num_results = result.num_results;
-        self.videos = result.videos.into_iter().map(VideoCard::from).collect();
-        self.scroll.scroll_to_item(0, ScrollStrategy::Top);
-    }
-
-    pub(super) fn retry_more(&mut self, cx: &mut Context<Self>) {
-        self.more_error = None;
-        self.load_more(cx);
-    }
-
-    pub(super) fn maybe_load_more(
-        &mut self,
-        last_visible: usize,
-        rows: usize,
-        cx: &mut Context<Self>,
-    ) {
-        if rows > 0 && last_visible + 1 >= rows {
-            self.load_more(cx);
-        }
-    }
-
-    fn fail(&mut self, error: ApiTaskError, cx: &mut Context<Self>) {
-        self.error = Some(api_error(error, cx));
-    }
 }
 
-fn api_error(error: ApiTaskError, cx: &mut App) -> String {
-    match error {
-        ApiTaskError::Api(error) => {
-            if error.is_login_required() {
-                crate::login::expire(cx);
-            }
-            crate::format::api_error_message(&error)
+async fn fetch_page(
+    backend: Backend,
+    tab: SearchTab,
+    keyword: String,
+    page: u32,
+    order: SearchOrder,
+) -> Result<Page, ApiError> {
+    match tab {
+        SearchTab::All | SearchTab::Video => {
+            let result = backend.search_videos(&keyword, page, order).await?;
+            Ok(Page::new(
+                result
+                    .videos
+                    .into_iter()
+                    .map(|video| SearchItem::Video(VideoCard::from(video))),
+                result.num_pages,
+            ))
         }
-        ApiTaskError::Join(error) => format!("加载任务失败：{error}"),
+        SearchTab::Bangumi | SearchTab::Film => {
+            let search_type = if tab == SearchTab::Film {
+                SearchType::Film
+            } else {
+                SearchType::Bangumi
+            };
+            let result = backend
+                .search_media(&keyword, page, order, search_type)
+                .await?;
+            Ok(Page::new(
+                result
+                    .items
+                    .into_iter()
+                    .map(|item| SearchItem::Media(item.into())),
+                result.num_pages,
+            ))
+        }
+        SearchTab::Live => {
+            let result = backend.search_live(&keyword, page, order).await?;
+            Ok(Page::new(
+                result
+                    .rooms
+                    .into_iter()
+                    .map(|room| SearchItem::Live(room.into())),
+                result.num_pages,
+            ))
+        }
+        SearchTab::Article => {
+            let result = backend.search_articles(&keyword, page, order).await?;
+            Ok(Page::new(
+                result
+                    .articles
+                    .into_iter()
+                    .map(|article| SearchItem::Article(article.into())),
+                result.num_pages,
+            ))
+        }
+        SearchTab::User => {
+            let result = backend.search_users(&keyword, page, order).await?;
+            Ok(Page::new(
+                result
+                    .users
+                    .into_iter()
+                    .map(|user| SearchItem::User(user.into())),
+                result.num_pages,
+            ))
+        }
     }
 }
 

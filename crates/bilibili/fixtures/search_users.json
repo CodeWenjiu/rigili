@@ -1,0 +1,52 @@
+{
+  "code": 0,
+  "message": "0",
+  "ttl": 1,
+  "data": {
+    "seid": "1234567890",
+    "page": 1,
+    "pagesize": 20,
+    "numResults": 1000,
+    "numPages": 50,
+    "result": [
+      {
+        "type": "bili_user",
+        "mid": 1561367430,
+        "uname": "安东森",
+        "upic": "//i1.hdslb.com/bfs/face/example.jpg",
+        "fans": 24841,
+        "videos": 32,
+        "level": 4,
+        "usign": "丹麦羽毛球运动员",
+        "official_verify": {
+          "type": 0,
+          "desc": "丹麦羽毛球运动员安东森"
+        },
+        "res": [
+          {
+            "aid": 1953836612,
+            "bvid": "BV1xC411J7QU",
+            "title": "2024 成都汤尤杯",
+            "pic": "//i0.hdslb.com/bfs/archive/a.jpg",
+            "author": "安东森",
+            "duration": "0:12",
+            "pubdate": 1714565461,
+            "play": "19767",
+            "dm": 3
+          },
+          {
+            "aid": 233279615,
+            "bvid": "BV1xx411c7mD",
+            "title": "第二支预览视频",
+            "pic": "//i1.hdslb.com/a.jpg",
+            "author": "安东森",
+            "duration": "1:02:03",
+            "pubdate": 1714565461,
+            "play": "100",
+            "dm": 1
+          }
+        ]
+      }
+    ]
+  }
+}

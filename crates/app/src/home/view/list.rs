@@ -10,11 +10,9 @@ use gpui_kit::*;
 
 use super::{HomeItem, HomeTab, HomeView};
 use crate::grid::{
-    CARD_GAP, CardMetrics, CardOverlay, CardStyle, MediaCard, card_text_height,
-    card_width_for_width, columns_for_width, media_card, skeleton_card,
+    CARD_GAP, CardMetrics, CardOverlay, CardStyle, LIST_FOOTER_HEIGHT, MediaCard, card_text_height,
+    card_width_for_width, columns_for_width, list_footer, media_card, skeleton_card,
 };
-
-const FOOTER_HEIGHT: Pixels = px(56.);
 
 impl HomeView {
     fn render_row(
@@ -51,33 +49,15 @@ impl HomeView {
     fn render_footer(&self, tab: HomeTab, cx: &mut Context<Self>) -> AnyElement {
         let muted = cx.theme().muted_foreground;
         let danger = cx.theme().danger;
-        let content = if let Some(error) = self.state(tab).more_error.clone() {
-            h_flex()
-                .items_center()
-                .gap_3()
-                .child(div().text_sm().text_color(danger).child(error))
-                .child(
-                    Button::new("retry-more")
-                        .small()
-                        .label("重试")
-                        .on_click(cx.listener(move |this, _, _, cx| this.retry_more(tab, cx))),
-                )
-                .into_any_element()
-        } else {
-            h_flex()
-                .items_center()
-                .gap_2()
-                .child(Spinner::new().small())
-                .child(div().text_sm().text_color(muted).child("正在加载…"))
-                .into_any_element()
-        };
+        let more_error = self.state(tab).more_error.clone();
 
-        h_flex()
-            .h(FOOTER_HEIGHT)
-            .items_center()
-            .justify_center()
-            .child(content)
-            .into_any_element()
+        list_footer(
+            ("home-retry-more", tab.index()),
+            more_error,
+            muted,
+            danger,
+            cx.listener(move |this, _, _, cx| this.retry_more(tab, cx)),
+        )
     }
 
     fn render_list(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -97,7 +77,7 @@ impl HomeView {
 
         let mut sizes = vec![size(px(0.), row_height); rows];
         if footer {
-            sizes.push(size(px(0.), FOOTER_HEIGHT));
+            sizes.push(size(px(0.), LIST_FOOTER_HEIGHT));
         }
         let sizes = Rc::new(sizes);
 
@@ -228,6 +208,7 @@ fn home_card(
             cover: item.cover(),
             title: item.title(),
             footer: item.footer(),
+            footer_icon: None,
             overlay: CardOverlay {
                 leading: item.leading(),
                 secondary: item.secondary(),
