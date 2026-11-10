@@ -11,6 +11,7 @@ use rigili_bilibili::api::search::{SearchOrder, SearchType};
 use crate::backend::{self, Backend};
 use crate::grid::OpenVideo;
 use crate::home::OpenLive;
+use crate::refresh::Refresh;
 use items::SearchItem;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -118,6 +119,7 @@ struct TabState {
     users: Vec<items::UserItem>,
     page: u32,
     num_pages: u32,
+    generation: u64,
     loading: bool,
     loading_more: bool,
     error: Option<String>,
@@ -133,6 +135,7 @@ impl TabState {
             users: Vec::new(),
             page: 0,
             num_pages: 0,
+            generation: 0,
             loading: false,
             loading_more: false,
             error: None,
@@ -152,7 +155,6 @@ pub struct SearchView {
     counts: BTreeMap<String, u64>,
     opening: Option<u64>,
     notice: Option<String>,
-    generation: u64,
     list_width: Pixels,
 }
 
@@ -174,7 +176,6 @@ impl SearchView {
             counts: BTreeMap::new(),
             opening: None,
             notice: None,
-            generation: 0,
             list_width: px(0.),
         };
         if let Some(error) = error {
@@ -194,7 +195,6 @@ impl SearchView {
     pub(crate) fn search(&mut self, keyword: String, cx: &mut Context<Self>) {
         self.keyword = keyword.trim().to_owned();
         self.tab = SearchTab::default();
-        self.generation += 1;
         self.counts.clear();
         self.opening = None;
         self.notice = None;
@@ -214,7 +214,6 @@ impl SearchView {
         }
 
         self.order = order;
-        self.generation += 1;
         self.tabs = std::array::from_fn(|_| TabState::new());
         self.notice = None;
 
@@ -250,8 +249,27 @@ impl SearchView {
             .and_then(|key| self.counts.get(key).copied())
     }
 
+    pub(crate) fn reload(&mut self, cx: &mut Context<Self>) {
+        if self.keyword.is_empty() {
+            return;
+        }
+        self.notice = None;
+        let tab = self.tab;
+        self.load_tab(tab, cx);
+    }
+
     fn user_content_width(&self) -> Pixels {
         px((self.list_width.as_f32() - 32.).max(0.))
+    }
+}
+
+impl Refresh for SearchView {
+    fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.reload(cx);
+    }
+
+    fn can_refresh(&self) -> bool {
+        !self.keyword.is_empty()
     }
 }
 

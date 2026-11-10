@@ -46,10 +46,9 @@ impl SearchView {
         };
         let keyword = self.keyword.clone();
         let order = self.order;
-        let generation = self.generation;
-
-        {
+        let generation = {
             let state = self.state_mut(tab);
+            state.generation += 1;
             state.items.clear();
             state.users.clear();
             state.page = 0;
@@ -59,7 +58,8 @@ impl SearchView {
             state.error = None;
             state.more_error = None;
             state.loaded = false;
-        }
+            state.generation
+        };
         cx.notify();
 
         if tab == SearchTab::All {
@@ -69,7 +69,7 @@ impl SearchView {
                 cx,
                 async move { header_backend.search_all(&header_keyword).await },
                 move |this, result, cx| {
-                    if this.generation != generation {
+                    if this.state(SearchTab::All).generation != generation {
                         return;
                     }
                     if let Ok(all) = result {
@@ -103,7 +103,7 @@ impl SearchView {
         result: Result<Page, ApiTaskError>,
         cx: &mut Context<Self>,
     ) {
-        if self.generation != generation {
+        if self.state(tab).generation != generation {
             return;
         }
 
@@ -132,7 +132,7 @@ impl SearchView {
             {
                 return;
             }
-            (state.page + 1, self.generation)
+            (state.page + 1, state.generation)
         };
         let Some(backend) = self.backend.clone() else {
             return;
@@ -146,7 +146,7 @@ impl SearchView {
             cx,
             async move { fetch_page(backend, tab, keyword, page, order).await },
             move |this, result, cx| {
-                if this.generation != generation {
+                if this.state(tab).generation != generation {
                     return;
                 }
                 let state = this.state_mut(tab);

@@ -10,6 +10,7 @@ use rigili_bilibili::{LiveRoom, PgcItem};
 use crate::backend::{self, Backend};
 use crate::format::format_count;
 use crate::grid::{OpenVideo, VideoCard};
+use crate::refresh::Refresh;
 
 #[derive(Clone)]
 pub(crate) struct OpenLive {
@@ -322,6 +323,12 @@ impl HomeView {
     pub(crate) fn reload_current(&mut self, cx: &mut Context<Self>) {
         let tab = self.tab;
         self.load_tab(tab, cx);
+    }
+}
+
+impl Refresh for HomeView {
+    fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.reload_current(cx);
     }
 }
 

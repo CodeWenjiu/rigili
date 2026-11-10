@@ -14,6 +14,7 @@ use crate::grid::OpenVideo;
 use crate::home::{HomeTab, HomeView, OpenLive};
 use crate::login;
 use crate::playback::PlaybackRequest;
+use crate::refresh::Refresh;
 use crate::search::SearchView;
 
 pub struct MainView {
@@ -319,18 +320,23 @@ impl MainView {
                         ),
                 ),
             )
-            .when(!self.search_active, |this| {
-                this.child(
-                    Button::new("refresh")
-                        .ghost()
-                        .icon(IconName::RefreshCw)
-                        .label("刷新")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.home.update(cx, |home, cx| home.reload_current(cx));
-                        })),
-                )
-            })
             .into_any_element()
+    }
+
+    fn page_can_refresh(&self, cx: &App) -> bool {
+        if self.search_active {
+            self.search.read(cx).can_refresh()
+        } else {
+            self.home.read(cx).can_refresh()
+        }
+    }
+
+    fn refresh_page(&mut self, cx: &mut Context<Self>) {
+        if self.search_active {
+            self.search.update(cx, |search, cx| search.refresh(cx));
+        } else {
+            self.home.update(cx, |home, cx| home.refresh(cx));
+        }
     }
 
     fn play(&mut self, video: OpenVideo, window: &mut Window, cx: &mut Context<Self>) {
@@ -415,6 +421,7 @@ impl Render for MainView {
                     .child(self.render_top_bar(cx))
                     .child(
                         div()
+                            .relative()
                             .flex_1()
                             .min_h_0()
                             .w_full()
@@ -422,6 +429,23 @@ impl Render for MainView {
                                 self.search.clone().into_any_element()
                             } else {
                                 self.home.clone().into_any_element()
+                            })
+                            .when(self.page_can_refresh(cx), |this| {
+                                this.child(
+                                    div().absolute().right_6().bottom_6().occlude().child(
+                                        Button::new("page-refresh")
+                                            .secondary()
+                                            .rounded(ButtonRounded::Large)
+                                            .w(px(44.))
+                                            .h(px(44.))
+                                            .icon(IconName::RefreshCw)
+                                            .accessibility_label("刷新")
+                                            .tooltip("刷新")
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.refresh_page(cx);
+                                            })),
+                                    ),
+                                )
                             }),
                     ),
             )
