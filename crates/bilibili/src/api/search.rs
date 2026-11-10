@@ -1,11 +1,14 @@
 use serde::de::DeserializeOwned;
 
 use crate::{
-    ApiError, ArticleSearch, Client, LiveSearch, MediaSearch, SearchAll, UserSearch, VideoSearch,
+    ApiError, ArticleSearch, Client, HotWords, LiveSearch, MediaSearch, SearchAll,
+    SearchSuggestions, UserSearch, VideoSearch,
 };
 
 const SEARCH_URL: &str = "https://api.bilibili.com/x/web-interface/wbi/search/type";
 const ALL_URL: &str = "https://api.bilibili.com/x/web-interface/wbi/search/all/v2";
+const SUGGEST_URL: &str = "https://s.search.bilibili.com/main/suggest";
+const HOTWORD_URL: &str = "https://s.search.bilibili.com/main/hotword";
 const PAGE_SIZE: u32 = 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,6 +131,31 @@ pub async fn fetch_all(client: &Client, keyword: &str) -> Result<SearchAll, ApiE
     client
         .get_wbi_json(ALL_URL, &[("keyword", keyword.to_owned())])
         .await
+}
+
+pub async fn fetch_suggestions(
+    client: &Client,
+    term: &str,
+) -> Result<SearchSuggestions, ApiError> {
+    let term = term.trim();
+    if term.is_empty() {
+        return Ok(SearchSuggestions::default());
+    }
+
+    client
+        .get_json(
+            SUGGEST_URL,
+            &[
+                ("term", term.to_owned()),
+                ("main_ver", "v1".into()),
+                ("highlight", String::new()),
+            ],
+        )
+        .await
+}
+
+pub async fn fetch_hot_words(client: &Client) -> Result<HotWords, ApiError> {
+    client.get_raw(HOTWORD_URL).await
 }
 
 async fn fetch_type<T>(

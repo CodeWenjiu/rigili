@@ -1,9 +1,11 @@
-use std::rc::Rc;
+rigili_macro::mod_prv!(search_box, search_history);
+
+use std::{cell::Cell, rc::Rc};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::sidebar::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
@@ -16,11 +18,14 @@ use crate::login;
 use crate::playback::PlaybackRequest;
 use crate::refresh::Refresh;
 use crate::search::SearchView;
+use search_box::SearchBox;
 
 pub struct MainView {
     home: Entity<HomeView>,
     search: Entity<SearchView>,
     search_input: Entity<InputState>,
+    search_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    search_box: SearchBox,
     search_active: bool,
     playback: Option<Playback>,
     _search_input_sub: Subscription,
@@ -117,9 +122,7 @@ impl MainView {
         let search_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("搜索视频、番剧、用户"));
         let input_sub = cx.subscribe_in(&search_input, window, |this, _, event, _, cx| {
-            if matches!(event, InputEvent::PressEnter { .. }) {
-                this.submit_search(cx);
-            }
+            this.handle_search_input(event, cx);
         });
         login::restore(window, cx);
 
@@ -164,6 +167,8 @@ impl MainView {
             home,
             search,
             search_input,
+            search_bounds: Rc::new(Cell::new(None)),
+            search_box: SearchBox::new(),
             search_active: false,
             playback: None,
             _search_input_sub: input_sub,
@@ -172,12 +177,14 @@ impl MainView {
 
     fn submit_search(&mut self, cx: &mut Context<Self>) {
         let keyword = self.search_input.read(cx).value().trim().to_owned();
+        self.search_box.close();
         if keyword.is_empty() {
             self.search_active = false;
             cx.notify();
             return;
         }
 
+        self.search_box.record(&keyword);
         self.search_active = true;
         self.search
             .update(cx, |search, cx| search.search(keyword, cx));
@@ -185,6 +192,16 @@ impl MainView {
     }
 
     fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .search_input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+        {
+            return;
+        }
+
+        self.search_box.suppress_next_focus_open();
         self.search_input
             .update(cx, |input, cx| input.focus(window, cx));
     }
@@ -301,12 +318,30 @@ impl MainView {
                         .items_center()
                         .gap_2()
                         .child(
-                            div().flex_1().min_w_0().child(
-                                Input::new(&self.search_input)
-                                    .large()
-                                    .cleanable(true)
-                                    .prefix(Icon::new(IconName::Search).text_color(muted)),
-                            ),
+                            div()
+                                .id("search-input")
+                                .flex_1()
+                                .min_w_0()
+                                .on_prepaint({
+                                    let bounds = self.search_bounds.clone();
+                                    move |value, _, _| bounds.set(Some(value))
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.open_search_box(cx);
+                                }))
+                                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                                    if event.keystroke.key == "escape" && this.search_box_is_open()
+                                    {
+                                        this.close_search_box(cx);
+                                        cx.stop_propagation();
+                                    }
+                                }))
+                                .child(
+                                    Input::new(&self.search_input)
+                                        .large()
+                                        .cleanable(true)
+                                        .prefix(Icon::new(IconName::Search).text_color(muted)),
+                                ),
                         )
                         .child(
                             Button::new("search-submit")
@@ -320,6 +355,9 @@ impl MainView {
                         ),
                 ),
             )
+            .when_some(self.render_search_panel(cx), |this, panel| {
+                this.child(panel)
+            })
             .into_any_element()
     }
 

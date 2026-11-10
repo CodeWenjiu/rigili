@@ -1,4 +1,4 @@
-rigili_macro::mod_flat!(all, article, live, media, user, video);
+rigili_macro::mod_flat!(all, article, hot, live, media, suggest, user, video);
 
 use serde::Deserialize;
 

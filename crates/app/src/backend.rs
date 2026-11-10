@@ -2,9 +2,9 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use gpui_kit::*;
 use rigili_bilibili::{
-    ApiError, ArticleSearch, Client, LiveRoom, LiveSearch, MediaSearch, Nav, PgcIndex, PgcSeason,
-    PlayUrl, Popular, QrCode, QrPoll, Recommend, SearchAll, SessionError, UserSearch, VideoInfo,
-    VideoSearch, api,
+    ApiError, ArticleSearch, Client, HotWords, LiveRoom, LiveSearch, MediaSearch, Nav, PgcIndex,
+    PgcSeason, PlayUrl, Popular, QrCode, QrPoll, Recommend, SearchAll, SearchSuggestions,
+    SessionError, UserSearch, VideoInfo, VideoSearch, api,
     api::search::{SearchOrder, SearchType},
 };
 
@@ -127,6 +127,14 @@ impl Backend {
 
     pub async fn search_all(&self, keyword: &str) -> Result<SearchAll, ApiError> {
         api::search::fetch_all(&self.client, keyword).await
+    }
+
+    pub async fn search_suggestions(&self, term: &str) -> Result<SearchSuggestions, ApiError> {
+        api::search::fetch_suggestions(&self.client, term).await
+    }
+
+    pub async fn hot_words(&self) -> Result<HotWords, ApiError> {
+        api::search::fetch_hot_words(&self.client).await
     }
 
     pub async fn view(&self, bvid: &str) -> Result<VideoInfo, ApiError> {
