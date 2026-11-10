@@ -4,7 +4,7 @@ use gpui_kit::{App, Background, hsla, linear_color_stop, linear_gradient, px, rg
 pub(crate) fn apply(cx: &mut App) {
     Theme::change(ThemeMode::Dark, None, cx);
     Theme::update(cx, |theme| {
-        theme.font_family = "Source Han Sans SC".into();
+        theme.font_family = "LXGW Neo XiHei".into();
         theme.font_size = px(16.);
         theme.radius = px(6.);
         theme.radius_lg = px(10.);

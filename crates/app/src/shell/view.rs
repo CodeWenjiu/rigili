@@ -11,7 +11,7 @@ use gpui_kit::*;
 
 use super::playback::Playback;
 use crate::grid::OpenVideo;
-use crate::home::{HomeView, OpenLive};
+use crate::home::{HomeTab, HomeView, OpenLive};
 use crate::login;
 use crate::playback::PlaybackRequest;
 use crate::search::SearchView;
@@ -219,48 +219,111 @@ impl MainView {
             .into_any_element()
     }
 
+    fn render_home_tabs(&self, selected: HomeTab, cx: &mut Context<Self>) -> AnyElement {
+        let primary = cx.theme().primary;
+        let muted = cx.theme().muted_foreground;
+        let hover_bg = cx.theme().accent.opacity(0.5);
+        let radius = cx.theme().radius;
+
+        h_flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap_1()
+            .children(HomeTab::ALL.map(|tab| {
+                let active = tab == selected;
+                let group = SharedString::from(format!("top-tab-{}", tab.index()));
+
+                v_flex()
+                    .group(group.clone())
+                    .items_center()
+                    .gap_1()
+                    .rounded(radius)
+                    .when(!active, |this| this.hover(move |this| this.bg(hover_bg)))
+                    .child(
+                        Button::new(("top-tab", tab.index()))
+                            .text()
+                            .px_2()
+                            .py_1()
+                            .accessibility_label(tab.label())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.search_active = false;
+                                this.home.update(cx, |home, cx| home.show_tab(tab, cx));
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(if active { primary } else { muted })
+                                    .group_hover(group, move |this| this.text_color(primary))
+                                    .child(tab.label()),
+                            ),
+                    )
+                    .child(div().h(px(2.)).w(px(24.)).rounded(px(1.)).bg(if active {
+                        primary
+                    } else {
+                        hsla(0., 0., 0., 0.)
+                    }))
+            }))
+            .into_any_element()
+    }
+
     fn render_top_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let background = cx.theme().background;
         let border = cx.theme().border;
         let foreground = cx.theme().foreground;
         let muted = cx.theme().muted_foreground;
+        let home_tab = self.home.read(cx).current_tab();
 
         h_flex()
             .h_16()
             .w_full()
             .flex_shrink_0()
             .items_center()
-            .justify_center()
+            .gap_4()
             .border_b_1()
             .border_color(border)
             .bg(background)
             .text_color(foreground)
             .px_6()
+            .child(self.render_home_tabs(home_tab, cx))
             .child(
-                h_flex()
-                    .w_full()
-                    .max_w(rems(40.))
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div().flex_1().min_w_0().child(
-                            Input::new(&self.search_input)
+                div().flex_1().min_w_0().flex().justify_center().child(
+                    h_flex()
+                        .w_full()
+                        .max_w(rems(40.))
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div().flex_1().min_w_0().child(
+                                Input::new(&self.search_input)
+                                    .large()
+                                    .cleanable(true)
+                                    .prefix(Icon::new(IconName::Search).text_color(muted)),
+                            ),
+                        )
+                        .child(
+                            Button::new("search-submit")
                                 .large()
-                                .cleanable(true)
-                                .prefix(Icon::new(IconName::Search).text_color(muted)),
+                                .primary()
+                                .label("搜索")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.submit_search(cx);
+                                    this.focus_search(window, cx);
+                                })),
                         ),
-                    )
-                    .child(
-                        Button::new("search-submit")
-                            .large()
-                            .primary()
-                            .label("搜索")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.submit_search(cx);
-                                this.focus_search(window, cx);
-                            })),
-                    ),
+                ),
             )
+            .when(!self.search_active, |this| {
+                this.child(
+                    Button::new("refresh")
+                        .ghost()
+                        .icon(IconName::RefreshCw)
+                        .label("刷新")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.home.update(cx, |home, cx| home.reload_current(cx));
+                        })),
+                )
+            })
             .into_any_element()
     }
 

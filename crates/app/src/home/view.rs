@@ -2,7 +2,6 @@ rigili_macro::mod_prv!(feed, list);
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::alert::Alert;
-use gpui_kit::component::button::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -298,10 +297,11 @@ impl HomeView {
         &mut self.tabs[tab.index()]
     }
 
-    fn select_tab(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(tab) = HomeTab::ALL.get(index).copied() else {
-            return;
-        };
+    pub(crate) fn current_tab(&self) -> HomeTab {
+        self.tab
+    }
+
+    pub(crate) fn show_tab(&mut self, tab: HomeTab, cx: &mut Context<Self>) {
         if self.tab == tab {
             return;
         }
@@ -319,55 +319,9 @@ impl HomeView {
         }
     }
 
-    fn reload(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn reload_current(&mut self, cx: &mut Context<Self>) {
         let tab = self.tab;
         self.load_tab(tab, cx);
-    }
-
-    fn render_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
-        let selected = self.tab;
-        let primary = cx.theme().primary;
-        let muted = cx.theme().muted_foreground;
-        let hover_bg = cx.theme().accent.opacity(0.5);
-        let radius = cx.theme().radius;
-
-        h_flex()
-            .items_center()
-            .gap_1()
-            .children(HomeTab::ALL.map(|tab| {
-                let active = tab == selected;
-                let group = SharedString::from(format!("home-tab-{}", tab.index()));
-
-                v_flex()
-                    .group(group.clone())
-                    .items_center()
-                    .gap_1()
-                    .rounded(radius)
-                    .when(!active, |this| this.hover(move |this| this.bg(hover_bg)))
-                    .child(
-                        Button::new(("home-tab", tab.index()))
-                            .text()
-                            .px_2()
-                            .py_1()
-                            .accessibility_label(tab.label())
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.select_tab(tab.index(), cx)),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(if active { primary } else { muted })
-                                    .group_hover(group, move |this| this.text_color(primary))
-                                    .child(tab.label()),
-                            ),
-                    )
-                    .child(div().h(px(2.)).w(px(24.)).rounded(px(1.)).bg(if active {
-                        primary
-                    } else {
-                        hsla(0., 0., 0., 0.)
-                    }))
-            }))
-            .into_any_element()
     }
 }
 
@@ -376,32 +330,16 @@ impl Render for HomeView {
         let background = cx.theme().background;
         let foreground = cx.theme().foreground;
         let content = self.render_content(window, cx);
-        let selected = self.tab.index();
-        let loading = self.tabs[selected].loading;
         let notice = self.notice.clone();
 
         v_flex()
             .size_full()
             .gap_4()
             .px_6()
-            .pt_4()
+            .pt_6()
             .pb_6()
             .bg(background)
             .text_color(foreground)
-            .child(
-                h_flex()
-                    .items_center()
-                    .justify_between()
-                    .child(self.render_tabs(cx))
-                    .child(
-                        Button::new("refresh")
-                            .ghost()
-                            .icon(IconName::RefreshCw)
-                            .label("刷新")
-                            .disabled(loading)
-                            .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
-                    ),
-            )
             .when_some(notice, |this, notice| {
                 this.child(
                     Alert::error("home-notice", notice)

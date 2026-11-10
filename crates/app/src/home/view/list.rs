@@ -196,7 +196,7 @@ impl HomeView {
                     Button::new("retry")
                         .primary()
                         .label("重试")
-                        .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
+                        .on_click(cx.listener(|this, _, _, cx| this.reload_current(cx))),
                 )
                 .into_any_element();
         }
