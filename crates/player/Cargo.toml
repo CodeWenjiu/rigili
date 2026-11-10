@@ -1,9 +1,9 @@
 [package]
-name = "gpuili_player"
+name = "rigili_player"
 version.workspace = true
 edition.workspace = true
 publish = false
 
 [dependencies]
-gpuili_macro.workspace = true
+rigili_macro.workspace = true
 thiserror.workspace = true

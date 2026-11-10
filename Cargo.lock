@@ -3017,49 +3017,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85701631a9bbecf47e6d19f145e85e57767e7c50f7192d5b1bf65b5ef43cb373"
 
 [[package]]
-name = "gpuili_app"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "futures",
- "gpui-kit",
- "gpuili_bilibili",
- "gpuili_macro",
- "gpuili_player",
- "image",
- "qrcodegen",
- "reqwest",
- "tokio",
-]
-
-[[package]]
-name = "gpuili_bilibili"
-version = "0.1.0"
-dependencies = [
- "gpuili_macro",
- "hex",
- "md-5",
- "percent-encoding",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
-]
-
-[[package]]
-name = "gpuili_macro"
-version = "0.1.0"
-
-[[package]]
-name = "gpuili_player"
-version = "0.1.0"
-dependencies = [
- "gpuili_macro",
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "granit-parser"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5757,6 +5714,49 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 dependencies = [
  "bytemuck",
+]
+
+[[package]]
+name = "rigili_app"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "gpui-kit",
+ "image",
+ "qrcodegen",
+ "reqwest",
+ "rigili_bilibili",
+ "rigili_macro",
+ "rigili_player",
+ "tokio",
+]
+
+[[package]]
+name = "rigili_bilibili"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "md-5",
+ "percent-encoding",
+ "reqwest",
+ "rigili_macro",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "rigili_macro"
+version = "0.1.0"
+
+[[package]]
+name = "rigili_player"
+version = "0.1.0"
+dependencies = [
+ "rigili_macro",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

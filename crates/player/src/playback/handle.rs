@@ -49,7 +49,7 @@ impl Player {
         let worker_frame = Arc::clone(&frame);
         let worker_status = Arc::clone(&status);
         let worker = thread::Builder::new()
-            .name("gpuili-mpv".into())
+            .name("rigili-mpv".into())
             .spawn(move || run_worker(receiver, worker_frame, worker_status));
 
         let worker = match worker {
@@ -146,10 +146,10 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "requires GPUILI_TEST_VIDEO and a working libmpv"]
+    #[ignore = "requires RIGILI_TEST_VIDEO and a working libmpv"]
     fn plays_a_local_file() {
-        let path = std::env::var("GPUILI_TEST_VIDEO").expect("GPUILI_TEST_VIDEO");
-        let audio = std::env::var("GPUILI_TEST_AUDIO").ok();
+        let path = std::env::var("RIGILI_TEST_VIDEO").expect("RIGILI_TEST_VIDEO");
+        let audio = std::env::var("RIGILI_TEST_AUDIO").ok();
         let player = Player::new();
         player.set_viewport(VideoSize::new(1280, 720));
         player.load(&path, audio.as_deref());

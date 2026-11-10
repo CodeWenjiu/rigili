@@ -5,7 +5,7 @@ use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use gpuili_bilibili::{PopularVideo, SearchVideo, thumbnail};
+use rigili_bilibili::{PopularVideo, SearchVideo, thumbnail};
 
 use crate::format::{format_count, format_date, format_duration};
 use crate::platform::theme::cover_scrim;
@@ -280,7 +280,7 @@ mod tests {
         CARD_GAP, MIN_CARD_WIDTH, VideoCard, append_unique, card_width_for_width, columns_for_width,
     };
     use gpui_kit::px;
-    use gpuili_bilibili::SearchVideo;
+    use rigili_bilibili::SearchVideo;
 
     fn video(bvid: &str) -> VideoCard {
         VideoCard {

@@ -1,5 +1,5 @@
 [package]
-name = "gpuili_macro"
+name = "rigili_macro"
 version.workspace = true
 edition.workspace = true
 publish = false

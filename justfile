@@ -7,15 +7,15 @@ build:
 
 # 构建应用（release）
 build-release:
-    @cargo build --release -p gpuili_app
+    @cargo build --release -p rigili_app
 
-# 运行应用；参数透传给 gpuili，例如 just run video.mp4
+# 运行应用；参数透传给 rigili，例如 just run video.mp4
 run *args:
-    @cargo run -p gpuili_app -- {{args}}
+    @cargo run -p rigili_app -- {{args}}
 
 # 运行 release 应用，用于性能验证
 run-release *args:
-    @cargo run --release -p gpuili_app -- {{args}}
+    @cargo run --release -p rigili_app -- {{args}}
 
 # 格式化
 fmt:
@@ -38,11 +38,11 @@ check: fmt-check lint test
 
 # 播放器手动测试：只测视频
 test-player video:
-    GPUILI_TEST_VIDEO="{{video}}" cargo test -p gpuili_player plays_a_local_file -- --ignored --nocapture
+    RIGILI_TEST_VIDEO="{{video}}" cargo test -p rigili_player plays_a_local_file -- --ignored --nocapture
 
 # 播放器手动测试：视频 + 独立音频（DASH 路径）
 test-player-dash video audio:
-    GPUILI_TEST_VIDEO="{{video}}" GPUILI_TEST_AUDIO="{{audio}}" cargo test -p gpuili_player plays_a_local_file -- --ignored --nocapture
+    RIGILI_TEST_VIDEO="{{video}}" RIGILI_TEST_AUDIO="{{audio}}" cargo test -p rigili_player plays_a_local_file -- --ignored --nocapture
 
 # 清理构建产物
 clean:

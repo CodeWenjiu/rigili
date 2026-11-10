@@ -1,4 +1,4 @@
-gpuili_macro::mod_prv!(
+rigili_macro::mod_prv!(
     backend, format, grid, home, login, playback, platform, search, shell
 );
 

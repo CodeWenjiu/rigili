@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use gpui_kit::*;
-use gpuili_bilibili::{
+use rigili_bilibili::{
     ApiError, Client, Nav, PlayUrl, Popular, QrCode, QrPoll, SearchResult, SessionError, VideoInfo,
     api, api::search::SearchOrder,
 };

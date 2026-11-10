@@ -1,11 +1,11 @@
-gpuili_macro::mod_prv!(feed, list);
+rigili_macro::mod_prv!(feed, list);
 
 use gpui_kit::base::Selectable;
 use gpui_kit::component::button::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use gpuili_bilibili::api::search::SearchOrder;
+use rigili_bilibili::api::search::SearchOrder;
 
 use crate::backend::{self, Backend};
 use crate::format::format_count;

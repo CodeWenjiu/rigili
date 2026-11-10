@@ -1,4 +1,4 @@
-gpuili_macro::mod_prv!(feed, list);
+rigili_macro::mod_prv!(feed, list);
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::*;

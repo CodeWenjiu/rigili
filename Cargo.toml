@@ -17,6 +17,6 @@ thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = "1"
-gpuili_macro = { path = "crates/macro" }
-gpuili_bilibili = { path = "crates/bilibili" }
-gpuili_player = { path = "crates/player" }
+rigili_macro = { path = "crates/macro" }
+rigili_bilibili = { path = "crates/bilibili" }
+rigili_player = { path = "crates/player" }

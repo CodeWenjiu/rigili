@@ -1,5 +1,5 @@
 use gpui_kit::*;
-use gpuili_bilibili::SearchResult;
+use rigili_bilibili::SearchResult;
 
 use super::SearchView;
 use crate::backend;

@@ -1,1 +1,1 @@
-gpuili_macro::mod_flat!(view);
+rigili_macro::mod_flat!(view);

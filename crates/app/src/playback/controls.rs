@@ -4,7 +4,7 @@ use gpui_kit::component::slider::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use gpuili_player::{PlaybackPhase, PlayerStatus};
+use rigili_player::{PlaybackPhase, PlayerStatus};
 
 use super::surface::PlayerView;
 use crate::format::format_clock;
@@ -168,7 +168,7 @@ fn decoder_label(hwdec: &Option<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{decoder_label, phase_label, speed_label};
-    use gpuili_player::{PlaybackPhase, PlayerStatus};
+    use rigili_player::{PlaybackPhase, PlayerStatus};
 
     #[test]
     fn labels_every_phase() {

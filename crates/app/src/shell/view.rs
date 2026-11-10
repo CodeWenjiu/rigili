@@ -24,7 +24,14 @@ pub struct MainView {
 }
 
 pub fn open_main(cx: &mut App) -> Result<()> {
-    gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+    let options = WindowOptions {
+        titlebar: Some(TitlebarOptions {
+            title: Some("Rigili".into()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    gpui_kit::open_window(options, cx, |window, cx| {
         cx.new(|cx| MainView::new(window, cx))
     })
     .map(|_| ())

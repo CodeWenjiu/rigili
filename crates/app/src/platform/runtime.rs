@@ -1,7 +1,7 @@
 use std::future::Future;
 
 use gpui_kit::*;
-use gpuili_bilibili::ApiError;
+use rigili_bilibili::ApiError;
 
 pub(crate) enum ApiTaskError {
     Api(ApiError),

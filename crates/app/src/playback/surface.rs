@@ -4,7 +4,7 @@ use gpui_kit::component::slider::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use gpuili_player::{PlaybackPhase, Player, PlayerStatus, VideoFrame, VideoSize};
+use rigili_player::{PlaybackPhase, Player, PlayerStatus, VideoFrame, VideoSize};
 use image::RgbaImage;
 
 use super::controls::{Transport, status_bar};

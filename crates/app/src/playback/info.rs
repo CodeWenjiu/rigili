@@ -7,7 +7,7 @@ use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use gpuili_bilibili::{VideoInfo, VideoPage};
+use rigili_bilibili::{VideoInfo, VideoPage};
 
 use crate::format::{format_count, format_datetime, format_duration};
 
@@ -321,7 +321,7 @@ fn short_label(page: &VideoPage) -> String {
 #[cfg(test)]
 mod tests {
     use super::short_label;
-    use gpuili_bilibili::VideoPage;
+    use rigili_bilibili::VideoPage;
 
     fn page(number: u32, part: &str) -> VideoPage {
         VideoPage {

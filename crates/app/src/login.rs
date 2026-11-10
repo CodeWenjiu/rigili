@@ -5,7 +5,7 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use gpuili_bilibili::{Nav, api::login::cookies_from_login_url};
+use rigili_bilibili::{Nav, api::login::cookies_from_login_url};
 use image::RgbaImage;
 use qrcodegen::{QrCode, QrCodeEcc};
 
@@ -215,7 +215,7 @@ impl LoginView {
     fn finish(
         &mut self,
         nav: Result<Nav, String>,
-        save_error: Option<gpuili_bilibili::SessionError>,
+        save_error: Option<rigili_bilibili::SessionError>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -301,7 +301,7 @@ impl Render for LoginView {
 }
 
 fn request<T>(
-    result: Result<Result<T, gpuili_bilibili::ApiError>, tokio::task::JoinError>,
+    result: Result<Result<T, rigili_bilibili::ApiError>, tokio::task::JoinError>,
 ) -> Result<T, String> {
     match result {
         Ok(Ok(value)) => Ok(value),

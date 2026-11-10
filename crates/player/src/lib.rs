@@ -1,3 +1,3 @@
-gpuili_macro::mod_flat!(size);
-gpuili_macro::mod_prv!(mpv);
-gpuili_macro::mod_flat!(playback);
+rigili_macro::mod_flat!(size);
+rigili_macro::mod_prv!(mpv);
+rigili_macro::mod_flat!(playback);

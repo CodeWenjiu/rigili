@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use gpuili_bilibili::ApiError;
+use rigili_bilibili::ApiError;
 
 pub(crate) fn api_error_message(error: &ApiError) -> String {
     if error.is_login_required() {
@@ -85,7 +85,7 @@ mod tests {
         api_error_message, format_clock, format_count, format_date, format_datetime,
         format_duration,
     };
-    use gpuili_bilibili::ApiError;
+    use rigili_bilibili::ApiError;
 
     #[test]
     fn explains_login_and_rate_limit_errors() {

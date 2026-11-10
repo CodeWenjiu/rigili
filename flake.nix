@@ -1,5 +1,5 @@
 {
-  description = "gpuili - a native Bilibili desktop client for Linux, built with Rust and GPUI Kit";
+  description = "Rigili - a native Bilibili desktop client for Linux, built with Rust and GPUI Kit";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -96,7 +96,7 @@
                 export VK_ICD_FILENAMES="$(find /run/opengl-driver/share/vulkan/icd.d -name '*.json' -print | paste -sd: -)"
               fi
 
-              echo "gpuili dev shell - $(rustc --version)"
+              echo "Rigili dev shell - $(rustc --version)"
             '';
           };
         });

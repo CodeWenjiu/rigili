@@ -1,4 +1,4 @@
-use gpuili_bilibili::{ApiError, Dash, VideoInfo};
+use rigili_bilibili::{ApiError, Dash, VideoInfo};
 
 use crate::backend::Backend;
 
@@ -55,7 +55,7 @@ fn best_streams(dash: &Dash) -> Option<Streams> {
 #[cfg(test)]
 mod tests {
     use super::best_streams;
-    use gpuili_bilibili::{Dash, DashAudio, DashVideo};
+    use rigili_bilibili::{Dash, DashAudio, DashVideo};
 
     #[test]
     fn pairs_avc_video_with_best_audio() {

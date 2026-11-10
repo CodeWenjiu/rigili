@@ -76,13 +76,28 @@ impl Session {
 }
 
 pub fn data_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("RIGILI_DATA_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+    // Keep the pre-rename env var and data directory working.
     if let Some(dir) = std::env::var_os("GPUILI_DATA_DIR") {
         return Some(PathBuf::from(dir));
     }
-    if let Some(dir) = std::env::var_os("XDG_DATA_HOME").filter(|dir| !dir.is_empty()) {
-        return Some(PathBuf::from(dir).join("gpuili"));
+
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
+        })?;
+    let dir = base.join("rigili");
+    let legacy = base.join("gpuili");
+
+    if !dir.exists() && legacy.exists() && fs::rename(&legacy, &dir).is_err() {
+        return Some(legacy);
     }
-    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share/gpuili"))
+
+    Some(dir)
 }
 
 #[cfg(unix)]
@@ -112,7 +127,7 @@ mod tests {
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("gpuili-session-{}-{name}", std::process::id()));
+            std::env::temp_dir().join(format!("rigili-session-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create temp dir");
         dir

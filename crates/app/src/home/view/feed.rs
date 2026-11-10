@@ -1,5 +1,5 @@
 use gpui_kit::*;
-use gpuili_bilibili::Popular;
+use rigili_bilibili::Popular;
 
 use super::HomeView;
 use crate::backend;
@@ -135,7 +135,7 @@ fn has_more(popular: &Popular) -> bool {
 #[cfg(test)]
 mod tests {
     use super::has_more;
-    use gpuili_bilibili::Popular;
+    use rigili_bilibili::Popular;
 
     #[test]
     fn stops_when_the_feed_is_empty_or_exhausted() {
@@ -158,8 +158,8 @@ mod tests {
         assert!(has_more(&more));
     }
 
-    fn popular_video(bvid: &str) -> gpuili_bilibili::PopularVideo {
-        gpuili_bilibili::PopularVideo {
+    fn popular_video(bvid: &str) -> rigili_bilibili::PopularVideo {
+        rigili_bilibili::PopularVideo {
             aid: 0,
             bvid: bvid.into(),
             cid: 0,
@@ -167,12 +167,12 @@ mod tests {
             title: String::new(),
             duration: 0,
             pubdate: 0,
-            owner: gpuili_bilibili::Owner {
+            owner: rigili_bilibili::Owner {
                 mid: 0,
                 name: String::new(),
                 face: String::new(),
             },
-            stat: gpuili_bilibili::Stat::default(),
+            stat: rigili_bilibili::Stat::default(),
         }
     }
 }

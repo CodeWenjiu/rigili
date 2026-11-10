@@ -1,4 +1,4 @@
-# GPUILI Roadmap
+# Rigili Roadmap
 
 > 用 Rust + GPUI Kit 重写 `bilibili-linux`，做一个原生、GPU 加速的 Linux 哔哩哔哩桌面客户端。
 >
@@ -8,11 +8,11 @@
 ## 当前状态
 
 - Rust workspace 已建立：`crates/macro`、`crates/app`、`crates/bilibili`、`crates/player`
-- M0 已完成：`gpuili_player` 通过 raw libmpv FFI 做 software render，`gpuili_app` 能把帧显示为 `RenderImage` 并提供基础播放控件
+- M0 已完成：`rigili_player` 通过 raw libmpv FFI 做 software render，`rigili_app` 能把帧显示为 `RenderImage` 并提供基础播放控件
 - 开发环境由 `flake.nix` / `.envrc` 提供
 - 已有 `AGENTS.md`、内置 GPUI Kit skills 和 `module-setup` 规范
 - 尚未实现：动态/收藏/评论等浏览功能、弹幕
-- M1 已完成：`gpuili_bilibili` 有 async HTTP client（Tokio 桥）、WBI 签名、热门接口、二维码登录、会话持久化和风控/未登录恢复路径
+- M1 已完成：`rigili_bilibili` 有 async HTTP client（Tokio 桥）、WBI 签名、热门接口、二维码登录、会话持久化和风控/未登录恢复路径
 - M2 已完成：app 有热门页、封面网格和「热门/播放器」侧边栏，点击卡片可直接播放；列表已虚拟化，播放页有信息侧栏和多 P 选集
 - M3 进行中：搜索已接入主窗口顶部搜索栏（WBI 签名、关键词搜索、排序、无限翻页、空/错误状态，结果在主内容区就地显示并复用虚拟卡片网格）；动态、收藏和评论待实现
 
@@ -55,7 +55,7 @@
 | 模块声明 | 已定 | 通过项目统一宏声明，禁止裸 `mod` / `pub mod`；见 `module-setup` skill |
 | 视频后端 | 已验证（M0） | libmpv + software render（`sw`）→ GPUI `RenderImage` |
 | 视频帧合成 | 已验证（M0） | CPU BGRA 帧 → `img(frame)`；控件和弹幕作为 GPUI 元素叠加 |
-| API 层 | 已定 | 所有 B 站请求集中在 `gpuili_bilibili`，统一认证、请求头、WBI、限速和错误 |
+| API 层 | 已定 | 所有 B 站请求集中在 `rigili_bilibili`，统一认证、请求头、WBI、限速和错误 |
 | 异步运行时 | 已定（M1） | app 持有 2 worker Tokio runtime，按 Zed `gpui_tokio` 模式桥接 GPUI `Task`；API 使用 async reqwest |
 | 登录 | 已验证（M1） | Web 二维码登录 + 本地 Cookie/会话持久化；`-101` 自动清除会话 |
 | 许可证 | 待定 | 影响 libmpv、wiliwili 代码参考和发行方式；见“开放问题” |
@@ -107,7 +107,7 @@ M0 实测（2026-11-09，开发机）：
 
 ### API 层
 
-`gpuili_bilibili` 负责：
+`rigili_bilibili` 负责：
 
 - 统一 `User-Agent`、`Referer`、Cookie、超时、重试和并发限制
 - WBI 签名
@@ -121,15 +121,15 @@ M0 实测（2026-11-09，开发机）：
 
 ### 应用结构
 
-- `gpuili_app`：GPUI 入口、导航、主题、i18n、设置
+- `rigili_app`：GPUI 入口、导航、主题、i18n、设置
   - `platform/`：与 GPUI、系统、Nix 打交道的胶水（资源、主题、Tokio、图片 HTTP）
   - `shell/`：主窗口外壳与播放窗口的生命周期
   - `home/`、`playback/`：按功能拆分的界面
-- `gpuili_bilibili`：B 站 API 和认证，不依赖 UI
-- `gpuili_player`：播放器抽象和 libmpv 封装，不直接发 HTTP
-- `gpuili_macro`：模块声明宏
+- `rigili_bilibili`：B 站 API 和认证，不依赖 UI
+- `rigili_player`：播放器抽象和 libmpv 封装，不直接发 HTTP
+- `rigili_macro`：模块声明宏
 
-新增 crate 时保持边界清晰，不要把所有功能堆进 `gpuili_app`。
+新增 crate 时保持边界清晰，不要把所有功能堆进 `rigili_app`。
 
 ## 里程碑
 

@@ -1,11 +1,11 @@
 [package]
-name = "gpuili_bilibili"
+name = "rigili_bilibili"
 version.workspace = true
 edition.workspace = true
 publish = false
 
 [dependencies]
-gpuili_macro.workspace = true
+rigili_macro.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

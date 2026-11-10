@@ -1,18 +1,18 @@
 [package]
-name = "gpuili_app"
+name = "rigili_app"
 version.workspace = true
 edition.workspace = true
 publish = false
 
 [[bin]]
-name = "gpuili"
+name = "rigili"
 path = "src/main.rs"
 
 [dependencies]
 gpui-kit.workspace = true
-gpuili_bilibili.workspace = true
-gpuili_macro.workspace = true
-gpuili_player.workspace = true
+rigili_bilibili.workspace = true
+rigili_macro.workspace = true
+rigili_player.workspace = true
 anyhow.workspace = true
 futures = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["gzip", "rustls-tls"] }
