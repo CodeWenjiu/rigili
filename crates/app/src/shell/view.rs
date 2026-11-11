@@ -374,9 +374,12 @@ impl MainView {
             .bg(background)
             .text_color(foreground)
             .px_6()
-            .when(!self.mine_active, |this| {
-                this.child(self.render_home_tabs(home_tab, cx))
-            })
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .when(self.mine_active, |this| this.invisible())
+                    .child(self.render_home_tabs(home_tab, cx)),
+            )
             .child(
                 div().flex_1().min_w_0().flex().justify_center().child(
                     h_flex().w_full().max_w(px(420.)).items_center().child(
