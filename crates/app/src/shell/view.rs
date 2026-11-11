@@ -6,7 +6,6 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputState};
-use gpui_kit::component::sidebar::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -63,20 +62,8 @@ impl NavItem {
         self.on_click = Rc::new(on_click);
         self
     }
-}
 
-impl Collapsible for NavItem {
-    fn is_collapsed(&self) -> bool {
-        false
-    }
-
-    fn collapsed(self, _: bool) -> Self {
-        self
-    }
-}
-
-impl SidebarItem for NavItem {
-    fn render(self, id: impl Into<ElementId>, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, id: impl Into<ElementId>, cx: &mut App) -> impl IntoElement {
         let active = self.active;
         let icon = self.icon;
         let label = self.label;
@@ -91,6 +78,7 @@ impl SidebarItem for NavItem {
             .ghost()
             .w_full()
             .h(px(60.))
+            .px_0()
             .accessibility_label(label.clone())
             .on_click(move |event, window, cx| on_click(event, window, cx))
             .child(
@@ -99,7 +87,7 @@ impl SidebarItem for NavItem {
                     .gap_1()
                     .text_color(color)
                     .child(Icon::new(icon).with_size(px(22.)))
-                    .child(div().text_sm().child(label)),
+                    .child(div().whitespace_nowrap().text_sm().child(label)),
             )
     }
 }
@@ -251,6 +239,71 @@ impl MainView {
                     .data(include_bytes!("../../assets/rigili-mark.svg"))
                     .with_size(px(36.))
                     .text_color(cx.theme().sidebar_primary),
+            )
+            .into_any_element()
+    }
+
+    fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let border = cx.theme().border;
+        let weak = cx.entity().downgrade();
+
+        v_flex()
+            .w(px(55.))
+            .h_full()
+            .flex_shrink_0()
+            .bg(cx.theme().sidebar)
+            .text_color(cx.theme().sidebar_foreground)
+            .border_r_1()
+            .border_color(border)
+            .child(div().w_full().pt_3().child(self.render_logo(cx)))
+            .child(
+                v_flex()
+                    .w_full()
+                    .pt_3()
+                    .gap_y_3()
+                    .child(
+                        NavItem::new("首页", IconName::House)
+                            .active(!self.mine_active)
+                            .on_click({
+                                let weak = weak.clone();
+                                move |_, _, cx| {
+                                    let _ = weak.update(cx, |this, cx| {
+                                        if this.search_active || this.mine_active {
+                                            this.search_active = false;
+                                            this.mine_active = false;
+                                            cx.notify();
+                                        }
+                                    });
+                                }
+                            })
+                            .render("nav-home", cx),
+                    )
+                    .child(
+                        NavItem::new("我的", IconName::CircleUser)
+                            .active(self.mine_active)
+                            .on_click({
+                                let weak = weak.clone();
+                                move |_, _, cx| {
+                                    let _ = weak.update(cx, |this, cx| {
+                                        if !this.mine_active {
+                                            this.mine_active = true;
+                                            this.search_active = false;
+                                            cx.notify();
+                                        }
+                                    });
+                                }
+                            })
+                            .render("nav-mine", cx),
+                    ),
+            )
+            .child(div().flex_1())
+            .child(
+                div()
+                    .w_full()
+                    .pb_3()
+                    .flex()
+                    .justify_center()
+                    .child(self.account(cx)),
             )
             .into_any_element()
     }
@@ -444,61 +497,13 @@ impl MainView {
 impl Render for MainView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let background = cx.theme().background;
-        let border = cx.theme().border;
         let foreground = cx.theme().foreground;
-        let weak = cx.entity().downgrade();
 
         h_flex()
             .size_full()
             .bg(background)
             .text_color(foreground)
-            .child(
-                Sidebar::new("app-sidebar")
-                    .collapsible(false)
-                    .w(px(88.))
-                    .border_r_1()
-                    .border_color(border)
-                    .header(self.render_logo(cx))
-                    .child(
-                        NavItem::new("首页", IconName::House)
-                            .active(!self.mine_active)
-                            .on_click({
-                                let weak = weak.clone();
-                                move |_, _, cx| {
-                                    let _ = weak.update(cx, |this, cx| {
-                                        if this.search_active || this.mine_active {
-                                            this.search_active = false;
-                                            this.mine_active = false;
-                                            cx.notify();
-                                        }
-                                    });
-                                }
-                            }),
-                    )
-                    .child(
-                        NavItem::new("我的", IconName::CircleUser)
-                            .active(self.mine_active)
-                            .on_click({
-                                let weak = weak.clone();
-                                move |_, _, cx| {
-                                    let _ = weak.update(cx, |this, cx| {
-                                        if !this.mine_active {
-                                            this.mine_active = true;
-                                            this.search_active = false;
-                                            cx.notify();
-                                        }
-                                    });
-                                }
-                            }),
-                    )
-                    .footer(
-                        div()
-                            .w_full()
-                            .flex()
-                            .justify_center()
-                            .child(self.account(cx)),
-                    ),
-            )
+            .child(self.render_sidebar(cx))
             .child(
                 v_flex()
                     .flex_1()
