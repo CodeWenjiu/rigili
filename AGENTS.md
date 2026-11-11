@@ -50,6 +50,16 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
+性能分析（dev shell 内，`perf` 需要以子进程方式启动应用）：
+
+```bash
+cargo build --release
+perf record -e cycles:u --user-callchains -g -F 999 -o /tmp/rigili.perf -- ./target/release/rigili
+perf report --stdio -i /tmp/rigili.perf -g none --no-children --sort symbol
+perf script -i /tmp/rigili.perf | flamegraph.pl > /tmp/rigili.svg
+heaptrack ./target/release/rigili
+```
+
 - 在 NixOS 上始终使用 dev shell 内的 Rust 和系统库，不要依赖系统 `rustc`。
 - 首次构建 GPUI 较慢；运行窗口需要可用的 Wayland/X11 和 Vulkan。
 - 新增系统依赖时同步更新 `flake.nix`。

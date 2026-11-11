@@ -80,10 +80,17 @@
             mold
             rustToolchain
           ];
+
+          profilingTools = with pkgs; [
+            perf
+            flamegraph
+            heaptrack
+            hyperfine
+          ];
         in
         {
           default = pkgs.mkShell {
-            nativeBuildInputs = buildTools;
+            nativeBuildInputs = buildTools ++ profilingTools;
             buildInputs = runtimeLibs;
 
             RUST_BACKTRACE = "1";
