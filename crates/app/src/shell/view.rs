@@ -15,8 +15,9 @@ use rigili_core::{OpenLive, OpenSpace, OpenVideo, Refresh};
 use super::playback::Playback;
 use crate::home::{HomeTab, HomeView};
 use crate::login;
-use crate::mine::{CloseSpace, MineView};
+use crate::mine::MineView;
 use crate::search::SearchView;
+use crate::space::{CloseSpace, SpaceView};
 use rigili_playback::PlaybackRequest;
 use search_box::SearchBox;
 
@@ -24,6 +25,7 @@ pub struct MainView {
     home: Entity<HomeView>,
     search: Entity<SearchView>,
     mine: Entity<MineView>,
+    space: Entity<SpaceView>,
     search_input: Entity<InputState>,
     search_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     search_box: SearchBox,
@@ -121,6 +123,7 @@ impl MainView {
         let home = cx.new(HomeView::new);
         let search = cx.new(SearchView::new);
         let mine = cx.new(|cx| MineView::new(window, cx));
+        let space = cx.new(|cx| SpaceView::new(window, cx));
         let search_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("搜索视频、番剧、用户"));
         let input_sub = cx.subscribe_in(&search_input, window, |this, _, event, _, cx| {
@@ -163,7 +166,17 @@ impl MainView {
         })
         .detach();
 
-        cx.subscribe_in(&mine, window, |this, _, _: &CloseSpace, window, cx| {
+        cx.subscribe_in(&mine, window, |this, _, event: &OpenSpace, window, cx| {
+            this.open_space(event.clone(), window, cx);
+        })
+        .detach();
+
+        cx.subscribe_in(&space, window, |this, _, event: &OpenVideo, window, cx| {
+            this.play(event.clone(), window, cx);
+        })
+        .detach();
+
+        cx.subscribe_in(&space, window, |this, _, _: &CloseSpace, window, cx| {
             this.close_space(window, cx);
         })
         .detach();
@@ -189,6 +202,7 @@ impl MainView {
             home,
             search,
             mine,
+            space,
             search_input,
             search_bounds: Rc::new(Cell::new(None)),
             search_box: SearchBox::new(),
@@ -219,7 +233,10 @@ impl MainView {
         cx.notify();
     }
 
-    fn open_space(&mut self, space: OpenSpace, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_space(&mut self, request: OpenSpace, window: &mut Window, cx: &mut Context<Self>) {
+        if self.space_active && self.space.read(cx).mid() == Some(request.mid) {
+            return;
+        }
         self.space_return = if self.search_active {
             ReturnPage::Search
         } else if self.mine_active {
@@ -230,19 +247,17 @@ impl MainView {
         self.space_active = true;
         self.search_active = false;
         self.mine_active = false;
-        self.mine.update(cx, |mine, cx| {
-            mine.open_external_space(space.mid, space.name, window, cx);
+        self.space.update(cx, |space, cx| {
+            space.open(request.mid, request.name, window, cx);
         });
         cx.notify();
     }
 
-    fn close_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn close_space(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if !self.space_active {
             return;
         }
         self.space_active = false;
-        self.mine
-            .update(cx, |mine, cx| mine.close_external_space(window, cx));
         match self.space_return {
             ReturnPage::Search => self.search_active = true,
             ReturnPage::Mine => self.mine_active = true,
@@ -269,10 +284,25 @@ impl MainView {
 
     fn account(&self, cx: &mut Context<Self>) -> AnyElement {
         if let Some(user) = rigili_core::login::user(cx) {
-            return Avatar::new()
-                .src(user.face)
-                .name(user.uname)
-                .size(px(32.))
+            let mid = user.mid;
+            let name = user.uname.clone();
+            return Button::new("account-space")
+                .ghost()
+                .p_1()
+                .rounded_full()
+                .accessibility_label("我的空间")
+                .tooltip("我的空间")
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.open_space(
+                        OpenSpace {
+                            mid,
+                            name: name.clone(),
+                        },
+                        window,
+                        cx,
+                    );
+                }))
+                .child(Avatar::new().src(user.face).name(user.uname).size(px(32.)))
                 .into_any_element();
         }
 
@@ -348,14 +378,11 @@ impl MainView {
                             .active(self.mine_active)
                             .on_click({
                                 let weak = weak.clone();
-                                move |_, window, cx| {
+                                move |_, _, cx| {
                                     let _ = weak.update(cx, |this, cx| {
                                         if this.mine_active && !this.space_active {
                                             return;
                                         }
-                                        this.mine.update(cx, |mine, cx| {
-                                            mine.close_external_space(window, cx);
-                                        });
                                         this.mine_active = true;
                                         this.search_active = false;
                                         this.space_active = false;
@@ -526,7 +553,9 @@ impl MainView {
     }
 
     fn page_can_refresh(&self, cx: &App) -> bool {
-        if self.mine_active || self.space_active {
+        if self.space_active {
+            self.space.read(cx).can_refresh()
+        } else if self.mine_active {
             self.mine.read(cx).can_refresh()
         } else if self.search_active {
             self.search.read(cx).can_refresh()
@@ -536,7 +565,9 @@ impl MainView {
     }
 
     fn refresh_page(&mut self, cx: &mut Context<Self>) {
-        if self.mine_active || self.space_active {
+        if self.space_active {
+            self.space.update(cx, |space, cx| space.refresh(cx));
+        } else if self.mine_active {
             self.mine.update(cx, |mine, cx| mine.refresh(cx));
         } else if self.search_active {
             self.search.update(cx, |search, cx| search.refresh(cx));
@@ -600,7 +631,9 @@ impl Render for MainView {
                             .flex_1()
                             .min_h_0()
                             .w_full()
-                            .child(if self.mine_active || self.space_active {
+                            .child(if self.space_active {
+                                self.space.clone().into_any_element()
+                            } else if self.mine_active {
                                 self.mine.clone().into_any_element()
                             } else if self.search_active {
                                 self.search.clone().into_any_element()

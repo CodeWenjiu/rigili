@@ -605,6 +605,72 @@ pub(crate) fn media_card(
         )
 }
 
+pub(crate) fn video_card(
+    card: &VideoCard,
+    id_prefix: &str,
+    style: CardStyle,
+    metrics: CardMetrics,
+    on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    let views = card.views();
+    let danmaku = card.danmaku();
+    let duration = card.duration();
+
+    media_card(
+        MediaCard {
+            id: SharedString::from(format!("{id_prefix}-{}", card.bvid())),
+            cover: card.cover(),
+            title: card.title(),
+            footer: card.meta(),
+            footer_icon: None,
+            author: None,
+            overlay: CardOverlay {
+                leading: (!views.is_empty()).then_some((IconName::Play, views)),
+                secondary: (!danmaku.is_empty())
+                    .then_some((Some(IconName::MessageCircle), danmaku)),
+                trailing: (!duration.is_empty()).then_some(duration),
+                badge: None,
+            },
+        },
+        style,
+        metrics.width,
+        metrics.text_height,
+        on_open,
+    )
+    .into_any_element()
+}
+
+pub(crate) fn profile_badge(
+    label: impl Into<SharedString>,
+    background: Hsla,
+    foreground: Hsla,
+) -> AnyElement {
+    div()
+        .flex_shrink_0()
+        .px_2()
+        .py_1()
+        .rounded(px(4.))
+        .bg(background)
+        .text_color(foreground)
+        .text_xs()
+        .child(label.into())
+        .into_any_element()
+}
+
+pub(crate) fn profile_stat(label: &'static str, value: String, cx: &App) -> AnyElement {
+    v_flex()
+        .items_center()
+        .gap_1()
+        .child(div().text_lg().child(value))
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(label),
+        )
+        .into_any_element()
+}
+
 pub(crate) fn list_footer(
     retry_id: impl Into<ElementId>,
     more_error: Option<String>,

@@ -58,7 +58,7 @@ impl MineView {
     }
 
     pub(super) fn load_if_needed(&mut self, cx: &mut Context<Self>) {
-        if self.space_mid().is_none() {
+        if self.user_mid.is_none() {
             return;
         }
         match self.tab {
@@ -82,9 +82,6 @@ impl MineView {
                 }
             }
             MineTab::Offline => {}
-            MineTab::Dynamics | MineTab::Videos | MineTab::Collections => {
-                self.load_space_if_needed(cx);
-            }
         }
     }
 
@@ -94,9 +91,6 @@ impl MineView {
             MineTab::History => self.load_history(cx),
             MineTab::WatchLater => self.load_watch_later(cx),
             MineTab::Offline => {}
-            MineTab::Dynamics | MineTab::Videos | MineTab::Collections => {
-                self.reload_space_tab(cx);
-            }
         }
     }
 

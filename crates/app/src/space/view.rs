@@ -3,7 +3,7 @@ use std::rc::Rc;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
-use gpui_kit::component::input::Input;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tooltip::Tooltip;
@@ -12,20 +12,237 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::api::space::SpaceVideoOrder;
-use rigili_bilibili::{DynamicArchive, DynamicItem, SeasonMeta, SeriesMeta, banner, thumbnail};
+use rigili_bilibili::{
+    DynamicArchive, DynamicItem, SeasonMeta, SeriesMeta, SpaceProfile, banner, thumbnail,
+};
+use rigili_core::backend::{self, Backend};
+use rigili_core::login;
 use rigili_core::runtime::spawn_api;
-use rigili_core::{OpenVideo, api_task_error_message, format_count};
+use rigili_core::{OpenVideo, Refresh, api_task_error_message, format_count};
 
-use super::list::video_card;
-use super::{CloseSpace, ExternalSpace, MineTab, MineView, profile_badge, profile_stat};
 use crate::grid::{
     CARD_GAP, CardGrid, CardMetrics, CardStyle, FolderCards, LIST_FOOTER_HEIGHT, VideoCard,
-    VideoCards, append_unique_by, card_text_height, list_footer,
+    VideoCards, append_unique_by, card_text_height, list_footer, profile_badge, profile_stat,
+    video_card,
 };
 
 const DYNAMIC_CARD_MAX_WIDTH: Pixels = px(840.);
 
-pub(super) struct DynamicsState {
+#[derive(Clone, Copy)]
+pub(crate) struct CloseSpace;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum SpaceTab {
+    Dynamics,
+    #[default]
+    Videos,
+    Collections,
+}
+
+impl SpaceTab {
+    const ALL: [Self; 3] = [Self::Dynamics, Self::Videos, Self::Collections];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Dynamics => "动态",
+            Self::Videos => "投稿",
+            Self::Collections => "合集和系列",
+        }
+    }
+
+    fn index(self) -> usize {
+        match self {
+            Self::Dynamics => 0,
+            Self::Videos => 1,
+            Self::Collections => 2,
+        }
+    }
+}
+
+pub struct SpaceView {
+    backend: Option<Backend>,
+    mid: Option<u64>,
+    name: String,
+    tab: SpaceTab,
+    profile: Option<SpaceProfile>,
+    profile_loading: bool,
+    profile_error: Option<String>,
+    dynamics: DynamicsState,
+    space_videos: SpaceVideosState,
+    collections: CollectionsState,
+    list_width: Pixels,
+    space_search: Entity<InputState>,
+    _space_search_sub: Subscription,
+}
+
+impl EventEmitter<OpenVideo> for SpaceView {}
+impl EventEmitter<CloseSpace> for SpaceView {}
+
+impl SpaceView {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let space_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索投稿视频"));
+        let space_search_sub = cx.subscribe_in(&space_search, window, |this, _, event, _, cx| {
+            if let InputEvent::PressEnter { .. } = event {
+                this.submit_search(cx);
+            }
+        });
+        Self {
+            backend: None,
+            mid: None,
+            name: String::new(),
+            tab: SpaceTab::default(),
+            profile: None,
+            profile_loading: false,
+            profile_error: None,
+            dynamics: DynamicsState::new(),
+            space_videos: SpaceVideosState::new(),
+            collections: CollectionsState::new(),
+            list_width: px(0.),
+            space_search,
+            _space_search_sub: space_search_sub,
+        }
+    }
+
+    pub(crate) fn mid(&self) -> Option<u64> {
+        self.mid
+    }
+
+    pub(crate) fn open(
+        &mut self,
+        mid: u64,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.mid = Some(mid);
+        self.name = name;
+        self.tab = SpaceTab::default();
+        self.profile = None;
+        self.profile_loading = false;
+        self.profile_error = None;
+        self.dynamics = DynamicsState::new();
+        self.space_videos = SpaceVideosState::new();
+        self.collections = CollectionsState::new();
+        self.list_width = px(0.);
+        self.space_search
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.load_profile(cx);
+        self.load_if_needed(cx);
+        cx.notify();
+    }
+
+    fn backend(&mut self, cx: &mut Context<Self>) -> Result<Backend, String> {
+        if let Some(backend) = &self.backend {
+            return Ok(backend.clone());
+        }
+        match backend::get(cx) {
+            Ok(backend) => {
+                self.backend = Some(backend.clone());
+                Ok(backend)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn load_profile(&mut self, cx: &mut Context<Self>) {
+        let Some(mid) = self.mid else {
+            return;
+        };
+        if self.profile_loading {
+            return;
+        }
+        let backend = match self.backend(cx) {
+            Ok(backend) => backend,
+            Err(error) => {
+                self.profile_loading = false;
+                self.profile_error = Some(error);
+                cx.notify();
+                return;
+            }
+        };
+        self.profile_loading = true;
+        self.profile = None;
+        self.profile_error = None;
+        cx.notify();
+
+        spawn_api(
+            cx,
+            async move { backend.space_profile(mid).await },
+            move |this, result, cx| {
+                if this.mid != Some(mid) {
+                    return;
+                }
+                this.profile_loading = false;
+                match result {
+                    Ok(profile) => {
+                        this.profile = Some(profile);
+                        this.profile_error = None;
+                    }
+                    Err(error) => this.profile_error = Some(api_task_error_message(error, cx)),
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    fn load_if_needed(&mut self, cx: &mut Context<Self>) {
+        if self.mid.is_none() {
+            return;
+        }
+        match self.tab {
+            SpaceTab::Dynamics
+                if !self.dynamics.loaded
+                    && !self.dynamics.loading
+                    && self.dynamics.error.is_none() =>
+            {
+                self.load_dynamics(true, cx);
+            }
+            SpaceTab::Videos
+                if !self.space_videos.loaded
+                    && !self.space_videos.loading
+                    && self.space_videos.error.is_none() =>
+            {
+                self.load_space_videos(true, cx);
+            }
+            SpaceTab::Collections
+                if !self.collections.loaded
+                    && !self.collections.loading
+                    && self.collections.error.is_none() =>
+            {
+                self.load_collections(true, cx);
+            }
+            _ => {}
+        }
+    }
+
+    fn reload_tab(&mut self, cx: &mut Context<Self>) {
+        match self.tab {
+            SpaceTab::Dynamics => self.load_dynamics(true, cx),
+            SpaceTab::Videos => self.load_space_videos(true, cx),
+            SpaceTab::Collections => self.load_collections(true, cx),
+        }
+    }
+
+    fn show_tab(&mut self, tab: SpaceTab, cx: &mut Context<Self>) {
+        if self.tab == tab {
+            return;
+        }
+        self.tab = tab;
+        self.load_if_needed(cx);
+        cx.notify();
+    }
+
+    fn submit_search(&mut self, cx: &mut Context<Self>) {
+        let keyword = self.space_search.read(cx).value().trim().to_owned();
+        if keyword == self.space_videos.keyword {
+            return;
+        }
+        self.space_videos.keyword = keyword;
+        self.load_space_videos(true, cx);
+    }
+}
+
+struct DynamicsState {
     items: Vec<DynamicItem>,
     offset: String,
     has_more: bool,
@@ -38,7 +255,7 @@ pub(super) struct DynamicsState {
 }
 
 impl DynamicsState {
-    pub(super) fn new() -> Self {
+    fn new() -> Self {
         Self {
             items: Vec::new(),
             offset: String::new(),
@@ -66,7 +283,7 @@ impl DynamicsState {
     }
 }
 
-pub(super) struct SpaceVideosState {
+struct SpaceVideosState {
     items: Vec<VideoCard>,
     page: u32,
     total: u64,
@@ -83,7 +300,7 @@ pub(super) struct SpaceVideosState {
 }
 
 impl SpaceVideosState {
-    pub(super) fn new() -> Self {
+    fn new() -> Self {
         Self {
             items: Vec::new(),
             page: 0,
@@ -116,7 +333,7 @@ impl SpaceVideosState {
     }
 }
 
-pub(super) struct CollectionsState {
+struct CollectionsState {
     seasons: Vec<SeasonMeta>,
     series: Vec<SeriesMeta>,
     loading: bool,
@@ -126,7 +343,7 @@ pub(super) struct CollectionsState {
 }
 
 impl CollectionsState {
-    pub(super) fn new() -> Self {
+    fn new() -> Self {
         Self {
             seasons: Vec::new(),
             series: Vec::new(),
@@ -152,45 +369,9 @@ impl CollectionsState {
     }
 }
 
-impl MineView {
-    pub(super) fn load_space_if_needed(&mut self, cx: &mut Context<Self>) {
-        match self.tab {
-            MineTab::Dynamics
-                if !self.dynamics.loaded
-                    && !self.dynamics.loading
-                    && self.dynamics.error.is_none() =>
-            {
-                self.load_dynamics(true, cx);
-            }
-            MineTab::Videos
-                if !self.space_videos.loaded
-                    && !self.space_videos.loading
-                    && self.space_videos.error.is_none() =>
-            {
-                self.load_space_videos(true, cx);
-            }
-            MineTab::Collections
-                if !self.collections.loaded
-                    && !self.collections.loading
-                    && self.collections.error.is_none() =>
-            {
-                self.load_collections(true, cx);
-            }
-            _ => {}
-        }
-    }
-
-    pub(super) fn reload_space_tab(&mut self, cx: &mut Context<Self>) {
-        match self.tab {
-            MineTab::Dynamics => self.load_dynamics(true, cx),
-            MineTab::Videos => self.load_space_videos(true, cx),
-            MineTab::Collections => self.load_collections(true, cx),
-            _ => {}
-        }
-    }
-
+impl SpaceView {
     fn load_dynamics(&mut self, reset: bool, cx: &mut Context<Self>) {
-        let Some(mid) = self.space_mid() else {
+        let Some(mid) = self.mid else {
             return;
         };
         if !reset && (self.dynamics.loading || self.dynamics.loading_more) {
@@ -260,7 +441,7 @@ impl MineView {
     }
 
     fn load_space_videos(&mut self, reset: bool, cx: &mut Context<Self>) {
-        let Some(mid) = self.space_mid() else {
+        let Some(mid) = self.mid else {
             return;
         };
         if !reset
@@ -345,17 +526,8 @@ impl MineView {
         self.load_space_videos(true, cx);
     }
 
-    pub(super) fn submit_space_search(&mut self, cx: &mut Context<Self>) {
-        let keyword = self.space_search.read(cx).value().trim().to_owned();
-        if keyword == self.space_videos.keyword {
-            return;
-        }
-        self.space_videos.keyword = keyword;
-        self.load_space_videos(true, cx);
-    }
-
     fn load_collections(&mut self, reset: bool, cx: &mut Context<Self>) {
-        let Some(mid) = self.space_mid() else {
+        let Some(mid) = self.mid else {
             return;
         };
         if !reset && (self.collections.loading || self.collections.loaded) {
@@ -412,11 +584,7 @@ impl MineView {
         );
     }
 
-    pub(super) fn render_external_profile(
-        &self,
-        space: &ExternalSpace,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn render_profile(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let foreground = theme.foreground;
@@ -432,24 +600,38 @@ impl MineView {
         );
         let radius = theme.radius_lg;
 
-        let profile = space.profile.as_ref();
-        let user = profile.map(|profile| &profile.user);
-        let name = user
-            .map(|user| user.name.as_str())
+        let profile = self.profile.as_ref();
+        let seed = login::user(cx).filter(|user| Some(user.mid) == self.mid);
+        let name = profile
+            .map(|profile| profile.user.name.as_str())
             .filter(|name| !name.is_empty())
-            .unwrap_or(space.name.as_str());
-        let face = user.map(|user| user.face.clone()).unwrap_or_default();
-        let sign = user.map(|user| user.sign.clone()).unwrap_or_default();
-        let banner_url = user
-            .map(|user| user.top_photo.as_str())
+            .or_else(|| seed.as_ref().map(|user| user.uname.as_str()))
+            .unwrap_or(self.name.as_str());
+        let face = profile
+            .map(|profile| profile.user.face.clone())
+            .or_else(|| seed.as_ref().map(|user| user.face.clone()))
+            .unwrap_or_default();
+        let sign = profile
+            .map(|profile| profile.user.sign.clone())
+            .unwrap_or_default();
+        let banner_url = profile
+            .map(|profile| profile.user.top_photo.as_str())
             .filter(|url| !url.is_empty());
-        let level = user.map(|user| user.level).unwrap_or(0);
+        let level = profile
+            .map(|profile| profile.user.level)
+            .or_else(|| seed.as_ref().and_then(|user| user.level()))
+            .unwrap_or(0);
         let official = profile
             .and_then(|profile| profile.official_title())
             .map(str::to_owned);
         let vip = profile
             .and_then(|profile| profile.vip_label())
-            .map(str::to_owned);
+            .map(str::to_owned)
+            .or_else(|| {
+                seed.as_ref()
+                    .and_then(|user| user.vip_label())
+                    .map(str::to_owned)
+            });
         let stat_value = |value: Option<u64>| match value {
             Some(value) => format_count(value),
             None => "—".into(),
@@ -457,7 +639,8 @@ impl MineView {
         let following = stat_value(profile.and_then(|profile| profile.following()));
         let follower = stat_value(profile.and_then(|profile| profile.follower()));
         let likes = stat_value(profile.and_then(|profile| profile.likes()));
-        let error = space.error.clone();
+        let loading_sign = self.profile.is_none() && self.profile_loading;
+        let error = self.profile_error.clone();
 
         v_flex()
             .w_full()
@@ -550,7 +733,10 @@ impl MineView {
                             )
                             .child(
                                 div()
-                                    .id(SharedString::from(format!("space-sign-{}", space.mid)))
+                                    .id(SharedString::from(format!(
+                                        "space-sign-{}",
+                                        self.mid.unwrap_or_default()
+                                    )))
                                     .h(px(18.))
                                     .truncate()
                                     .text_sm()
@@ -562,10 +748,12 @@ impl MineView {
                                                 .build(window, cx)
                                         }
                                     })
-                                    .child(if sign.is_empty() {
-                                        "暂无简介".to_owned()
-                                    } else {
+                                    .child(if !sign.is_empty() {
                                         sign.clone()
+                                    } else if loading_sign {
+                                        "正在加载…".to_owned()
+                                    } else {
+                                        "暂无简介".to_owned()
                                     }),
                             ),
                     )
@@ -589,16 +777,14 @@ impl MineView {
                             Button::new("space-profile-retry")
                                 .small()
                                 .label("重试")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.load_external_profile(cx);
-                                })),
+                                .on_click(cx.listener(|this, _, _, cx| this.load_profile(cx))),
                         ),
                 )
             })
             .into_any_element()
     }
 
-    pub(super) fn render_dynamics(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_dynamics(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let muted = cx.theme().muted_foreground;
         let danger = cx.theme().danger;
 
@@ -606,7 +792,7 @@ impl MineView {
             return centered_spinner();
         }
         if let Some(error) = self.dynamics.error.clone() {
-            return error_state(error, danger, "mine-dynamics-retry", cx);
+            return error_state(error, danger, "space-dynamics-retry", cx);
         }
         if self.dynamics.items.is_empty() {
             return empty_state(muted, "暂无动态");
@@ -627,7 +813,7 @@ impl MineView {
                 .into_any_element()
         } else if let Some(error) = self.dynamics.more_error.clone() {
             list_footer(
-                "mine-dynamics-more",
+                "space-dynamics-more",
                 Some(error),
                 muted,
                 danger,
@@ -638,7 +824,7 @@ impl MineView {
                 .h(LIST_FOOTER_HEIGHT)
                 .justify_center()
                 .child(
-                    Button::new("mine-dynamics-more")
+                    Button::new("space-dynamics-more")
                         .small()
                         .ghost()
                         .label("加载更多")
@@ -650,7 +836,7 @@ impl MineView {
         };
 
         div()
-            .id("mine-dynamics-scroll")
+            .id("space-dynamics-scroll")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -691,7 +877,7 @@ impl MineView {
         let like_count = stat.map(|stat| stat.like.count).unwrap_or(0);
 
         v_flex()
-            .id(("mine-dynamic", index))
+            .id(("space-dynamic", index))
             .gap_3()
             .p_4()
             .rounded(radius_lg)
@@ -807,7 +993,7 @@ impl MineView {
         let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(open.clone()));
 
         h_flex()
-            .id(("mine-dynamic-archive", index))
+            .id(("space-dynamic-archive", index))
             .items_center()
             .gap_3()
             .p_2()
@@ -878,7 +1064,7 @@ impl MineView {
         };
 
         v_flex()
-            .id(("mine-dynamic-forward", index))
+            .id(("space-dynamic-forward", index))
             .gap_2()
             .p_3()
             .rounded(radius)
@@ -899,7 +1085,7 @@ impl MineView {
             .into_any_element()
     }
 
-    pub(super) fn render_space_videos(
+    fn render_space_videos(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -933,14 +1119,14 @@ impl MineView {
                     ]
                     .map(|(order, label, index)| {
                         let active = self.space_videos.order == order;
-                        let group = SharedString::from(format!("mine-space-order-{index}"));
+                        let group = SharedString::from(format!("space-order-{index}"));
                         v_flex()
                             .group(group.clone())
                             .items_center()
                             .rounded(radius)
                             .when(!active, |this| this.hover(move |this| this.bg(hover_bg)))
                             .child(
-                                Button::new(("mine-space-order", index))
+                                Button::new(("space-order", index))
                                     .text()
                                     .small()
                                     .px_2()
@@ -993,7 +1179,7 @@ impl MineView {
             return centered_spinner();
         }
         if let Some(error) = self.space_videos.error.clone() {
-            return error_state(error, danger, "mine-space-videos-retry", cx);
+            return error_state(error, danger, "space-videos-retry", cx);
         }
         if self.space_videos.items.is_empty() {
             return empty_state(muted, "暂无投稿");
@@ -1022,7 +1208,7 @@ impl MineView {
         let weak = view.downgrade();
         let list = v_virtual_list(
             view,
-            "mine-space-video-list",
+            "space-video-list",
             sizes,
             move |this, visible_range, _, cx| {
                 this.maybe_load_more_space_videos(visible_range.end.saturating_sub(1), rows, cx);
@@ -1098,7 +1284,7 @@ impl MineView {
                 let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| {
                     cx.emit(open.clone());
                 });
-                video_card(card, style, metrics, on_open)
+                video_card(card, "space-video", style, metrics, on_open)
             }))
             .into_any_element()
     }
@@ -1109,7 +1295,7 @@ impl MineView {
         let more_error = self.space_videos.more_error.clone();
 
         list_footer(
-            "mine-space-videos-more",
+            "space-videos-more",
             more_error,
             muted,
             danger,
@@ -1117,7 +1303,7 @@ impl MineView {
         )
     }
 
-    pub(super) fn render_collections(
+    fn render_collections(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1129,7 +1315,7 @@ impl MineView {
             return centered_spinner();
         }
         if let Some(error) = self.collections.error.clone() {
-            return error_state(error, danger, "mine-collections-retry", cx);
+            return error_state(error, danger, "space-collections-retry", cx);
         }
         if self.collections.is_empty() {
             return v_flex()
@@ -1166,7 +1352,7 @@ impl MineView {
         .collect::<Vec<_>>();
 
         div()
-            .id("mine-collections-scroll")
+            .id("space-collections-scroll")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -1186,6 +1372,97 @@ impl MineView {
                 });
             })
             .child(v_flex().gap_5().pb_4().children(sections))
+            .into_any_element()
+    }
+
+    fn render_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
+        let primary = cx.theme().primary;
+        let muted = cx.theme().muted_foreground;
+        let border = cx.theme().border;
+        let hover_bg = cx.theme().accent.opacity(0.5);
+        let radius = cx.theme().radius;
+
+        h_flex()
+            .flex_shrink_0()
+            .items_end()
+            .gap_4()
+            .border_b_1()
+            .border_color(border)
+            .children(SpaceTab::ALL.map(|tab| {
+                let active = tab == self.tab;
+                let group = SharedString::from(format!("space-tab-{}", tab.index()));
+
+                v_flex()
+                    .group(group.clone())
+                    .items_center()
+                    .gap_1()
+                    .rounded(radius)
+                    .when(!active, |this| this.hover(move |this| this.bg(hover_bg)))
+                    .child(
+                        Button::new(("space-tab", tab.index()))
+                            .text()
+                            .px_2()
+                            .py_1()
+                            .accessibility_label(tab.label())
+                            .on_click(cx.listener(move |this, _, _, cx| this.show_tab(tab, cx)))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(if active { primary } else { muted })
+                                    .group_hover(group, move |this| this.text_color(primary))
+                                    .child(tab.label()),
+                            ),
+                    )
+                    .child(div().h(px(2.)).w(px(24.)).rounded(px(1.)).bg(if active {
+                        primary
+                    } else {
+                        hsla(0., 0., 0., 0.)
+                    }))
+            }))
+            .into_any_element()
+    }
+
+    fn render_body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        match self.tab {
+            SpaceTab::Dynamics => self.render_dynamics(cx),
+            SpaceTab::Videos => self.render_space_videos(window, cx),
+            SpaceTab::Collections => self.render_collections(window, cx),
+        }
+    }
+}
+
+impl Refresh for SpaceView {
+    fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.load_profile(cx);
+        self.reload_tab(cx);
+    }
+
+    fn can_refresh(&self) -> bool {
+        self.mid.is_some()
+    }
+}
+
+impl Render for SpaceView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.mid.is_none() {
+            return div().size_full().into_any_element();
+        }
+
+        let background = cx.theme().background;
+        let foreground = cx.theme().foreground;
+        let profile = self.render_profile(cx);
+
+        v_flex()
+            .size_full()
+            .gap_4()
+            .px_6()
+            .pt_6()
+            .pb_6()
+            .bg(background)
+            .text_color(foreground)
+            .child(profile)
+            .child(self.render_tabs(cx))
+            .child(self.render_body(window, cx))
             .into_any_element()
     }
 }
@@ -1227,7 +1504,7 @@ fn render_collection_section(
     columns: usize,
     width: Pixels,
     muted: Hsla,
-    cx: &Context<MineView>,
+    cx: &Context<SpaceView>,
 ) -> AnyElement {
     let rows = cards
         .chunks(columns)
@@ -1345,7 +1622,7 @@ fn error_state(
     error: String,
     danger: Hsla,
     id: &'static str,
-    cx: &mut Context<MineView>,
+    cx: &mut Context<SpaceView>,
 ) -> AnyElement {
     v_flex()
         .flex_1()
@@ -1357,7 +1634,7 @@ fn error_state(
         .child(
             Button::new(id)
                 .label("重试")
-                .on_click(cx.listener(|this, _, _, cx| this.reload_space_tab(cx))),
+                .on_click(cx.listener(|this, _, _, cx| this.reload_tab(cx))),
         )
         .into_any_element()
 }

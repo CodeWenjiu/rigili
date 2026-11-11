@@ -1,30 +1,26 @@
-rigili_macro::mod_prv!(create_folder, feed, list, sort_folders, space);
+rigili_macro::mod_prv!(create_folder, feed, list, sort_folders);
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
-use gpui_kit::component::input::{InputEvent, InputState};
+
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_bilibili::{BangumiFollow, FavFolder, NavStat, SpaceProfile};
+use rigili_bilibili::{BangumiFollow, FavFolder, NavStat};
 use rigili_core::backend::{self, Backend};
 use rigili_core::runtime::spawn_api;
-use rigili_core::{OpenVideo, Refresh, format_count};
+use rigili_core::{OpenSpace, OpenVideo, Refresh, format_count};
 
-use crate::grid::VideoCard;
+use crate::grid::{VideoCard, profile_badge, profile_stat};
 use crate::login;
 use create_folder::CreateFolderDialog;
 use rigili_core::api_task_error_message;
 use sort_folders::SortFoldersDialog;
-use space::{CollectionsState, DynamicsState, SpaceVideosState};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum MineTab {
-    Dynamics,
-    Videos,
-    Collections,
     History,
     Offline,
     #[default]
@@ -33,10 +29,7 @@ pub(crate) enum MineTab {
 }
 
 impl MineTab {
-    pub(crate) const ALL: [Self; 7] = [
-        Self::Dynamics,
-        Self::Videos,
-        Self::Collections,
+    pub(crate) const ALL: [Self; 4] = [
         Self::History,
         Self::Offline,
         Self::Favorites,
@@ -45,9 +38,6 @@ impl MineTab {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Dynamics => "动态",
-            Self::Videos => "投稿",
-            Self::Collections => "合集和系列",
             Self::History => "历史记录",
             Self::Offline => "离线缓存",
             Self::Favorites => "我的收藏",
@@ -57,48 +47,19 @@ impl MineTab {
 
     fn index(self) -> usize {
         match self {
-            Self::Dynamics => 0,
-            Self::Videos => 1,
-            Self::Collections => 2,
-            Self::History => 3,
-            Self::Offline => 4,
-            Self::Favorites => 5,
-            Self::WatchLater => 6,
+            Self::History => 0,
+            Self::Offline => 1,
+            Self::Favorites => 2,
+            Self::WatchLater => 3,
         }
     }
 
     fn list_id(self) -> &'static str {
         match self {
-            Self::Dynamics => "mine-dynamics-list",
-            Self::Videos => "mine-space-videos-list",
-            Self::Collections => "mine-collections-list",
             Self::History => "mine-history-list",
             Self::Offline => "mine-offline-list",
             Self::Favorites => "mine-favorites-list",
             Self::WatchLater => "mine-watch-later-list",
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct CloseSpace;
-
-pub(super) struct ExternalSpace {
-    pub(super) mid: u64,
-    pub(super) name: String,
-    pub(super) profile: Option<SpaceProfile>,
-    pub(super) loading: bool,
-    pub(super) error: Option<String>,
-}
-
-impl ExternalSpace {
-    fn new(mid: u64, name: String) -> Self {
-        Self {
-            mid,
-            name,
-            profile: None,
-            loading: false,
-            error: None,
         }
     }
 }
@@ -280,9 +241,6 @@ pub struct MineView {
     favorites: VideoListState,
     history: VideoListState,
     watch_later: VideoListState,
-    dynamics: DynamicsState,
-    space_videos: SpaceVideosState,
-    collections: CollectionsState,
     collected: CollectedState,
     bangumi: BangumiState,
     cinema: BangumiState,
@@ -294,24 +252,15 @@ pub struct MineView {
     opening: Option<u64>,
     notice: Option<String>,
     user_mid: Option<u64>,
-    external: Option<ExternalSpace>,
     list_width: Pixels,
-    space_search: Entity<InputState>,
-    _space_search_sub: Subscription,
 }
 
 impl EventEmitter<OpenVideo> for MineView {}
-impl EventEmitter<CloseSpace> for MineView {}
+impl EventEmitter<OpenSpace> for MineView {}
 
 impl MineView {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         let backend = backend::get(cx).ok();
-        let space_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索投稿视频"));
-        let space_search_sub = cx.subscribe_in(&space_search, window, |this, _, event, _, cx| {
-            if let InputEvent::PressEnter { .. } = event {
-                this.submit_space_search(cx);
-            }
-        });
         Self {
             backend,
             tab: MineTab::default(),
@@ -319,9 +268,6 @@ impl MineView {
             favorites: VideoListState::new(),
             history: VideoListState::new(),
             watch_later: VideoListState::new(),
-            dynamics: DynamicsState::new(),
-            space_videos: SpaceVideosState::new(),
-            collections: CollectionsState::new(),
             collected: CollectedState::new(),
             bangumi: BangumiState::new(),
             cinema: BangumiState::new(),
@@ -333,10 +279,7 @@ impl MineView {
             opening: None,
             notice: None,
             user_mid: None,
-            external: None,
             list_width: px(0.),
-            space_search,
-            _space_search_sub: space_search_sub,
         }
     }
 
@@ -354,12 +297,9 @@ impl MineView {
 
     fn state(&self, tab: MineTab) -> &VideoListState {
         match tab {
-            MineTab::History => &self.history,
+            MineTab::History | MineTab::Offline => &self.history,
             MineTab::Favorites => &self.favorites,
             MineTab::WatchLater => &self.watch_later,
-            MineTab::Offline | MineTab::Dynamics | MineTab::Videos | MineTab::Collections => {
-                &self.history
-            }
         }
     }
 
@@ -367,107 +307,9 @@ impl MineView {
         if self.tab == tab {
             return;
         }
-        if self.external.is_some()
-            && !matches!(
-                tab,
-                MineTab::Dynamics | MineTab::Videos | MineTab::Collections
-            )
-        {
-            return;
-        }
         self.tab = tab;
         self.load_if_needed(cx);
         cx.notify();
-    }
-
-    pub(super) fn space_mid(&self) -> Option<u64> {
-        self.external
-            .as_ref()
-            .map(|space| space.mid)
-            .or(self.user_mid)
-    }
-
-    pub(crate) fn open_external_space(
-        &mut self,
-        mid: u64,
-        name: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.external = Some(ExternalSpace::new(mid, name));
-        self.tab = MineTab::Videos;
-        self.dynamics = DynamicsState::new();
-        self.space_videos = SpaceVideosState::new();
-        self.collections = CollectionsState::new();
-        self.space_search
-            .update(cx, |input, cx| input.set_value("", window, cx));
-        self.notice = None;
-        self.load_external_profile(cx);
-        self.load_space_if_needed(cx);
-        cx.notify();
-    }
-
-    pub(crate) fn close_external_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.external.take().is_none() {
-            return;
-        }
-        self.dynamics = DynamicsState::new();
-        self.space_videos = SpaceVideosState::new();
-        self.collections = CollectionsState::new();
-        self.space_search
-            .update(cx, |input, cx| input.set_value("", window, cx));
-        self.tab = MineTab::default();
-        self.notice = None;
-        self.load_if_needed(cx);
-        cx.notify();
-    }
-
-    pub(super) fn load_external_profile(&mut self, cx: &mut Context<Self>) {
-        let Some(mid) = self.external.as_ref().map(|space| space.mid) else {
-            return;
-        };
-        let backend = match self.backend(cx) {
-            Ok(backend) => backend,
-            Err(error) => {
-                if let Some(space) = self.external.as_mut() {
-                    space.loading = false;
-                    space.error = Some(error);
-                }
-                cx.notify();
-                return;
-            }
-        };
-        if let Some(space) = self.external.as_mut() {
-            if space.loading {
-                return;
-            }
-            space.loading = true;
-            space.profile = None;
-            space.error = None;
-        }
-        cx.notify();
-
-        spawn_api(
-            cx,
-            async move { backend.space_profile(mid).await },
-            move |this, result, cx| {
-                let Some(space) = this.external.as_mut() else {
-                    return;
-                };
-                if space.mid != mid {
-                    return;
-                }
-                space.loading = false;
-                match result {
-                    Ok(profile) => {
-                        space.profile = Some(profile);
-                        space.error = None;
-                    }
-                    Err(error) => space.error = Some(api_task_error_message(error, cx)),
-                }
-                cx.notify();
-            },
-        );
     }
 
     fn sync_user(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -492,17 +334,6 @@ impl MineView {
         self.opening = None;
         self.notice = None;
 
-        if self.external.is_some() {
-            cx.notify();
-            return;
-        }
-
-        self.dynamics = DynamicsState::new();
-        self.space_videos = SpaceVideosState::new();
-        self.collections = CollectionsState::new();
-        self.space_search
-            .update(cx, |input, cx| input.set_value("", window, cx));
-
         let weak = cx.entity().downgrade();
         window.defer(cx, move |_, cx| {
             let _ = weak.update(cx, |this, cx| {
@@ -513,10 +344,6 @@ impl MineView {
     }
 
     fn render_profile(&self, cx: &mut Context<Self>) -> AnyElement {
-        if let Some(space) = self.external.as_ref() {
-            return self.render_external_profile(space, cx);
-        }
-
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let primary = theme.primary;
@@ -582,6 +409,7 @@ impl MineView {
             format_balance(user.coins().unwrap_or(0.))
         );
         let mid = user.mid;
+        let space_name = user.uname.clone();
 
         h_flex()
             .w_full()
@@ -641,7 +469,10 @@ impl MineView {
                     .text_color(muted)
                     .label("个人空间 >")
                     .on_click(cx.listener(move |_, _, _, cx| {
-                        cx.open_url(&format!("https://space.bilibili.com/{mid}"));
+                        cx.emit(OpenSpace {
+                            mid,
+                            name: space_name.clone(),
+                        });
                     })),
             )
             .into_any_element()
@@ -654,19 +485,13 @@ impl MineView {
         let hover_bg = cx.theme().accent.opacity(0.5);
         let radius = cx.theme().radius;
 
-        let tabs: &[MineTab] = if self.external.is_some() {
-            &[MineTab::Dynamics, MineTab::Videos, MineTab::Collections]
-        } else {
-            &MineTab::ALL
-        };
-
         h_flex()
             .flex_shrink_0()
             .items_end()
             .gap_4()
             .border_b_1()
             .border_color(border)
-            .children(tabs.iter().copied().map(|tab| {
+            .children(MineTab::ALL.map(|tab| {
                 let active = tab == self.tab;
                 let group = SharedString::from(format!("mine-tab-{}", tab.index()));
 
@@ -971,9 +796,6 @@ impl MineView {
         }
 
         let content = match self.tab {
-            MineTab::Dynamics => self.render_dynamics(cx),
-            MineTab::Videos => self.render_space_videos(window, cx),
-            MineTab::Collections => self.render_collections(window, cx),
             MineTab::Favorites => match self.favorites_view {
                 FavoriteView::Folder => self.render_content(MineTab::Favorites, window, cx),
                 FavoriteView::Folders => {
@@ -1010,12 +832,6 @@ impl MineView {
 
 impl Refresh for MineView {
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        if self.external.is_some() {
-            self.load_external_profile(cx);
-            self.reload_space_tab(cx);
-            return;
-        }
-
         self.stat = None;
         self.stat_loading = false;
         self.stat_error = None;
@@ -1036,15 +852,12 @@ impl Refresh for MineView {
             MineTab::History => self.load_history(cx),
             MineTab::WatchLater => self.load_watch_later(cx),
             MineTab::Offline => {}
-            MineTab::Dynamics | MineTab::Videos | MineTab::Collections => {
-                self.reload_space_tab(cx);
-            }
         }
         self.load_stat(cx);
     }
 
     fn can_refresh(&self) -> bool {
-        self.space_mid().is_some() && self.tab != MineTab::Offline
+        self.user_mid.is_some() && self.tab != MineTab::Offline
     }
 }
 
@@ -1054,7 +867,7 @@ impl Render for MineView {
 
         let background = cx.theme().background;
         let foreground = cx.theme().foreground;
-        let show_body = self.user_mid.is_some() || self.external.is_some();
+        let show_body = self.user_mid.is_some();
         let profile = self.render_profile(cx);
         let notice = self.notice.clone();
 
@@ -1082,33 +895,6 @@ impl Render for MineView {
                     .child(self.render_body(window, cx))
             })
     }
-}
-
-fn profile_badge(label: impl Into<SharedString>, background: Hsla, foreground: Hsla) -> AnyElement {
-    div()
-        .flex_shrink_0()
-        .px_2()
-        .py_1()
-        .rounded(px(4.))
-        .bg(background)
-        .text_color(foreground)
-        .text_xs()
-        .child(label.into())
-        .into_any_element()
-}
-
-fn profile_stat(label: &'static str, value: String, cx: &App) -> AnyElement {
-    v_flex()
-        .items_center()
-        .gap_1()
-        .child(div().text_lg().child(value))
-        .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(label),
-        )
-        .into_any_element()
 }
 
 fn format_balance(value: f64) -> String {

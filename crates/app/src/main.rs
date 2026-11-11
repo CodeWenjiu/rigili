@@ -1,4 +1,4 @@
-rigili_macro::mod_prv!(grid, home, login, mine, platform, search, shell);
+rigili_macro::mod_prv!(grid, home, login, mine, platform, search, shell, space);
 
 use crate::platform::assets::AppAssets;
 

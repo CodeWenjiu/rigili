@@ -8,7 +8,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::{FavoriteView, FolderSource, MineTab, MineView};
-use crate::grid::VideoCard;
+
 use crate::grid::{
     BangumiCards, CARD_GAP, CardGrid, CardMetrics, CardOverlay, CardStyle, FolderCards,
     LIST_FOOTER_HEIGHT, MediaCard, VideoCards, card_text_height, list_footer, media_card,
@@ -441,7 +441,7 @@ impl MineView {
                 let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| {
                     cx.emit(open.clone());
                 });
-                video_card(card, style, metrics, on_open)
+                crate::grid::video_card(card, "mine-video", style, metrics, on_open)
             }))
             .into_any_element()
     }
@@ -535,40 +535,6 @@ impl MineView {
             .child(Scrollbar::vertical(&self.state(tab).scroll).viewport_from_layout())
             .into_any_element()
     }
-}
-
-pub(super) fn video_card(
-    card: &VideoCard,
-    style: CardStyle,
-    metrics: CardMetrics,
-    on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> AnyElement {
-    let views = card.views();
-    let danmaku = card.danmaku();
-    let duration = card.duration();
-
-    media_card(
-        MediaCard {
-            id: SharedString::from(format!("mine-video-{}", card.bvid())),
-            cover: card.cover(),
-            title: card.title(),
-            footer: card.meta(),
-            footer_icon: None,
-            author: None,
-            overlay: CardOverlay {
-                leading: (!views.is_empty()).then_some((IconName::Play, views)),
-                secondary: (!danmaku.is_empty())
-                    .then_some((Some(IconName::MessageCircle), danmaku)),
-                trailing: (!duration.is_empty()).then_some(duration),
-                badge: None,
-            },
-        },
-        style,
-        metrics.width,
-        metrics.text_height,
-        on_open,
-    )
-    .into_any_element()
 }
 
 fn folder_card(
