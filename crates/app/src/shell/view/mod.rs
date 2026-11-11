@@ -17,6 +17,7 @@ use super::playback::Playback;
 use crate::home::{HomeTab, HomeView};
 use crate::login;
 use crate::mine::MineView;
+use crate::platform::image_cache;
 use crate::search::SearchView;
 use crate::space::{CloseSpace, SpaceView};
 use rigili_playback::PlaybackRequest;
@@ -615,6 +616,7 @@ impl Render for MainView {
             .size_full()
             .bg(background)
             .text_color(foreground)
+            .image_cache(image_cache::get(cx))
             .child(self.render_sidebar(cx))
             .child(
                 v_flex()

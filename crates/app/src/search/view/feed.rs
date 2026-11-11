@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use gpui_kit::*;
 use rigili_bilibili::ApiError;
 use rigili_bilibili::api::search::{SearchOrder, SearchType};
@@ -7,7 +9,7 @@ use super::{SearchTab, SearchView};
 use rigili_core::backend::{self, Backend};
 use rigili_core::runtime::{ApiTaskError, spawn_api};
 
-use crate::grid::{VideoCard, append_unique_by};
+use crate::grid::{VideoCard, append_unique_by, index_by};
 use rigili_core::{api_error_message, api_task_error_message};
 
 struct Page {
@@ -51,6 +53,7 @@ impl SearchView {
             let state = self.state_mut(tab);
             state.generation += 1;
             state.items.clear();
+            state.seen.clear();
             state.users.clear();
             state.page = 0;
             state.num_pages = 0;
@@ -111,12 +114,16 @@ impl SearchView {
                                     else {
                                         return;
                                     };
-                                    let mut preview = incoming;
-                                    append_unique_by(
-                                        &mut preview,
-                                        std::mem::take(&mut user.preview),
-                                        |card| card.bvid().to_owned(),
-                                    );
+                                    let mut seen = HashSet::new();
+                                    let mut preview = Vec::new();
+                                    for card in incoming
+                                        .into_iter()
+                                        .chain(std::mem::take(&mut user.preview))
+                                    {
+                                        if seen.insert(card.bvid().to_owned()) {
+                                            preview.push(card);
+                                        }
+                                    }
                                     user.preview = preview;
                                     cx.notify();
                                 },
@@ -156,6 +163,7 @@ impl SearchView {
                 state.page = page_number;
                 state.num_pages = page.num_pages;
                 state.items = page.items;
+                state.seen = index_by(&state.items, SearchItem::key);
                 state.loaded = true;
                 state.scroll.scroll_to_item(0, ScrollStrategy::Top);
             }
@@ -197,7 +205,12 @@ impl SearchView {
                     Ok(fetched) => {
                         state.page = page;
                         state.num_pages = fetched.num_pages;
-                        append_unique_by(&mut state.items, fetched.items, SearchItem::key);
+                        append_unique_by(
+                            &mut state.items,
+                            &mut state.seen,
+                            fetched.items,
+                            SearchItem::key,
+                        );
                     }
                     Err(error) => state.more_error = Some(api_task_error_message(error, cx)),
                 }

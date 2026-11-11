@@ -1,3 +1,4 @@
+use gpui_kit::SharedString;
 use rigili_bilibili::{SearchArticle, SearchLiveRoom, SearchMedia, SearchUser};
 
 use crate::grid::VideoCard;
@@ -24,6 +25,7 @@ impl SearchItem {
 }
 
 pub(crate) struct MediaItem {
+    pub(crate) id: SharedString,
     pub(crate) season_id: u64,
     pub(crate) cover: String,
     pub(crate) title: String,
@@ -34,6 +36,7 @@ pub(crate) struct MediaItem {
 }
 
 pub(crate) struct LiveItem {
+    pub(crate) id: SharedString,
     pub(crate) room_id: u64,
     pub(crate) cover: String,
     pub(crate) title: String,
@@ -66,6 +69,7 @@ pub(crate) struct UserItem {
 impl From<SearchMedia> for MediaItem {
     fn from(media: SearchMedia) -> Self {
         Self {
+            id: SharedString::from(format!("search-pgc-{}", media.season_id)),
             season_id: media.season_id,
             cover: media.cover,
             title: media.title,
@@ -86,6 +90,7 @@ impl From<SearchLiveRoom> for LiveItem {
         };
 
         Self {
+            id: SharedString::from(format!("search-live-{}", room.room_id)),
             room_id: room.room_id,
             cover: room.cover,
             title: room.title,

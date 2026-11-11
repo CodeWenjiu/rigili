@@ -219,12 +219,13 @@ fn home_card(
 ) -> AnyElement {
     let card = media_card(
         MediaCard {
-            id: SharedString::from(item.key()),
+            id: item.id().clone(),
             cover: item.cover(),
             title: item.title(),
             footer: Some(item.footer()),
             footer_icon: None,
             title_lines: 2,
+            thumb_width: metrics.thumb_width,
             overlay: CardOverlay {
                 leading: item.leading(),
                 secondary: item.secondary(),

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use gpui_kit::assets::IconName;
 use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
@@ -12,16 +14,18 @@ use rigili_core::runtime::spawn_api;
 use rigili_core::{api_error_message, api_task_error_message, format_count, format_date};
 
 use crate::grid::append_unique_by;
+use crate::platform::image_cache;
 
 pub(super) fn open(dynamic: DynamicItem, window: &mut Window, cx: &mut App) {
     let view = cx.new(|_| CommentsView::new(dynamic));
     view.update(cx, |view, cx| view.load(true, cx));
-    window.open_sheet(cx, move |sheet, _, _| {
-        sheet
-            .title("评论")
-            .size(px(480.))
-            .resizable(false)
-            .child(view.clone())
+    window.open_sheet(cx, move |sheet, _, cx| {
+        sheet.title("评论").size(px(480.)).resizable(false).child(
+            div()
+                .size_full()
+                .image_cache(image_cache::get(cx))
+                .child(view.clone()),
+        )
     });
 }
 
@@ -30,6 +34,7 @@ struct CommentsView {
     dynamic: DynamicItem,
     sort: CommentSort,
     items: Vec<Comment>,
+    seen: HashSet<String>,
     page: u32,
     total: u64,
     has_more: bool,
@@ -48,6 +53,7 @@ impl CommentsView {
             dynamic,
             sort: CommentSort::default(),
             items: Vec::new(),
+            seen: HashSet::new(),
             page: 0,
             total: 0,
             has_more: true,
@@ -96,6 +102,7 @@ impl CommentsView {
         let generation = if reset {
             self.generation += 1;
             self.items.clear();
+            self.seen.clear();
             self.page = 0;
             self.total = 0;
             self.has_more = true;
@@ -129,7 +136,7 @@ impl CommentsView {
                         } = page_data;
                         let incoming = replies.unwrap_or_default();
                         let incoming_empty = incoming.is_empty();
-                        append_unique_by(&mut this.items, incoming, |comment| {
+                        append_unique_by(&mut this.items, &mut this.seen, incoming, |comment| {
                             comment.rpid.to_string()
                         });
                         this.page = if info.num == 0 { page } else { info.num };

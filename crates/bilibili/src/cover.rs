@@ -1,28 +1,39 @@
+use std::fmt::Write;
+
 /// Builds a 16:9 thumbnail URL for a Bilibili cover image.
 pub fn thumbnail(url: &str, width: u32) -> String {
-    let base = image_base(url);
+    let (prefix, rest) = image_parts(url);
     let height = width * 9 / 16;
-    format!("{base}@{width}w_{height}h_1c.webp")
+    let mut out = String::with_capacity(prefix.len() + rest.len() + 24);
+    out.push_str(prefix);
+    out.push_str(rest);
+    let _ = write!(out, "@{width}w_{height}h_1c.webp");
+    out
 }
 
 /// Builds a width-only URL for wide images such as space banners.
 pub fn banner(url: &str, width: u32) -> String {
-    let base = image_base(url);
-    format!("{base}@{width}w_1c.webp")
+    let (prefix, rest) = image_parts(url);
+    let mut out = String::with_capacity(prefix.len() + rest.len() + 16);
+    out.push_str(prefix);
+    out.push_str(rest);
+    let _ = write!(out, "@{width}w_1c.webp");
+    out
 }
 
-fn image_base(url: &str) -> String {
+fn image_parts(url: &str) -> (&'static str, &str) {
     let rest = url
         .strip_prefix("http://")
         .or_else(|| url.strip_prefix("https://"))
         .or_else(|| url.strip_prefix("//"))
         .unwrap_or(url);
     let rest = rest.split('@').next().unwrap_or(rest);
-    if rest.starts_with("bfs/") {
-        format!("https://i0.hdslb.com/{rest}")
+    let prefix = if rest.starts_with("bfs/") {
+        "https://i0.hdslb.com/"
     } else {
-        format!("https://{rest}")
-    }
+        "https://"
+    };
+    (prefix, rest)
 }
 
 #[cfg(test)]

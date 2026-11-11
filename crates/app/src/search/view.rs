@@ -1,6 +1,6 @@
 rigili_macro::mod_prv!(cards, feed, items, list, toolbar, user);
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::*;
@@ -114,6 +114,7 @@ enum SearchLayout {
 
 struct TabState {
     items: Vec<SearchItem>,
+    seen: HashSet<String>,
     users: Vec<items::UserItem>,
     page: u32,
     num_pages: u32,
@@ -130,6 +131,7 @@ impl TabState {
     fn new() -> Self {
         Self {
             items: Vec::new(),
+            seen: HashSet::new(),
             users: Vec::new(),
             page: 0,
             num_pages: 0,

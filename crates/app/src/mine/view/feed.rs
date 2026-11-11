@@ -4,7 +4,7 @@ use super::{FavoriteView, FolderSource, MineTab, MineView, VideoListState};
 use rigili_core::backend::{self, Backend};
 use rigili_core::runtime::spawn_api;
 
-use crate::grid::{VideoCard, append_unique_by};
+use crate::grid::{VideoCard, append_unique_by, index_by};
 use rigili_core::{api_error_message, api_task_error_message};
 
 const BANGUMI_PAGE_SIZE: usize = 20;
@@ -189,6 +189,8 @@ impl MineView {
                         this.favorites.page = 1;
                         this.favorites.has_more = page.has_more;
                         this.favorites.items = favorite_cards(page.into_items());
+                        this.favorites.seen =
+                            index_by(&this.favorites.items, |card| card.bvid().to_owned());
                         this.favorites.scroll.scroll_to_item(0, ScrollStrategy::Top);
                     }
                     Err(error) => this.favorites.error = Some(api_task_error_message(error, cx)),
@@ -237,6 +239,7 @@ impl MineView {
                         this.favorites.has_more = page_result.has_more;
                         append_unique_by(
                             &mut this.favorites.items,
+                            &mut this.favorites.seen,
                             favorite_cards(page_result.into_items()),
                             |card| card.bvid().to_owned(),
                         );
@@ -284,6 +287,8 @@ impl MineView {
                         this.history.cursor_view_at = page.cursor.view_at;
                         this.history.has_more = !page.list.is_empty();
                         this.history.items = history_cards(page.list);
+                        this.history.seen =
+                            index_by(&this.history.items, |card| card.bvid().to_owned());
                         this.history.scroll.scroll_to_item(0, ScrollStrategy::Top);
                     }
                     Err(error) => this.history.error = Some(api_task_error_message(error, cx)),
@@ -331,6 +336,7 @@ impl MineView {
                         this.history.has_more = !page.list.is_empty();
                         append_unique_by(
                             &mut this.history.items,
+                            &mut this.history.seen,
                             history_cards(page.list),
                             |card| card.bvid().to_owned(),
                         );
@@ -375,6 +381,8 @@ impl MineView {
                 match result {
                     Ok(page) => {
                         this.watch_later.items = watch_later_cards(page.into_items());
+                        this.watch_later.seen =
+                            index_by(&this.watch_later.items, |card| card.bvid().to_owned());
                         this.watch_later
                             .scroll
                             .scroll_to_item(0, ScrollStrategy::Top);

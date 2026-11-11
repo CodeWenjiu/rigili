@@ -1,5 +1,7 @@
 rigili_macro::mod_prv!(feed, list);
 
+use std::collections::HashSet;
+
 use gpui_kit::assets::IconName;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::*;
@@ -68,6 +70,7 @@ pub(crate) enum HomeItem {
 }
 
 pub(crate) struct LiveCard {
+    id: SharedString,
     room_id: u64,
     cover: String,
     title: String,
@@ -76,6 +79,7 @@ pub(crate) struct LiveCard {
 }
 
 pub(crate) struct PgcCard {
+    id: SharedString,
     season_id: u64,
     cover: String,
     title: String,
@@ -93,6 +97,14 @@ pub(crate) enum OpenTarget {
 }
 
 impl HomeItem {
+    pub(crate) fn id(&self) -> &SharedString {
+        match self {
+            Self::Video(video) => video.id(),
+            Self::Live(live) => &live.id,
+            Self::Pgc(pgc) => &pgc.id,
+        }
+    }
+
     pub(crate) fn key(&self) -> String {
         match self {
             Self::Video(video) => format!("video:{}", video.bvid()),
@@ -209,6 +221,7 @@ impl From<LiveRoom> for HomeItem {
         };
 
         Self::Live(LiveCard {
+            id: SharedString::from(format!("live:{}", room.roomid)),
             room_id: room.roomid,
             cover,
             title: room.title,
@@ -221,6 +234,7 @@ impl From<LiveRoom> for HomeItem {
 impl From<PgcItem> for HomeItem {
     fn from(item: PgcItem) -> Self {
         Self::Pgc(PgcCard {
+            id: SharedString::from(format!("pgc:{}", item.season_id)),
             season_id: item.season_id,
             cover: item.cover,
             title: item.title,
@@ -234,6 +248,7 @@ impl From<PgcItem> for HomeItem {
 
 pub(crate) struct TabState {
     items: Vec<HomeItem>,
+    seen: HashSet<String>,
     page: u32,
     has_more: bool,
     loading: bool,
@@ -248,6 +263,7 @@ impl TabState {
     fn new() -> Self {
         Self {
             items: Vec::new(),
+            seen: HashSet::new(),
             page: 0,
             has_more: false,
             loading: false,
@@ -372,6 +388,7 @@ impl Render for HomeView {
 #[cfg(test)]
 mod tests {
     use super::{HomeItem, HomeTab, OpenTarget, PgcCard};
+    use gpui_kit::SharedString;
     use gpui_kit::assets::IconName;
     use rigili_bilibili::PgcItem;
 
@@ -416,6 +433,7 @@ mod tests {
     #[test]
     fn leaves_empty_subtitles_and_badges_out_of_cards() {
         let card = PgcCard {
+            id: SharedString::from("pgc:1"),
             season_id: 1,
             cover: String::new(),
             title: "作品".into(),

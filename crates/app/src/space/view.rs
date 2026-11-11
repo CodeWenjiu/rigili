@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
@@ -241,6 +242,7 @@ impl SpaceView {
 
 struct DynamicsState {
     items: Vec<DynamicItem>,
+    seen: HashSet<String>,
     offset: String,
     has_more: bool,
     loading: bool,
@@ -255,6 +257,7 @@ impl DynamicsState {
     fn new() -> Self {
         Self {
             items: Vec::new(),
+            seen: HashSet::new(),
             offset: String::new(),
             has_more: false,
             loading: false,
@@ -269,6 +272,7 @@ impl DynamicsState {
     fn reset(&mut self) -> u64 {
         self.generation += 1;
         self.items.clear();
+        self.seen.clear();
         self.offset.clear();
         self.has_more = true;
         self.loading = true;
@@ -282,6 +286,7 @@ impl DynamicsState {
 
 struct SpaceVideosState {
     items: Vec<VideoCard>,
+    seen: HashSet<String>,
     page: u32,
     total: u64,
     keyword: String,
@@ -300,6 +305,7 @@ impl SpaceVideosState {
     fn new() -> Self {
         Self {
             items: Vec::new(),
+            seen: HashSet::new(),
             page: 0,
             total: 0,
             keyword: String::new(),
@@ -318,6 +324,7 @@ impl SpaceVideosState {
     fn reset(&mut self) -> u64 {
         self.generation += 1;
         self.items.clear();
+        self.seen.clear();
         self.page = 0;
         self.total = 0;
         self.has_more = true;
@@ -410,9 +417,12 @@ impl SpaceView {
                 this.dynamics.loading_more = false;
                 match result {
                     Ok(page) => {
-                        append_unique_by(&mut this.dynamics.items, page.items, |item| {
-                            item.id_str.clone()
-                        });
+                        append_unique_by(
+                            &mut this.dynamics.items,
+                            &mut this.dynamics.seen,
+                            page.items,
+                            |item| item.id_str.clone(),
+                        );
                         this.dynamics.offset = page.offset;
                         this.dynamics.has_more = page.has_more;
                         this.dynamics.loaded = true;
@@ -486,9 +496,12 @@ impl SpaceView {
                             .map(VideoCard::from)
                             .collect::<Vec<_>>();
                         let incoming_empty = incoming.is_empty();
-                        append_unique_by(&mut this.space_videos.items, incoming, |card| {
-                            card.bvid().to_owned()
-                        });
+                        append_unique_by(
+                            &mut this.space_videos.items,
+                            &mut this.space_videos.seen,
+                            incoming,
+                            |card| card.bvid().to_owned(),
+                        );
                         this.space_videos.page = page.page.pn;
                         this.space_videos.total = page.page.count;
                         this.space_videos.has_more = !incoming_empty
@@ -1300,7 +1313,7 @@ impl SpaceView {
                 let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| {
                     cx.emit(open.clone());
                 });
-                video_card(card, "space-video", style, metrics, on_open)
+                video_card(card, style, metrics, on_open)
             }))
             .into_any_element()
     }

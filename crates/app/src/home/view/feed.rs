@@ -6,7 +6,7 @@ use rigili_core::OpenLive;
 use rigili_core::backend;
 use rigili_core::runtime::{ApiTaskError, spawn_api};
 
-use crate::grid::{VideoCard, append_unique_by};
+use crate::grid::{VideoCard, append_unique_by, index_by};
 use rigili_core::{api_error_message, api_task_error_message};
 
 const VIDEO_PAGE_SIZE: u32 = 30;
@@ -44,6 +44,7 @@ impl HomeView {
             state.error = None;
             state.more_error = None;
             state.items.clear();
+            state.seen.clear();
             state.page = 0;
             state.has_more = false;
             state.generation
@@ -102,6 +103,7 @@ impl HomeView {
                 state.page = 1;
                 state.has_more = page.has_more;
                 state.items = page.items;
+                state.seen = index_by(&state.items, HomeItem::key);
                 state.scroll.scroll_to_item(0, ScrollStrategy::Top);
             }
             Err(error) => state.error = Some(api_task_error_message(error, cx)),
@@ -191,7 +193,7 @@ impl HomeView {
             Ok(page) => {
                 state.page = page_number;
                 state.has_more = page.has_more;
-                append_unique_by(&mut state.items, page.items, HomeItem::key);
+                append_unique_by(&mut state.items, &mut state.seen, page.items, HomeItem::key);
             }
             Err(error) => state.more_error = Some(api_task_error_message(error, cx)),
         }

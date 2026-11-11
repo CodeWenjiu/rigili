@@ -1,5 +1,7 @@
 rigili_macro::mod_prv!(create_folder, feed, list, sort_folders);
 
+use std::collections::HashSet;
+
 use gpui_kit::assets::IconName;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::avatar::Avatar;
@@ -66,6 +68,7 @@ impl MineTab {
 
 pub(crate) struct VideoListState {
     items: Vec<VideoCard>,
+    seen: HashSet<String>,
     page: u32,
     cursor_max: u64,
     cursor_view_at: i64,
@@ -113,6 +116,7 @@ impl VideoListState {
     fn new() -> Self {
         Self {
             items: Vec::new(),
+            seen: HashSet::new(),
             page: 0,
             cursor_max: 0,
             cursor_view_at: 0,
@@ -130,6 +134,7 @@ impl VideoListState {
     fn reset(&mut self) -> u64 {
         self.generation += 1;
         self.items.clear();
+        self.seen.clear();
         self.page = 0;
         self.cursor_max = 0;
         self.cursor_view_at = 0;

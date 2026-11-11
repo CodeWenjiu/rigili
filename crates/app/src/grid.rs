@@ -51,7 +51,12 @@ pub(crate) trait CardGrid {
 
     fn metrics(width: Pixels, text_height: Pixels, scale_factor: f32) -> CardMetrics {
         let columns = Self::columns(width);
-        CardMetrics::new(Self::card_width(width, columns, scale_factor), text_height)
+        let card_width = Self::card_width(width, columns, scale_factor);
+        CardMetrics {
+            width: card_width,
+            text_height,
+            thumb_width: thumbnail_width(card_width, scale_factor),
+        }
     }
 }
 
@@ -79,6 +84,7 @@ impl CardGrid for BangumiCards {
 
 #[derive(Clone)]
 pub(crate) struct VideoCard {
+    id: SharedString,
     bvid: String,
     cid: Option<u64>,
     cover: String,
@@ -93,6 +99,10 @@ pub(crate) struct VideoCard {
 }
 
 impl VideoCard {
+    pub(crate) fn id(&self) -> &SharedString {
+        &self.id
+    }
+
     pub(crate) fn bvid(&self) -> &str {
         &self.bvid
     }
@@ -154,8 +164,10 @@ impl From<RecommendVideo> for VideoCard {
             owner,
             stat,
         } = video;
+        let id = SharedString::from(bvid.as_str());
 
         Self {
+            id,
             bvid,
             cid: (cid != 0).then_some(cid),
             cover: pic,
@@ -184,8 +196,10 @@ impl From<PopularVideo> for VideoCard {
             stat,
             ..
         } = video;
+        let id = SharedString::from(bvid.as_str());
 
         Self {
+            id,
             bvid,
             cid: (cid != 0).then_some(cid),
             cover: pic,
@@ -215,8 +229,10 @@ impl From<SearchVideo> for VideoCard {
             danmaku,
             like,
         } = video;
+        let id = SharedString::from(bvid.as_str());
 
         Self {
+            id,
             bvid,
             cid: None,
             cover: pic,
@@ -234,7 +250,10 @@ impl From<SearchVideo> for VideoCard {
 
 impl From<SpaceVideo> for VideoCard {
     fn from(video: SpaceVideo) -> Self {
+        let id = SharedString::from(video.bvid.as_str());
+
         Self {
+            id,
             bvid: video.bvid,
             cid: None,
             cover: video.pic,
@@ -252,7 +271,10 @@ impl From<SpaceVideo> for VideoCard {
 
 impl From<FavItem> for VideoCard {
     fn from(item: FavItem) -> Self {
+        let id = SharedString::from(item.bvid.as_str());
+
         Self {
+            id,
             bvid: item.bvid,
             cid: None,
             cover: item.cover,
@@ -270,7 +292,10 @@ impl From<FavItem> for VideoCard {
 
 impl From<HistoryItem> for VideoCard {
     fn from(item: HistoryItem) -> Self {
+        let id = SharedString::from(item.history.bvid.as_str());
+
         Self {
+            id,
             bvid: item.history.bvid,
             cid: None,
             cover: item.cover,
@@ -288,7 +313,10 @@ impl From<HistoryItem> for VideoCard {
 
 impl From<WatchLaterItem> for VideoCard {
     fn from(item: WatchLaterItem) -> Self {
+        let id = SharedString::from(item.bvid.as_str());
+
         Self {
+            id,
             bvid: item.bvid,
             cid: (item.cid != 0).then_some(item.cid),
             cover: item.pic,
@@ -314,27 +342,40 @@ pub(crate) fn card_height(width: Pixels, text_height: Pixels) -> Pixels {
 
 pub(crate) fn append_unique_by<T>(
     items: &mut Vec<T>,
+    seen: &mut HashSet<String>,
     incoming: Vec<T>,
     key: impl Fn(&T) -> String,
 ) {
-    let mut seen = items.iter().map(&key).collect::<HashSet<_>>();
     items.extend(incoming.into_iter().filter(|item| seen.insert(key(item))));
+}
+
+pub(crate) fn index_by<T>(items: &[T], key: impl Fn(&T) -> String) -> HashSet<String> {
+    items.iter().map(key).collect()
 }
 
 #[derive(Clone, Copy)]
 pub(crate) struct CardMetrics {
     pub(crate) width: Pixels,
     pub(crate) text_height: Pixels,
+    pub(crate) thumb_width: u32,
 }
 
 impl CardMetrics {
-    pub(crate) fn new(width: Pixels, text_height: Pixels) -> Self {
-        Self { width, text_height }
-    }
-
     pub(crate) fn height(self) -> Pixels {
         card_height(self.width, self.text_height)
     }
+}
+
+fn thumbnail_width(card_width: Pixels, scale_factor: f32) -> u32 {
+    const BUCKET: u32 = 32;
+    const MIN_WIDTH: u32 = 160;
+    const MAX_WIDTH: u32 = 960;
+
+    let device_width = (card_width.as_f32() * scale_factor).ceil().max(0.) as u32;
+    device_width
+        .div_ceil(BUCKET)
+        .saturating_mul(BUCKET)
+        .clamp(MIN_WIDTH, MAX_WIDTH)
 }
 
 #[derive(Clone, Copy)]
@@ -398,6 +439,7 @@ pub(crate) struct MediaCard<'a> {
     pub(crate) footer: Option<&'a str>,
     pub(crate) footer_icon: Option<IconName>,
     pub(crate) title_lines: usize,
+    pub(crate) thumb_width: u32,
     pub(crate) overlay: CardOverlay<'a>,
     pub(crate) author: Option<MediaAuthor>,
 }
@@ -429,6 +471,7 @@ pub(crate) fn media_card(
         footer,
         footer_icon,
         title_lines,
+        thumb_width,
         overlay,
         author,
     } = card;
@@ -441,9 +484,9 @@ pub(crate) fn media_card(
         }
     };
 
-    let cover_id = ElementId::Name(format!("{id}-cover").into());
-    let title_id = ElementId::Name(format!("{id}-title").into());
-    let meta_id = ElementId::Name(format!("{id}-meta").into());
+    let cover_id = ElementId::NamedInteger(id.clone(), 0);
+    let title_id = ElementId::NamedInteger(id.clone(), 1);
+    let meta_id = ElementId::NamedInteger(id.clone(), 2);
     let title_tooltip = title.to_owned();
     let meta_tooltip = footer.unwrap_or_default().to_owned();
     let meta_click = match author {
@@ -474,7 +517,7 @@ pub(crate) fn media_card(
                 .cursor_pointer()
                 .on_click(navigate(on_open.clone()))
                 .child(
-                    img(thumbnail(cover, 480))
+                    img(thumbnail(cover, thumb_width))
                         .size_full()
                         .object_fit(ObjectFit::Cover),
                 )
@@ -615,7 +658,6 @@ pub(crate) fn media_card(
 
 pub(crate) fn video_card(
     card: &VideoCard,
-    id_prefix: &str,
     style: CardStyle,
     metrics: CardMetrics,
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -626,12 +668,13 @@ pub(crate) fn video_card(
 
     media_card(
         MediaCard {
-            id: SharedString::from(format!("{id_prefix}-{}", card.bvid())),
+            id: card.id().clone(),
             cover: card.cover(),
             title: card.title(),
             footer: Some(card.meta()),
             footer_icon: None,
             title_lines: 2,
+            thumb_width: metrics.thumb_width,
             author: None,
             overlay: CardOverlay {
                 leading: (!views.is_empty()).then_some((IconName::Play, views)),
@@ -734,7 +777,7 @@ pub(crate) fn skeleton_card(width: Pixels, radius: Pixels) -> impl IntoElement {
 #[cfg(test)]
 mod tests {
     use super::{
-        CARD_GAP, CardGrid, FolderCards, VideoCard, VideoCards, append_unique_by,
+        CARD_GAP, CardGrid, FolderCards, VideoCard, VideoCards, append_unique_by, index_by,
         round_to_device_pixel,
     };
     use gpui_kit::px;
@@ -807,8 +850,10 @@ mod tests {
     #[test]
     fn appends_only_new_items_by_key() {
         let mut items = vec!["BV1".to_owned()];
+        let mut seen = index_by(&items, |item| item.clone());
         append_unique_by(
             &mut items,
+            &mut seen,
             vec!["BV1".to_owned(), "BV2".to_owned()],
             |item| item.clone(),
         );

@@ -441,7 +441,7 @@ impl MineView {
                 let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| {
                     cx.emit(open.clone());
                 });
-                crate::grid::video_card(card, "mine-video", style, metrics, on_open)
+                crate::grid::video_card(card, style, metrics, on_open)
             }))
             .into_any_element()
     }
@@ -669,6 +669,7 @@ fn bangumi_card(
             footer: Some(footer),
             footer_icon: None,
             title_lines: 2,
+            thumb_width: metrics.thumb_width,
             author: None,
             overlay: CardOverlay {
                 leading: score.as_deref().map(|score| (IconName::Star, score)),

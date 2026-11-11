@@ -25,12 +25,13 @@ pub(crate) fn video_card(
 ) -> AnyElement {
     crate::grid::media_card(
         CardLayout {
-            id: SharedString::from(video.bvid().to_owned()),
+            id: video.id().clone(),
             cover: video.cover(),
             title: video.title(),
             footer: Some(video.meta()),
             footer_icon: Some(IconName::MonitorPlay),
             title_lines: 2,
+            thumb_width: metrics.thumb_width,
             author: on_author,
             overlay: CardOverlay {
                 leading: Some((IconName::Play, video.views())),
@@ -55,12 +56,13 @@ pub(crate) fn media_item_card(
 ) -> AnyElement {
     crate::grid::media_card(
         CardLayout {
-            id: SharedString::from(format!("search-pgc-{}", item.season_id)),
+            id: item.id.clone(),
             cover: &item.cover,
             title: &item.title,
             footer: Some(&item.subtitle),
             footer_icon: Some(IconName::Tv),
             title_lines: 2,
+            thumb_width: metrics.thumb_width,
             author: None,
             overlay: CardOverlay {
                 leading: (!item.score.is_empty()).then_some((IconName::Star, item.score.as_str())),
@@ -85,12 +87,13 @@ pub(crate) fn live_card(
 ) -> AnyElement {
     crate::grid::media_card(
         CardLayout {
-            id: SharedString::from(format!("search-live-{}", item.room_id)),
+            id: item.id.clone(),
             cover: &item.cover,
             title: &item.title,
             footer: Some(&item.meta),
             footer_icon: Some(IconName::Radio),
             title_lines: 2,
+            thumb_width: metrics.thumb_width,
             author: None,
             overlay: CardOverlay {
                 leading: Some((IconName::Eye, &item.online)),
@@ -113,7 +116,7 @@ pub(crate) fn article_row(
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
     h_flex()
-        .id(SharedString::from(format!("search-article-{}", article.id)))
+        .id(ElementId::NamedInteger("search-article".into(), article.id))
         .h(ROW_HEIGHT)
         .w_full()
         .items_center()
@@ -180,7 +183,7 @@ pub(crate) fn user_row(
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
     h_flex()
-        .id(SharedString::from(format!("search-user-{}", user.mid)))
+        .id(ElementId::NamedInteger("search-user".into(), user.mid))
         .h(ROW_HEIGHT)
         .w_full()
         .items_center()
@@ -262,12 +265,13 @@ pub(crate) fn preview_card(
 ) -> AnyElement {
     crate::grid::media_card(
         CardLayout {
-            id: SharedString::from(format!("preview-{}", video.bvid())),
+            id: video.id().clone(),
             cover: video.cover(),
             title: video.title(),
             footer: None,
             footer_icon: None,
             title_lines: 1,
+            thumb_width: 480,
             author: None,
             overlay: CardOverlay {
                 leading: Some((IconName::Play, video.views())),
