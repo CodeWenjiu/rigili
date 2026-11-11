@@ -1,1 +1,1 @@
-rigili_macro::mod_flat!(favorites, folders, history, watch_later);
+rigili_macro::mod_flat!(bangumi, favorites, folders, history, watch_later);

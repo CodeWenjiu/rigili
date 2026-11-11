@@ -7,15 +7,17 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use super::{FavoriteView, MineTab, MineView};
+use super::{FavoriteView, FolderSource, MineTab, MineView};
 use crate::format::format_ymd;
 use crate::grid::VideoCard;
 use crate::grid::{
-    CARD_GAP, CardMetrics, CardOverlay, CardStyle, LIST_FOOTER_HEIGHT, MediaCard, card_text_height,
-    card_width_for_width, columns_for_width, list_footer, media_card, skeleton_card,
+    BangumiCards, CARD_GAP, CardGrid, CardMetrics, CardOverlay, CardStyle, FolderCards,
+    LIST_FOOTER_HEIGHT, MediaCard, VideoCards, card_text_height, list_footer, media_card,
+    skeleton_card,
 };
 use crate::platform::theme::cover_scrim;
-use rigili_bilibili::{FavFolder, thumbnail};
+use gpui_kit::component::spinner::Spinner;
+use rigili_bilibili::{BangumiFollow, FavFolder, thumbnail};
 
 impl MineView {
     pub(super) fn render_content(
@@ -47,11 +49,8 @@ impl MineView {
         let radius = cx.theme().radius;
 
         if loading {
-            let columns = columns_for_width(self.list_width);
-            let metrics = CardMetrics::new(
-                card_width_for_width(self.list_width, columns),
-                card_text_height(window),
-            );
+            let columns = VideoCards::columns(self.list_width);
+            let metrics = VideoCards::metrics(self.list_width, card_text_height(window));
             return div()
                 .id(("mine-loading", tab.index()))
                 .flex_1()
@@ -95,14 +94,30 @@ impl MineView {
         self.render_list(tab, window, cx)
     }
 
-    pub(super) fn render_folder_grid(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_folder_grid(
+        &mut self,
+        source: FolderSource,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let muted = cx.theme().muted_foreground;
         let danger = cx.theme().danger;
         let radius = cx.theme().radius;
+        let (folders, loading, error) = match source {
+            FolderSource::Created => (
+                &self.folders.folders,
+                self.folders.loading,
+                self.folders.error.clone(),
+            ),
+            FolderSource::Collected => (
+                &self.collected.folders,
+                self.collected.loading,
+                self.collected.error.clone(),
+            ),
+        };
 
-        if self.folders.loading && self.folders.folders.is_empty() {
-            let columns = columns_for_width(self.list_width).max(2);
-            let width = card_width_for_width(self.list_width, columns);
+        if loading && folders.is_empty() {
+            let columns = FolderCards::columns(self.list_width).max(2);
+            let width = FolderCards::card_width(self.list_width, columns);
             return div()
                 .id("mine-folder-grid-loading")
                 .flex_1()
@@ -118,7 +133,7 @@ impl MineView {
                 .into_any_element();
         }
 
-        if let Some(error) = self.folders.error.clone() {
+        if let Some(error) = error {
             return v_flex()
                 .flex_1()
                 .min_h_0()
@@ -128,29 +143,36 @@ impl MineView {
                     Button::new("mine-folders-retry")
                         .primary()
                         .label("重试")
-                        .on_click(cx.listener(|this, _, _, cx| this.load_folders(cx))),
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.retry_folder_source(source, cx);
+                        })),
                 )
                 .into_any_element();
         }
 
-        let folders = self
-            .folders
-            .folders
+        let visible = folders
             .iter()
-            .filter(|folder| !folder.is_default())
+            .filter(|folder| match source {
+                FolderSource::Created => !folder.is_default(),
+                FolderSource::Collected => folder.is_valid(),
+            })
             .collect::<Vec<_>>();
-        if folders.is_empty() {
+        if visible.is_empty() {
+            let empty = match source {
+                FolderSource::Created => "暂无收藏夹",
+                FolderSource::Collected => "暂无订阅内容",
+            };
             return div()
                 .flex_1()
                 .min_h_0()
                 .text_sm()
                 .text_color(muted)
-                .child("暂无收藏夹")
+                .child(empty)
                 .into_any_element();
         }
 
-        let columns = columns_for_width(self.list_width).max(1);
-        let width = card_width_for_width(self.list_width, columns);
+        let columns = FolderCards::columns(self.list_width);
+        let width = FolderCards::card_width(self.list_width, columns);
         let known_width = self.list_width;
         let weak = cx.entity().downgrade();
 
@@ -176,12 +198,199 @@ impl MineView {
             })
             .child(
                 h_flex().flex_wrap().gap_x(CARD_GAP).gap_y_6().children(
-                    folders
+                    visible
                         .into_iter()
                         .enumerate()
-                        .map(|(index, folder)| folder_card(folder, index, width, cx)),
+                        .map(|(index, folder)| folder_card(folder, index, source, width, cx)),
                 ),
             )
+            .into_any_element()
+    }
+
+    fn retry_folder_source(&mut self, source: FolderSource, cx: &mut Context<Self>) {
+        match source {
+            FolderSource::Created => self.load_folders(cx),
+            FolderSource::Collected => self.load_collected(cx),
+        }
+    }
+
+    pub(super) fn render_bangumi(
+        &mut self,
+        cinema: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let state = self.bangumi_state(cinema);
+        let loading = state.loading && state.items.is_empty();
+        let error = state.error.clone();
+        let empty = state.items.is_empty() && !state.loading;
+        let danger = cx.theme().danger;
+        let muted = cx.theme().muted_foreground;
+        let radius = cx.theme().radius;
+
+        if loading {
+            let columns = BangumiCards::columns(self.list_width);
+            let metrics = BangumiCards::metrics(self.list_width, card_text_height(window));
+            return div()
+                .id("mine-bangumi-loading")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .child(
+                    h_flex()
+                        .flex_wrap()
+                        .gap_x(CARD_GAP)
+                        .gap_y_6()
+                        .children((0..columns * 2).map(|_| skeleton_card(metrics.width, radius))),
+                )
+                .into_any_element();
+        }
+
+        if let Some(error) = error {
+            return v_flex()
+                .flex_1()
+                .min_h_0()
+                .gap_3()
+                .child(div().text_sm().text_color(danger).child(error))
+                .child(
+                    Button::new("mine-bangumi-retry")
+                        .primary()
+                        .label("重试")
+                        .on_click(cx.listener(move |this, _, _, cx| this.load_bangumi(cinema, cx))),
+                )
+                .into_any_element();
+        }
+
+        if empty {
+            return div()
+                .flex_1()
+                .min_h_0()
+                .text_sm()
+                .text_color(muted)
+                .child("暂无内容")
+                .into_any_element();
+        }
+
+        self.render_bangumi_list(cinema, window, cx)
+    }
+
+    fn render_bangumi_row(
+        &self,
+        cinema: bool,
+        row: usize,
+        columns: usize,
+        metrics: CardMetrics,
+        style: CardStyle,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let state = self.bangumi_state(cinema);
+        let start = row * columns;
+        let end = (start + columns).min(state.items.len());
+        let opening = self.opening;
+
+        h_flex()
+            .h(metrics.height())
+            .gap(CARD_GAP)
+            .children((start..end).map(|index| {
+                let item = &state.items[index];
+                let season_id = item.season_id;
+                let is_opening = opening == Some(season_id);
+                let on_open = cx.listener(move |this, _, _, cx| {
+                    this.open_season(season_id, cx);
+                });
+                bangumi_card(item, is_opening, style, metrics, on_open)
+            }))
+            .into_any_element()
+    }
+
+    fn render_bangumi_footer(&self, cinema: bool, cx: &mut Context<Self>) -> AnyElement {
+        let muted = cx.theme().muted_foreground;
+        let danger = cx.theme().danger;
+        let more_error = self.bangumi_state(cinema).more_error.clone();
+        let retry_id = if cinema {
+            ("mine-cinema-retry", 0usize)
+        } else {
+            ("mine-bangumi-retry", 0usize)
+        };
+
+        list_footer(
+            retry_id,
+            more_error,
+            muted,
+            danger,
+            cx.listener(move |this, _, _, cx| this.retry_bangumi_more(cinema, cx)),
+        )
+    }
+
+    fn render_bangumi_list(
+        &mut self,
+        cinema: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let style = CardStyle::new(cx);
+        let state = self.bangumi_state(cinema);
+        let columns = BangumiCards::columns(self.list_width);
+        let metrics = BangumiCards::metrics(self.list_width, card_text_height(window));
+        let row_height = metrics.height();
+        let rows = state.items.len().div_ceil(columns);
+        let known_width = self.list_width;
+        let footer = state.loading_more || state.more_error.is_some();
+        let footer_index = rows;
+
+        let mut sizes = vec![size(px(0.), row_height); rows];
+        if footer {
+            sizes.push(size(px(0.), LIST_FOOTER_HEIGHT));
+        }
+        let sizes = Rc::new(sizes);
+
+        let view = cx.entity();
+        let weak = view.downgrade();
+        let list_id = if cinema {
+            "mine-cinema-list"
+        } else {
+            "mine-bangumi-list"
+        };
+        let list = v_virtual_list(view, list_id, sizes, move |this, visible_range, _, cx| {
+            this.maybe_load_more_bangumi(cinema, visible_range.end.saturating_sub(1), rows, cx);
+            visible_range
+                .map(|row| {
+                    if footer && row == footer_index {
+                        this.render_bangumi_footer(cinema, cx)
+                    } else {
+                        this.render_bangumi_row(cinema, row, columns, metrics, style, cx)
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .gap_y_6()
+        .track_scroll(&self.bangumi_state(cinema).scroll);
+
+        div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .overflow_hidden()
+            .on_children_prepainted(move |bounds, window, cx| {
+                let Some(width) = bounds.first().map(|bounds| bounds.size.width) else {
+                    return;
+                };
+                if width == known_width {
+                    return;
+                }
+                let weak = weak.clone();
+                // Notifying during prepaint does not schedule another frame.
+                window.defer(cx, move |_, cx| {
+                    let _ = weak.update(cx, |this, cx| {
+                        if this.list_width != width {
+                            this.list_width = width;
+                            cx.notify();
+                        }
+                    });
+                });
+            })
+            .child(list)
+            .child(Scrollbar::vertical(&self.bangumi_state(cinema).scroll).viewport_from_layout())
             .into_any_element()
     }
 
@@ -234,11 +443,8 @@ impl MineView {
     ) -> AnyElement {
         let style = CardStyle::new(cx);
         let state = self.state(tab);
-        let columns = columns_for_width(self.list_width);
-        let metrics = CardMetrics::new(
-            card_width_for_width(self.list_width, columns),
-            card_text_height(window),
-        );
+        let columns = VideoCards::columns(self.list_width);
+        let metrics = VideoCards::metrics(self.list_width, card_text_height(window));
         let row_height = metrics.height();
         let rows = state.items.len().div_ceil(columns);
         let known_width = self.list_width;
@@ -338,6 +544,7 @@ fn video_card(
 fn folder_card(
     folder: &FavFolder,
     index: usize,
+    source: FolderSource,
     width: Pixels,
     cx: &mut Context<MineView>,
 ) -> AnyElement {
@@ -352,6 +559,16 @@ fn folder_card(
     let count = folder.media_count;
     let private = folder.is_private();
     let created = format_ymd(folder.ctime);
+    let footer = match source {
+        FolderSource::Created => format!("创建于{created}"),
+        FolderSource::Collected => {
+            if folder.owner().is_empty() {
+                format!("创建于{created}")
+            } else {
+                format!("来自{}", folder.owner())
+            }
+        }
+    };
     let group = SharedString::from(format!("mine-folder-card-{index}"));
 
     v_flex()
@@ -360,7 +577,7 @@ fn folder_card(
         .w(width)
         .gap_2()
         .cursor_pointer()
-        .on_click(cx.listener(move |this, _, _, cx| this.open_folder(id, cx)))
+        .on_click(cx.listener(move |this, _, _, cx| this.open_folder(id, source, cx)))
         .child(
             div()
                 .w_full()
@@ -430,11 +647,68 @@ fn folder_card(
                         .child(title),
                 ),
         )
+        .child(div().text_xs().text_color(muted).child(footer))
+        .into_any_element()
+}
+
+fn bangumi_card(
+    item: &BangumiFollow,
+    opening: bool,
+    style: CardStyle,
+    metrics: CardMetrics,
+    on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    let latest = item.latest_ep();
+    let score = item.score().map(|score| format!("{score:.1}"));
+    let footer = if item.progress.is_empty() {
+        item.season_type_name.as_str()
+    } else {
+        item.progress.as_str()
+    };
+    let card = media_card(
+        MediaCard {
+            id: SharedString::from(format!("mine-bangumi-{}", item.season_id)),
+            cover: &item.cover,
+            title: &item.title,
+            footer,
+            footer_icon: None,
+            overlay: CardOverlay {
+                leading: score.as_deref().map(|score| (IconName::Star, score)),
+                secondary: None,
+                trailing: (!latest.is_empty()).then_some(latest),
+                badge: (!item.badge.is_empty()).then_some(item.badge.as_str()),
+            },
+        },
+        style,
+        metrics.width,
+        metrics.text_height,
+        on_open,
+    );
+
+    if !opening {
+        return card.into_any_element();
+    }
+
+    div()
+        .relative()
+        .w(metrics.width)
+        .h(metrics.height())
+        .child(card)
         .child(
             div()
-                .text_xs()
-                .text_color(muted)
-                .child(format!("创建于{created}")),
+                .absolute()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(hsla(0., 0., 0., 0.45))
+                .child(
+                    v_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(Spinner::new().small())
+                        .child(div().text_xs().text_color(Hsla::white()).child("正在打开…")),
+                ),
         )
         .into_any_element()
 }

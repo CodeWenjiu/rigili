@@ -2,10 +2,10 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use gpui_kit::*;
 use rigili_bilibili::{
-    ApiError, ArticleSearch, Client, FavFolders, FavItems, HistoryPage, HotWords, LiveRoom,
-    LiveSearch, MediaSearch, Nav, NavStat, PgcIndex, PgcSeason, PlayUrl, Popular, QrCode, QrPoll,
-    Recommend, SearchAll, SearchSuggestions, SessionError, UserSearch, VideoInfo, VideoSearch,
-    WatchLater, api,
+    ApiError, ArticleSearch, BangumiFollows, Client, CreatedFolder, FavFolders, FavItems,
+    HistoryPage, HotWords, LiveRoom, LiveSearch, MediaSearch, Nav, NavStat, PgcIndex, PgcSeason,
+    PlayUrl, Popular, QrCode, QrPoll, Recommend, SearchAll, SearchSuggestions, SessionError,
+    UserSearch, VideoInfo, VideoSearch, WatchLater, api,
     api::search::{SearchOrder, SearchType},
 };
 
@@ -144,6 +144,31 @@ impl Backend {
 
     pub async fn fav_folders(&self, mid: u64) -> Result<FavFolders, ApiError> {
         api::mine::fav_folders(&self.client, mid).await
+    }
+
+    pub async fn collected_folders(&self, mid: u64) -> Result<FavFolders, ApiError> {
+        api::mine::collected_folders(&self.client, mid).await
+    }
+
+    pub async fn create_folder(
+        &self,
+        title: &str,
+        private: bool,
+    ) -> Result<CreatedFolder, ApiError> {
+        api::mine::create_folder(&self.client, title, private).await
+    }
+
+    pub async fn sort_folders(&self, ids: &[u64]) -> Result<(), ApiError> {
+        api::mine::sort_folders(&self.client, ids).await
+    }
+
+    pub async fn bangumi_follows(
+        &self,
+        mid: u64,
+        season_type: u32,
+        page: u32,
+    ) -> Result<BangumiFollows, ApiError> {
+        api::mine::bangumi_follows(&self.client, mid, season_type, page).await
     }
 
     pub async fn fav_items(&self, media_id: u64, page: u32) -> Result<FavItems, ApiError> {

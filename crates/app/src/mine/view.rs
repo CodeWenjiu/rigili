@@ -1,18 +1,22 @@
-rigili_macro::mod_prv!(feed, list);
+rigili_macro::mod_prv!(create_folder, feed, list, sort_folders);
 
 use gpui_kit::assets::IconName;
+use gpui_kit::component::alert::Alert;
 use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_bilibili::{FavFolder, NavStat};
+use rigili_bilibili::{BangumiFollow, FavFolder, NavStat};
 
 use crate::backend::{self, Backend};
-use crate::format::format_count;
+use crate::format::{api_task_error_message, format_count};
 use crate::grid::{OpenVideo, VideoCard};
 use crate::login;
+use crate::platform::runtime::spawn_api;
 use crate::refresh::Refresh;
+use create_folder::CreateFolderDialog;
+use sort_folders::SortFoldersDialog;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum MineTab {
@@ -160,6 +164,75 @@ impl FolderState {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FolderSource {
+    Created,
+    Collected,
+}
+
+struct CollectedState {
+    folders: Vec<FavFolder>,
+    loading: bool,
+    loaded: bool,
+    error: Option<String>,
+    generation: u64,
+}
+
+impl CollectedState {
+    fn new() -> Self {
+        Self {
+            folders: Vec::new(),
+            loading: false,
+            loaded: false,
+            error: None,
+            generation: 0,
+        }
+    }
+}
+
+pub(crate) struct BangumiState {
+    items: Vec<BangumiFollow>,
+    page: u32,
+    has_more: bool,
+    loading: bool,
+    loading_more: bool,
+    loaded: bool,
+    error: Option<String>,
+    more_error: Option<String>,
+    generation: u64,
+    scroll: VirtualListScrollHandle,
+}
+
+impl BangumiState {
+    fn new() -> Self {
+        Self {
+            items: Vec::new(),
+            page: 0,
+            has_more: false,
+            loading: false,
+            loading_more: false,
+            loaded: false,
+            error: None,
+            more_error: None,
+            generation: 0,
+            scroll: VirtualListScrollHandle::new(),
+        }
+    }
+
+    fn reset(&mut self) -> u64 {
+        self.generation += 1;
+        self.items.clear();
+        self.page = 0;
+        self.has_more = false;
+        self.loading = true;
+        self.loading_more = false;
+        self.loaded = false;
+        self.error = None;
+        self.more_error = None;
+        self.generation
+    }
+}
+
 pub struct MineView {
     backend: Option<Backend>,
     tab: MineTab,
@@ -167,10 +240,16 @@ pub struct MineView {
     favorites: VideoListState,
     history: VideoListState,
     watch_later: VideoListState,
+    collected: CollectedState,
+    bangumi: BangumiState,
+    cinema: BangumiState,
     stat: Option<NavStat>,
     stat_loading: bool,
     stat_error: Option<String>,
     favorites_view: FavoriteView,
+    browsing_folder: Option<FavoriteView>,
+    opening: Option<u64>,
+    notice: Option<String>,
     user_mid: Option<u64>,
     list_width: Pixels,
 }
@@ -187,12 +266,30 @@ impl MineView {
             favorites: VideoListState::new(),
             history: VideoListState::new(),
             watch_later: VideoListState::new(),
+            collected: CollectedState::new(),
+            bangumi: BangumiState::new(),
+            cinema: BangumiState::new(),
             stat: None,
             stat_loading: false,
             stat_error: None,
             favorites_view: FavoriteView::default(),
+            browsing_folder: None,
+            opening: None,
+            notice: None,
             user_mid: None,
             list_width: px(0.),
+        }
+    }
+
+    fn bangumi_state(&self, cinema: bool) -> &BangumiState {
+        if cinema { &self.cinema } else { &self.bangumi }
+    }
+
+    fn bangumi_state_mut(&mut self, cinema: bool) -> &mut BangumiState {
+        if cinema {
+            &mut self.cinema
+        } else {
+            &mut self.bangumi
         }
     }
 
@@ -225,10 +322,16 @@ impl MineView {
         self.stat_loading = false;
         self.stat_error = None;
         self.favorites_view = FavoriteView::default();
+        self.browsing_folder = None;
         self.folders = FolderState::new();
         self.favorites = VideoListState::new();
         self.history = VideoListState::new();
         self.watch_later = VideoListState::new();
+        self.collected = CollectedState::new();
+        self.bangumi = BangumiState::new();
+        self.cinema = BangumiState::new();
+        self.opening = None;
+        self.notice = None;
 
         let weak = cx.entity().downgrade();
         window.defer(cx, move |_, cx| {
@@ -417,17 +520,111 @@ impl MineView {
             .into_any_element()
     }
 
+    pub(super) fn open_season(&mut self, season_id: u64, cx: &mut Context<Self>) {
+        if self.opening.is_some() {
+            return;
+        }
+        let Some(backend) = self.backend.clone() else {
+            self.notice = Some("客户端尚未初始化".into());
+            cx.notify();
+            return;
+        };
+        self.opening = Some(season_id);
+        self.notice = None;
+        cx.notify();
+
+        spawn_api(
+            cx,
+            async move { crate::playback::resolve_season(backend, season_id).await },
+            move |this, result, cx| {
+                this.opening = None;
+                match result {
+                    Ok(Some(video)) => cx.emit(video),
+                    Ok(None) => this.notice = Some("该作品暂无可播放的剧集".into()),
+                    Err(error) => this.notice = Some(api_task_error_message(error, cx)),
+                }
+                cx.notify();
+            },
+        );
+    }
+
     fn current_folder(&self) -> Option<&FavFolder> {
         let id = self.folders.current?;
-        self.folders.folders.iter().find(|folder| folder.id == id)
+        self.folders
+            .folders
+            .iter()
+            .chain(self.collected.folders.iter())
+            .find(|folder| folder.id == id)
     }
 
     fn show_favorite_view(&mut self, view: FavoriteView, cx: &mut Context<Self>) {
         if self.favorites_view == view {
+            if self.browsing_folder.is_some() {
+                self.browsing_folder = None;
+                cx.notify();
+            }
             return;
         }
         self.favorites_view = view;
+        self.browsing_folder = None;
+        if view == FavoriteView::Folder {
+            self.ensure_default_folder(cx);
+        } else {
+            self.load_favorite_view(cx);
+        }
         cx.notify();
+    }
+
+    fn default_folder_id(&self) -> Option<u64> {
+        self.folders
+            .folders
+            .iter()
+            .find(|folder| folder.is_default())
+            .map(|folder| folder.id)
+            .or_else(|| self.folders.folders.first().map(|folder| folder.id))
+    }
+
+    fn ensure_default_folder(&mut self, cx: &mut Context<Self>) {
+        let default_id = self.default_folder_id();
+        if self.folders.current == default_id {
+            return;
+        }
+        self.folders.current = default_id;
+        if default_id.is_some() {
+            self.load_favorite_items(cx);
+        } else {
+            self.favorites = VideoListState::new();
+        }
+    }
+
+    fn close_folder(&mut self, cx: &mut Context<Self>) {
+        self.browsing_folder = None;
+        cx.notify();
+    }
+
+    fn load_favorite_view(&mut self, cx: &mut Context<Self>) {
+        match self.favorites_view {
+            FavoriteView::Subscribed
+                if !self.collected.loaded
+                    && !self.collected.loading
+                    && self.collected.error.is_none() =>
+            {
+                self.load_collected(cx);
+            }
+            FavoriteView::Bangumi
+                if !self.bangumi.loaded
+                    && !self.bangumi.loading
+                    && self.bangumi.error.is_none() =>
+            {
+                self.load_bangumi(false, cx);
+            }
+            FavoriteView::Cinema
+                if !self.cinema.loaded && !self.cinema.loading && self.cinema.error.is_none() =>
+            {
+                self.load_bangumi(true, cx);
+            }
+            _ => {}
+        }
     }
 
     fn render_favorite_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -435,11 +632,6 @@ impl MineView {
         let muted = cx.theme().muted_foreground;
         let hover_bg = cx.theme().accent.opacity(0.5);
         let radius = cx.theme().radius;
-        let current_title = self
-            .current_folder()
-            .map(|folder| folder.title.clone())
-            .filter(|title| !title.is_empty())
-            .unwrap_or_else(|| "默认收藏夹".into());
 
         h_flex()
             .flex_shrink_0()
@@ -449,8 +641,8 @@ impl MineView {
             .children(FavoriteView::ALL.map(|view| {
                 let active = view == self.favorites_view;
                 let group = SharedString::from(format!("mine-favorite-view-{}", view.index()));
-                let label = match view {
-                    FavoriteView::Folder => current_title.clone(),
+                let label: String = match view {
+                    FavoriteView::Folder => "默认收藏夹".into(),
                     FavoriteView::Folders => "我创建的收藏夹".into(),
                     FavoriteView::Subscribed => "我的收藏与订阅".into(),
                     FavoriteView::Bangumi => "我的追番".into(),
@@ -480,6 +672,108 @@ impl MineView {
                             ),
                     )
             }))
+            .when(self.favorites_view == FavoriteView::Folders, |this| {
+                this.child(div().flex_1()).child(
+                    h_flex()
+                        .flex_shrink_0()
+                        .gap_2()
+                        .child(
+                            Button::new("mine-create-folder")
+                                .small()
+                                .secondary()
+                                .label("+ 新建收藏夹")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_create_folder(window, cx);
+                                })),
+                        )
+                        .when(
+                            self.folders
+                                .folders
+                                .iter()
+                                .any(|folder| !folder.is_default()),
+                            |this| {
+                                this.child(
+                                    Button::new("mine-sort-folders")
+                                        .small()
+                                        .ghost()
+                                        .label("收藏夹排序")
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.open_sort_folders(window, cx);
+                                        })),
+                                )
+                            },
+                        ),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn open_create_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mine = cx.entity();
+        let view = cx.new(|cx| CreateFolderDialog::new(window, cx, mine));
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog.w(px(320.)).title("新建收藏夹").child(view.clone())
+        });
+    }
+
+    fn open_sort_folders(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let folders = self
+            .folders
+            .folders
+            .iter()
+            .filter(|folder| !folder.is_default())
+            .cloned()
+            .collect::<Vec<_>>();
+        if folders.is_empty() {
+            return;
+        }
+        let default_id = self
+            .folders
+            .folders
+            .iter()
+            .find(|folder| folder.is_default())
+            .map(|folder| folder.id);
+        let mine = cx.entity();
+        let view = cx.new(|_| SortFoldersDialog::new(window, mine, folders, default_id));
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog.w(px(360.)).title("收藏夹排序").child(view.clone())
+        });
+    }
+
+    pub(super) fn folders_changed(&mut self, cx: &mut Context<Self>) {
+        self.favorites_view = FavoriteView::Folders;
+        self.browsing_folder = None;
+        self.load_folders(cx);
+        cx.notify();
+    }
+
+    fn render_folder_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let muted = cx.theme().muted_foreground;
+        let title = self
+            .current_folder()
+            .map(|folder| folder.title.clone())
+            .unwrap_or_default();
+
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .gap_3()
+            .child(
+                h_flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Button::new("mine-folder-back")
+                            .text()
+                            .small()
+                            .text_color(muted)
+                            .label("← 返回")
+                            .on_click(cx.listener(|this, _, _, cx| this.close_folder(cx))),
+                    )
+                    .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(title)),
+            )
+            .child(self.render_content(MineTab::Favorites, window, cx))
             .into_any_element()
     }
 
@@ -499,14 +793,22 @@ impl MineView {
         let content = if self.tab == MineTab::Favorites {
             match self.favorites_view {
                 FavoriteView::Folder => self.render_content(MineTab::Favorites, window, cx),
-                FavoriteView::Folders => self.render_folder_grid(cx),
-                FavoriteView::Subscribed | FavoriteView::Bangumi | FavoriteView::Cinema => div()
-                    .flex_1()
-                    .min_h_0()
-                    .text_sm()
-                    .text_color(muted)
-                    .child("暂未支持")
-                    .into_any_element(),
+                FavoriteView::Folders => {
+                    if self.browsing_folder == Some(FavoriteView::Folders) {
+                        self.render_folder_detail(window, cx)
+                    } else {
+                        self.render_folder_grid(FolderSource::Created, cx)
+                    }
+                }
+                FavoriteView::Subscribed => {
+                    if self.browsing_folder == Some(FavoriteView::Subscribed) {
+                        self.render_folder_detail(window, cx)
+                    } else {
+                        self.render_folder_grid(FolderSource::Collected, cx)
+                    }
+                }
+                FavoriteView::Bangumi => self.render_bangumi(false, window, cx),
+                FavoriteView::Cinema => self.render_bangumi(true, window, cx),
             }
         } else {
             self.render_content(self.tab, window, cx)
@@ -531,7 +833,18 @@ impl Refresh for MineView {
         self.stat_error = None;
 
         match self.tab {
-            MineTab::Favorites => self.load_folders(cx),
+            MineTab::Favorites => {
+                if self.browsing_folder.is_some() {
+                    self.load_favorite_items(cx);
+                } else {
+                    match self.favorites_view {
+                        FavoriteView::Folder | FavoriteView::Folders => self.load_folders(cx),
+                        FavoriteView::Subscribed => self.load_collected(cx),
+                        FavoriteView::Bangumi => self.load_bangumi(false, cx),
+                        FavoriteView::Cinema => self.load_bangumi(true, cx),
+                    }
+                }
+            }
             MineTab::History => self.load_history(cx),
             MineTab::WatchLater => self.load_watch_later(cx),
             MineTab::Offline => {}
@@ -552,6 +865,7 @@ impl Render for MineView {
         let foreground = cx.theme().foreground;
         let logged_in = self.user_mid.is_some();
         let profile = self.render_profile(cx);
+        let notice = self.notice.clone();
 
         v_flex()
             .size_full()
@@ -562,6 +876,16 @@ impl Render for MineView {
             .bg(background)
             .text_color(foreground)
             .child(profile)
+            .when_some(notice, |this, notice| {
+                this.child(
+                    Alert::error("mine-notice", notice)
+                        .title("打开失败")
+                        .on_close(cx.listener(|this, _, _, cx| {
+                            this.notice = None;
+                            cx.notify();
+                        })),
+                )
+            })
             .when(logged_in, |this| {
                 this.child(self.render_tabs(cx))
                     .child(self.render_body(window, cx))

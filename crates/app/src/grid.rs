@@ -16,9 +16,51 @@ use crate::platform::theme::cover_scrim;
 
 pub(crate) const CARD_GAP: Pixels = px(16.);
 pub(crate) const LIST_FOOTER_HEIGHT: Pixels = px(56.);
-pub(crate) const MIN_CARD_WIDTH: f32 = 200.;
 const CARD_TEXT_HEIGHT_REMS: f32 = 4.25;
 const CARD_BODY_GAP: f32 = 8.;
+
+pub(crate) trait CardGrid {
+    const MIN_CARD_WIDTH: f32;
+
+    fn columns(width: Pixels) -> usize {
+        if width <= px(0.) {
+            return 1;
+        }
+        let gap = CARD_GAP.as_f32();
+        (((width.as_f32() + gap) / (Self::MIN_CARD_WIDTH + gap)).floor() as usize).max(1)
+    }
+
+    fn card_width(width: Pixels, columns: usize) -> Pixels {
+        if width <= px(0.) || columns == 0 {
+            return px(Self::MIN_CARD_WIDTH);
+        }
+        let gaps = CARD_GAP.as_f32() * (columns - 1) as f32;
+        px(((width.as_f32() - gaps) / columns as f32).max(0.))
+    }
+
+    fn metrics(width: Pixels, text_height: Pixels) -> CardMetrics {
+        let columns = Self::columns(width);
+        CardMetrics::new(Self::card_width(width, columns), text_height)
+    }
+}
+
+pub(crate) struct VideoCards;
+
+impl CardGrid for VideoCards {
+    const MIN_CARD_WIDTH: f32 = 200.;
+}
+
+pub(crate) struct FolderCards;
+
+impl CardGrid for FolderCards {
+    const MIN_CARD_WIDTH: f32 = 260.;
+}
+
+pub(crate) struct BangumiCards;
+
+impl CardGrid for BangumiCards {
+    const MIN_CARD_WIDTH: f32 = 200.;
+}
 
 #[derive(Clone)]
 pub(crate) struct OpenVideo {
@@ -486,45 +528,26 @@ pub(crate) fn skeleton_card(width: Pixels, radius: Pixels) -> impl IntoElement {
         .child(Skeleton::new().h_3().w_1_3())
 }
 
-pub(crate) fn columns_for_width(width: Pixels) -> usize {
-    if width <= px(0.) {
-        return 1;
-    }
-    let gap = CARD_GAP.as_f32();
-    (((width.as_f32() + gap) / (MIN_CARD_WIDTH + gap)).floor() as usize).max(1)
-}
-
-pub(crate) fn card_width_for_width(width: Pixels, columns: usize) -> Pixels {
-    if width <= px(0.) || columns == 0 {
-        return px(MIN_CARD_WIDTH);
-    }
-    let gaps = CARD_GAP.as_f32() * (columns - 1) as f32;
-    px(((width.as_f32() - gaps) / columns as f32).max(0.))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        CARD_GAP, MIN_CARD_WIDTH, VideoCard, append_unique_by, card_width_for_width,
-        columns_for_width,
-    };
+    use super::{CARD_GAP, CardGrid, FolderCards, VideoCard, VideoCards, append_unique_by};
     use gpui_kit::px;
     use rigili_bilibili::SearchVideo;
 
     #[test]
     fn fits_and_stretches_cards_into_the_available_width() {
-        let min = MIN_CARD_WIDTH;
+        let min = VideoCards::MIN_CARD_WIDTH;
         let gap = CARD_GAP.as_f32();
 
-        assert_eq!(columns_for_width(px(0.)), 1);
-        assert_eq!(columns_for_width(px(min)), 1);
-        assert_eq!(columns_for_width(px(min * 2. + gap - 1.)), 1);
-        assert_eq!(columns_for_width(px(min * 2. + gap)), 2);
-        assert_eq!(columns_for_width(px(min * 3. + gap * 2.)), 3);
+        assert_eq!(VideoCards::columns(px(0.)), 1);
+        assert_eq!(VideoCards::columns(px(min)), 1);
+        assert_eq!(VideoCards::columns(px(min * 2. + gap - 1.)), 1);
+        assert_eq!(VideoCards::columns(px(min * 2. + gap)), 2);
+        assert_eq!(VideoCards::columns(px(min * 3. + gap * 2.)), 3);
 
         let width = px(min * 2. + gap + 1.);
-        let columns = columns_for_width(width);
-        let card_width = card_width_for_width(width, columns);
+        let columns = VideoCards::columns(width);
+        let card_width = VideoCards::card_width(width, columns);
         assert_eq!(columns, 2);
         assert!((card_width.as_f32() - (min + 0.5)).abs() < 0.01);
         assert!(
@@ -534,12 +557,23 @@ mod tests {
         );
 
         let width = px(min * 4. + gap * 3. + 1.);
-        let columns = columns_for_width(width);
-        let card_width = card_width_for_width(width, columns);
+        let columns = VideoCards::columns(width);
+        let card_width = VideoCards::card_width(width, columns);
         assert_eq!(columns, 4);
         assert!((card_width.as_f32() - (min + 0.25)).abs() < 0.01);
 
-        assert_eq!(card_width_for_width(px(0.), 1), px(min));
+        assert_eq!(VideoCards::card_width(px(0.), 1), px(min));
+    }
+
+    #[test]
+    fn folder_cards_use_a_wider_minimum_than_video_cards() {
+        let width = px(1000.);
+        assert!(FolderCards::columns(width) < VideoCards::columns(width));
+
+        let columns = FolderCards::columns(width);
+        assert_eq!(columns, 3);
+        let card_width = FolderCards::card_width(width, columns);
+        assert!((card_width.as_f32() * 3. + CARD_GAP.as_f32() * 2. - 1000.).abs() < 0.01);
     }
 
     #[test]

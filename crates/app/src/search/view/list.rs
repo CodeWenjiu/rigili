@@ -15,21 +15,18 @@ use super::cards::{
 use super::items::SearchItem;
 use super::{SearchLayout, SearchTab, SearchView};
 use crate::grid::{
-    CARD_GAP, CardMetrics, CardStyle, LIST_FOOTER_HEIGHT, card_text_height, card_width_for_width,
-    columns_for_width, list_footer, skeleton_card,
+    CARD_GAP, CardGrid, CardMetrics, CardStyle, LIST_FOOTER_HEIGHT, VideoCards, card_text_height,
+    list_footer, skeleton_card,
 };
 use crate::home::OpenLive;
 
 impl SearchView {
     fn columns(&self) -> usize {
-        columns_for_width(self.list_width)
+        VideoCards::columns(self.list_width)
     }
 
     fn card_metrics(&self, window: &Window) -> CardMetrics {
-        CardMetrics::new(
-            card_width_for_width(self.list_width, self.columns()),
-            card_text_height(window),
-        )
+        VideoCards::metrics(self.list_width, card_text_height(window))
     }
 
     fn render_grid_row(
@@ -292,10 +289,7 @@ impl SearchView {
                     .into_any_element();
             }
 
-            let metrics = CardMetrics::new(
-                card_width_for_width(self.list_width, columns),
-                card_text_height(window),
-            );
+            let metrics = VideoCards::metrics(self.list_width, card_text_height(window));
             return div()
                 .id("search-loading")
                 .flex_1()

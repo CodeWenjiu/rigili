@@ -1,10 +1,12 @@
 use gpui_kit::*;
 
-use super::{FavoriteView, MineTab, MineView, VideoListState};
+use super::{FavoriteView, FolderSource, MineTab, MineView, VideoListState};
 use crate::backend::{self, Backend};
 use crate::format::api_task_error_message;
 use crate::grid::{VideoCard, append_unique_by};
 use crate::platform::runtime::spawn_api;
+
+const BANGUMI_PAGE_SIZE: usize = 20;
 
 impl MineView {
     fn backend(&mut self, cx: &mut Context<Self>) -> Result<Backend, String> {
@@ -59,28 +61,26 @@ impl MineView {
             return;
         }
         match self.tab {
-            MineTab::Favorites
-                if !self.folders.loaded
-                    && !self.folders.loading
-                    && self.folders.error.is_none() =>
-            {
-                self.load_folders(cx);
+            MineTab::Favorites => {
+                if !self.folders.loaded && !self.folders.loading && self.folders.error.is_none() {
+                    self.load_folders(cx);
+                }
+                self.load_favorite_view(cx);
             }
-            MineTab::History
-                if !self.history.loaded
-                    && !self.history.loading
-                    && self.history.error.is_none() =>
-            {
-                self.load_history(cx);
+            MineTab::History => {
+                if !self.history.loaded && !self.history.loading && self.history.error.is_none() {
+                    self.load_history(cx);
+                }
             }
-            MineTab::WatchLater
+            MineTab::WatchLater => {
                 if !self.watch_later.loaded
                     && !self.watch_later.loading
-                    && self.watch_later.error.is_none() =>
-            {
-                self.load_watch_later(cx);
+                    && self.watch_later.error.is_none()
+                {
+                    self.load_watch_later(cx);
+                }
             }
-            _ => {}
+            MineTab::Offline => {}
         }
     }
 
@@ -131,7 +131,7 @@ impl MineView {
                     Ok(page) => {
                         this.folders.folders = page.into_items();
                         this.folders.loaded = true;
-                        this.folders.current = this.folders.folders.first().map(|folder| folder.id);
+                        this.folders.current = this.default_folder_id();
                         if this.folders.current.is_some() {
                             this.load_favorite_items(cx);
                         }
@@ -143,17 +143,19 @@ impl MineView {
         );
     }
 
-    pub(super) fn open_folder(&mut self, id: u64, cx: &mut Context<Self>) {
-        let changed = self.folders.current != Some(id);
-        self.favorites_view = FavoriteView::Folder;
-        if changed {
+    pub(super) fn open_folder(&mut self, id: u64, source: FolderSource, cx: &mut Context<Self>) {
+        self.browsing_folder = Some(match source {
+            FolderSource::Created => FavoriteView::Folders,
+            FolderSource::Collected => FavoriteView::Subscribed,
+        });
+        if self.folders.current != Some(id) {
             self.folders.current = Some(id);
             self.load_favorite_items(cx);
         }
         cx.notify();
     }
 
-    fn load_favorite_items(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn load_favorite_items(&mut self, cx: &mut Context<Self>) {
         let Some(media_id) = self.folders.current else {
             return;
         };
@@ -414,6 +416,176 @@ impl MineView {
             MineTab::History => self.load_more_history(cx),
             _ => {}
         }
+    }
+
+    pub(super) fn load_collected(&mut self, cx: &mut Context<Self>) {
+        let Some(mid) = self.user_mid else {
+            return;
+        };
+        if self.collected.loading {
+            return;
+        }
+        let backend = match self.backend(cx) {
+            Ok(backend) => backend,
+            Err(error) => {
+                self.collected.error = Some(error);
+                cx.notify();
+                return;
+            }
+        };
+
+        self.collected.generation += 1;
+        let generation = self.collected.generation;
+        self.collected.loading = true;
+        self.collected.loaded = false;
+        self.collected.error = None;
+        self.collected.folders.clear();
+        cx.notify();
+
+        spawn_api(
+            cx,
+            async move { backend.collected_folders(mid).await },
+            move |this, result, cx| {
+                if this.collected.generation != generation {
+                    return;
+                }
+                this.collected.loading = false;
+                match result {
+                    Ok(page) => {
+                        this.collected.folders = page
+                            .into_items()
+                            .into_iter()
+                            .filter(|folder| folder.is_valid())
+                            .collect();
+                        this.collected.loaded = true;
+                    }
+                    Err(error) => {
+                        this.collected.error = Some(api_task_error_message(error, cx));
+                    }
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    pub(super) fn load_bangumi(&mut self, cinema: bool, cx: &mut Context<Self>) {
+        let Some(mid) = self.user_mid else {
+            return;
+        };
+        let backend = match self.backend(cx) {
+            Ok(backend) => backend,
+            Err(error) => {
+                let state = self.bangumi_state_mut(cinema);
+                state.reset();
+                state.loading = false;
+                state.loaded = true;
+                state.error = Some(error);
+                cx.notify();
+                return;
+            }
+        };
+        let season_type = if cinema { 2 } else { 1 };
+        let generation = self.bangumi_state_mut(cinema).reset();
+        cx.notify();
+
+        spawn_api(
+            cx,
+            async move { backend.bangumi_follows(mid, season_type, 1).await },
+            move |this, result, cx| {
+                if this.bangumi_state(cinema).generation != generation {
+                    return;
+                }
+                let state = this.bangumi_state_mut(cinema);
+                state.loading = false;
+                state.loaded = true;
+                match result {
+                    Ok(page) => {
+                        state.page = 1;
+                        state.has_more = page.list.len() >= BANGUMI_PAGE_SIZE;
+                        state.items = page
+                            .list
+                            .into_iter()
+                            .filter(|item| item.season_id != 0)
+                            .collect();
+                        state.scroll.scroll_to_item(0, ScrollStrategy::Top);
+                    }
+                    Err(error) => {
+                        state.error = Some(api_task_error_message(error, cx));
+                    }
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    pub(super) fn load_more_bangumi(&mut self, cinema: bool, cx: &mut Context<Self>) {
+        {
+            let state = self.bangumi_state(cinema);
+            if state.loading || state.loading_more || !state.has_more || state.more_error.is_some()
+            {
+                return;
+            }
+        }
+        let Some(mid) = self.user_mid else {
+            return;
+        };
+        let page_number = self.bangumi_state(cinema).page + 1;
+        let generation = self.bangumi_state(cinema).generation;
+        let season_type = if cinema { 2 } else { 1 };
+        let backend = match self.backend(cx) {
+            Ok(backend) => backend,
+            Err(error) => {
+                self.bangumi_state_mut(cinema).more_error = Some(error);
+                cx.notify();
+                return;
+            }
+        };
+
+        self.bangumi_state_mut(cinema).loading_more = true;
+        cx.notify();
+
+        spawn_api(
+            cx,
+            async move { backend.bangumi_follows(mid, season_type, page_number).await },
+            move |this, result, cx| {
+                if this.bangumi_state(cinema).generation != generation {
+                    return;
+                }
+                let state = this.bangumi_state_mut(cinema);
+                state.loading_more = false;
+                match result {
+                    Ok(page) => {
+                        state.page = page_number;
+                        state.has_more = page.list.len() >= BANGUMI_PAGE_SIZE;
+                        state
+                            .items
+                            .extend(page.list.into_iter().filter(|item| item.season_id != 0));
+                    }
+                    Err(error) => {
+                        state.more_error = Some(api_task_error_message(error, cx));
+                    }
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    pub(super) fn retry_bangumi_more(&mut self, cinema: bool, cx: &mut Context<Self>) {
+        self.bangumi_state_mut(cinema).more_error = None;
+        self.load_more_bangumi(cinema, cx);
+    }
+
+    pub(super) fn maybe_load_more_bangumi(
+        &mut self,
+        cinema: bool,
+        last_visible: usize,
+        rows: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if rows == 0 || last_visible + 1 < rows {
+            return;
+        }
+        self.load_more_bangumi(cinema, cx);
     }
 }
 

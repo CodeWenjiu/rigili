@@ -10,8 +10,8 @@ use gpui_kit::*;
 
 use super::{HomeItem, HomeTab, HomeView};
 use crate::grid::{
-    CARD_GAP, CardMetrics, CardOverlay, CardStyle, LIST_FOOTER_HEIGHT, MediaCard, card_text_height,
-    card_width_for_width, columns_for_width, list_footer, media_card, skeleton_card,
+    CARD_GAP, CardGrid, CardMetrics, CardOverlay, CardStyle, LIST_FOOTER_HEIGHT, MediaCard,
+    VideoCards, card_text_height, list_footer, media_card, skeleton_card,
 };
 
 impl HomeView {
@@ -64,11 +64,8 @@ impl HomeView {
         let tab = self.tab;
         let style = CardStyle::new(cx);
         let state = self.state(tab);
-        let columns = columns_for_width(self.list_width);
-        let metrics = CardMetrics::new(
-            card_width_for_width(self.list_width, columns),
-            card_text_height(window),
-        );
+        let columns = VideoCards::columns(self.list_width);
+        let metrics = VideoCards::metrics(self.list_width, card_text_height(window));
         let row_height = metrics.height();
         let rows = state.items.len().div_ceil(columns);
         let known_width = self.list_width;
@@ -146,11 +143,8 @@ impl HomeView {
         let empty = state.items.is_empty();
 
         if loading {
-            let columns = columns_for_width(self.list_width);
-            let metrics = CardMetrics::new(
-                card_width_for_width(self.list_width, columns),
-                card_text_height(window),
-            );
+            let columns = VideoCards::columns(self.list_width);
+            let metrics = VideoCards::metrics(self.list_width, card_text_height(window));
             return div()
                 .id("loading")
                 .flex_1()

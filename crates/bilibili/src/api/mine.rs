@@ -1,8 +1,15 @@
-use crate::{ApiError, Client, FavFolders, FavItems, HistoryPage, NavStat, WatchLater};
+use crate::{
+    ApiError, BangumiFollows, Client, CreatedFolder, FavFolders, FavItems, HistoryPage, NavStat,
+    WatchLater,
+};
 
 const NAV_STAT_URL: &str = "https://api.bilibili.com/x/web-interface/nav/stat";
 const FAV_FOLDERS_URL: &str = "https://api.bilibili.com/x/v3/fav/folder/created/list";
+const COLLECTED_FOLDERS_URL: &str = "https://api.bilibili.com/x/v3/fav/folder/collected/list";
 const FAV_ITEMS_URL: &str = "https://api.bilibili.com/x/v3/fav/resource/list";
+const FOLDER_ADD_URL: &str = "https://api.bilibili.com/x/v3/fav/folder/add";
+const FOLDER_SORT_URL: &str = "https://api.bilibili.com/x/v3/fav/folder/sort";
+const BANGUMI_FOLLOW_URL: &str = "https://api.bilibili.com/x/space/bangumi/follow/list";
 const HISTORY_URL: &str = "https://api.bilibili.com/x/web-interface/history/cursor";
 const WATCH_LATER_URL: &str = "https://api.bilibili.com/x/v2/history/toview";
 const PAGE_SIZE: u32 = 20;
@@ -25,6 +32,20 @@ pub async fn fav_folders(client: &Client, mid: u64) -> Result<FavFolders, ApiErr
         .await
 }
 
+pub async fn collected_folders(client: &Client, mid: u64) -> Result<FavFolders, ApiError> {
+    client
+        .get_json(
+            COLLECTED_FOLDERS_URL,
+            &[
+                ("up_mid", mid.to_string()),
+                ("pn", 1.to_string()),
+                ("ps", FOLDER_LIMIT.to_string()),
+                ("platform", "web".into()),
+            ],
+        )
+        .await
+}
+
 pub async fn fav_items(client: &Client, media_id: u64, page: u32) -> Result<FavItems, ApiError> {
     let page = page.max(1);
 
@@ -36,6 +57,63 @@ pub async fn fav_items(client: &Client, media_id: u64, page: u32) -> Result<FavI
                 ("pn", page.to_string()),
                 ("ps", PAGE_SIZE.to_string()),
                 ("platform", "web".into()),
+            ],
+        )
+        .await
+}
+
+pub async fn create_folder(
+    client: &Client,
+    title: &str,
+    private: bool,
+) -> Result<CreatedFolder, ApiError> {
+    client
+        .post_form(
+            FOLDER_ADD_URL,
+            &[
+                ("title", title.to_owned()),
+                ("intro", String::new()),
+                ("privacy", if private { "1" } else { "0" }.to_owned()),
+                ("csrf", csrf(client)?),
+            ],
+        )
+        .await
+}
+
+pub async fn sort_folders(client: &Client, ids: &[u64]) -> Result<(), ApiError> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+
+    let sort = ids.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
+    client
+        .post_form::<serde_json::Value>(
+            FOLDER_SORT_URL,
+            &[
+                ("sort", sort),
+                ("csrf", csrf(client)?),
+                ("platform", "web".into()),
+            ],
+        )
+        .await
+        .map(|_| ())
+}
+
+pub async fn bangumi_follows(
+    client: &Client,
+    mid: u64,
+    season_type: u32,
+    page: u32,
+) -> Result<BangumiFollows, ApiError> {
+    client
+        .get_json(
+            BANGUMI_FOLLOW_URL,
+            &[
+                ("type", season_type.to_string()),
+                ("follow_status", 0.to_string()),
+                ("pn", page.max(1).to_string()),
+                ("ps", PAGE_SIZE.to_string()),
+                ("vmid", mid.to_string()),
             ],
         )
         .await
@@ -56,4 +134,16 @@ pub async fn history(client: &Client, max: u64, view_at: i64) -> Result<HistoryP
 
 pub async fn watch_later(client: &Client) -> Result<WatchLater, ApiError> {
     client.get_json(WATCH_LATER_URL, &[]).await
+}
+
+fn csrf(client: &Client) -> Result<String, ApiError> {
+    client
+        .cookie_values()
+        .get("bili_jct")
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or(ApiError::Bilibili {
+            code: -101,
+            message: "账号未登录".into(),
+        })
 }

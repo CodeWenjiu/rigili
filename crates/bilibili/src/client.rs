@@ -146,6 +146,15 @@ impl Client {
         self.get_url_json(&format!("{url}?{query}")).await
     }
 
+    pub async fn post_form<T>(&self, url: &str, params: &[(&str, String)]) -> Result<T, ApiError>
+    where
+        T: DeserializeOwned,
+    {
+        let response = self.send(|| self.http.post(url).form(params)).await?;
+        let body = response.text().await?;
+        self.parse(&body)
+    }
+
     pub(crate) async fn get_raw<T>(&self, url: &str) -> Result<T, ApiError>
     where
         T: DeserializeOwned,
