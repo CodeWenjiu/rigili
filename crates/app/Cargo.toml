@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 gpui-kit.workspace = true
 rigili_bilibili.workspace = true
+rigili_core.workspace = true
 rigili_macro.workspace = true
 rigili_player.workspace = true
 anyhow.workspace = true

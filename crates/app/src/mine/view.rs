@@ -8,13 +8,13 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::{BangumiFollow, FavFolder, NavStat};
+use rigili_core::backend::{self, Backend};
+use rigili_core::runtime::spawn_api;
+use rigili_core::{OpenVideo, Refresh, format_count};
 
-use crate::backend::{self, Backend};
-use crate::format::{api_task_error_message, format_count};
-use crate::grid::{OpenVideo, VideoCard};
+use crate::error::api_task_error_message;
+use crate::grid::VideoCard;
 use crate::login;
-use crate::platform::runtime::spawn_api;
-use crate::refresh::Refresh;
 use create_folder::CreateFolderDialog;
 use sort_folders::SortFoldersDialog;
 
@@ -535,7 +535,7 @@ impl MineView {
 
         spawn_api(
             cx,
-            async move { crate::playback::resolve_season(backend, season_id).await },
+            async move { rigili_core::resolve_season(backend, season_id).await },
             move |this, result, cx| {
                 this.opening = None;
                 match result {

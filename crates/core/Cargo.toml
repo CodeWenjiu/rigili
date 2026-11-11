@@ -1,0 +1,11 @@
+[package]
+name = "rigili_core"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+gpui-kit.workspace = true
+rigili_bilibili.workspace = true
+rigili_macro.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }

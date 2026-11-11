@@ -10,13 +10,13 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
+use rigili_core::{OpenLive, OpenVideo, Refresh};
+
 use super::playback::Playback;
-use crate::grid::OpenVideo;
-use crate::home::{HomeTab, HomeView, OpenLive};
+use crate::home::{HomeTab, HomeView};
 use crate::login;
 use crate::mine::MineView;
 use crate::playback::PlaybackRequest;
-use crate::refresh::Refresh;
 use crate::search::SearchView;
 use search_box::SearchBox;
 

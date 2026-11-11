@@ -12,8 +12,8 @@ use rigili_bilibili::{HotBadge, HotWord, SearchSuggestion};
 
 use super::MainView;
 use super::search_history::SearchHistory;
-use crate::backend;
-use crate::platform::runtime::spawn_api;
+use rigili_core::backend;
+use rigili_core::runtime::spawn_api;
 
 const HISTORY_COLLAPSED: usize = 10;
 const SUGGESTION_LIMIT: usize = 10;

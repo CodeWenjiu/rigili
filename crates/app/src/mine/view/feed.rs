@@ -1,10 +1,11 @@
 use gpui_kit::*;
 
 use super::{FavoriteView, FolderSource, MineTab, MineView, VideoListState};
-use crate::backend::{self, Backend};
-use crate::format::api_task_error_message;
+use rigili_core::backend::{self, Backend};
+use rigili_core::runtime::spawn_api;
+
+use crate::error::api_task_error_message;
 use crate::grid::{VideoCard, append_unique_by};
-use crate::platform::runtime::spawn_api;
 
 const BANGUMI_PAGE_SIZE: usize = 20;
 

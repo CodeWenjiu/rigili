@@ -8,8 +8,8 @@ use gpui_kit::*;
 use super::info::{InfoEvent, InfoPanel};
 use super::request::{PlaybackRequest, PlaybackSource, resolve, resolve_streams};
 use super::surface::PlayerView;
-use crate::backend::{self, Backend};
-use crate::platform::runtime::{ApiTaskError, spawn_api};
+use rigili_core::backend::{self, Backend};
+use rigili_core::runtime::{ApiTaskError, spawn_api};
 
 const INFO_MIN_WINDOW: Pixels = px(1000.);
 
@@ -210,7 +210,7 @@ impl PlayerWindow {
     }
 
     fn handle_error(&mut self, error: ApiTaskError, cx: &mut Context<Self>) {
-        self.error = Some(crate::format::api_task_error_message(error, cx));
+        self.error = Some(crate::error::api_task_error_message(error, cx));
     }
 
     fn retry(&mut self, cx: &mut Context<Self>) {

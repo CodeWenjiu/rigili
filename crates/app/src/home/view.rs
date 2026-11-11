@@ -7,16 +7,9 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::{LiveRoom, PgcItem};
 
-use crate::backend::{self, Backend};
-use crate::format::format_count;
-use crate::grid::{OpenVideo, VideoCard};
-use crate::refresh::Refresh;
-
-#[derive(Clone)]
-pub(crate) struct OpenLive {
-    pub(crate) room_id: u64,
-    pub(crate) title: String,
-}
+use crate::grid::VideoCard;
+use rigili_core::backend::{self, Backend};
+use rigili_core::{OpenLive, OpenVideo, Refresh, format_count};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum HomeTab {

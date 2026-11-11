@@ -4,10 +4,11 @@ use rigili_bilibili::api::search::{SearchOrder, SearchType};
 
 use super::items::{SearchItem, UserItem};
 use super::{SearchTab, SearchView};
-use crate::backend::{self, Backend};
-use crate::format::api_task_error_message;
+use rigili_core::backend::{self, Backend};
+use rigili_core::runtime::{ApiTaskError, spawn_api};
+
+use crate::error::api_task_error_message;
 use crate::grid::{VideoCard, append_unique_by};
-use crate::platform::runtime::{ApiTaskError, spawn_api};
 
 struct Page {
     items: Vec<SearchItem>,
@@ -196,7 +197,7 @@ impl SearchView {
 
         spawn_api(
             cx,
-            async move { crate::playback::resolve_season(backend, season_id).await },
+            async move { rigili_core::resolve_season(backend, season_id).await },
             move |this, result, cx| {
                 this.opening = None;
                 match result {

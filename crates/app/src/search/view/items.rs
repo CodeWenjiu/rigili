@@ -1,7 +1,7 @@
 use rigili_bilibili::{SearchArticle, SearchLiveRoom, SearchMedia, SearchUser};
 
-use crate::format::{format_count, format_date};
 use crate::grid::VideoCard;
+use rigili_core::{format_count, format_date};
 
 pub(crate) enum SearchItem {
     Video(VideoCard),

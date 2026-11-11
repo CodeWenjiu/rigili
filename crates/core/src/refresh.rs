@@ -1,6 +1,6 @@
 use gpui_kit::*;
 
-pub(crate) trait Refresh: Render + 'static {
+pub trait Refresh: Render + 'static {
     fn refresh(&mut self, cx: &mut Context<Self>);
 
     fn can_refresh(&self) -> bool {

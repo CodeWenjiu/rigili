@@ -5,7 +5,7 @@ use gpui_kit::http_client::{AsyncBody, HttpClient, Url, http};
 use gpui_kit::*;
 use tokio::sync::Semaphore;
 
-use crate::platform::runtime::Tokio;
+use rigili_core::runtime::Tokio;
 
 const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const REFERER: &str = "https://www.bilibili.com/";

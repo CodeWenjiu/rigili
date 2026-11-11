@@ -1,7 +1,6 @@
 use rigili_bilibili::{ApiError, Dash, VideoInfo};
 
-use crate::backend::Backend;
-use crate::grid::OpenVideo;
+use rigili_core::backend::Backend;
 
 #[derive(Clone, Debug)]
 pub struct PlaybackRequest {
@@ -37,34 +36,9 @@ pub(super) struct Resolved {
     pub(super) streams: Streams,
 }
 
-pub(super) struct Streams {
+pub(crate) struct Streams {
     pub(super) video: String,
     pub(super) audio: Option<String>,
-}
-
-pub(crate) async fn resolve_season(
-    backend: Backend,
-    season_id: u64,
-) -> Result<Option<OpenVideo>, ApiError> {
-    let season = backend.pgc_season(season_id).await?;
-    let Some(episode) = season
-        .episodes
-        .into_iter()
-        .find(|episode| !episode.bvid.is_empty())
-    else {
-        return Ok(None);
-    };
-    let title = if episode.long_title.is_empty() {
-        season.title
-    } else {
-        format!("{} {}", season.title, episode.long_title)
-    };
-
-    Ok(Some(OpenVideo {
-        bvid: episode.bvid,
-        cid: (episode.cid != 0).then_some(episode.cid),
-        title,
-    }))
 }
 
 pub(super) async fn resolve(

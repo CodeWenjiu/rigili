@@ -3,12 +3,12 @@ use std::future::Future;
 use gpui_kit::*;
 use rigili_bilibili::ApiError;
 
-pub(crate) enum ApiTaskError {
+pub enum ApiTaskError {
     Api(ApiError),
     Join(tokio::task::JoinError),
 }
 
-pub(crate) fn spawn_api<V, T, F, U>(cx: &mut Context<V>, future: F, on_done: U)
+pub fn spawn_api<V, T, F, U>(cx: &mut Context<V>, future: F, on_done: U)
 where
     V: 'static,
     T: Send + 'static,
@@ -27,7 +27,7 @@ where
     .detach();
 }
 
-pub(crate) fn init(cx: &mut App) {
+pub fn init(cx: &mut App) {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -56,10 +56,10 @@ impl Drop for GlobalTokio {
     }
 }
 
-pub(crate) struct Tokio;
+pub struct Tokio;
 
 impl Tokio {
-    pub(crate) fn spawn<C, Fut, R>(cx: &C, future: Fut) -> Task<Result<R, tokio::task::JoinError>>
+    pub fn spawn<C, Fut, R>(cx: &C, future: Fut) -> Task<Result<R, tokio::task::JoinError>>
     where
         C: AppContext,
         Fut: Future<Output = R> + Send + 'static,
@@ -77,7 +77,7 @@ impl Tokio {
         })
     }
 
-    pub(crate) fn handle(cx: &App) -> tokio::runtime::Handle {
+    pub fn handle(cx: &App) -> tokio::runtime::Handle {
         cx.read_global(|tokio: &GlobalTokio, _| tokio.handle.clone())
     }
 }

@@ -7,7 +7,7 @@ use gpui_kit::*;
 use rigili_player::{PlaybackPhase, PlayerStatus};
 
 use super::surface::PlayerView;
-use crate::format::format_clock;
+use rigili_core::format_clock;
 
 pub(super) struct Transport<'a> {
     pub(super) status: &'a PlayerStatus,

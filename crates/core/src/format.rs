@@ -1,11 +1,8 @@
 use std::time::Duration;
 
-use gpui_kit::App;
 use rigili_bilibili::ApiError;
 
-use crate::platform::runtime::ApiTaskError;
-
-pub(crate) fn api_error_message(error: &ApiError) -> String {
+pub fn api_error_message(error: &ApiError) -> String {
     if error.is_login_required() {
         "登录已过期，请重新登录".into()
     } else if error.is_risk_control() {
@@ -15,19 +12,7 @@ pub(crate) fn api_error_message(error: &ApiError) -> String {
     }
 }
 
-pub(crate) fn api_task_error_message(error: ApiTaskError, cx: &mut App) -> String {
-    match error {
-        ApiTaskError::Api(error) => {
-            if error.is_login_required() {
-                crate::login::expire(cx);
-            }
-            api_error_message(&error)
-        }
-        ApiTaskError::Join(error) => format!("加载任务失败：{error}"),
-    }
-}
-
-pub(crate) fn format_count(value: u64) -> String {
+pub fn format_count(value: u64) -> String {
     if value >= 100_000_000 {
         format!("{:.1}亿", value as f64 / 100_000_000.0)
     } else if value >= 10_000 {
@@ -37,28 +22,28 @@ pub(crate) fn format_count(value: u64) -> String {
     }
 }
 
-pub(crate) fn format_duration(seconds: u64) -> String {
+pub fn format_duration(seconds: u64) -> String {
     clock(Duration::from_secs(seconds), true)
 }
 
-pub(crate) fn format_clock(seconds: f64) -> String {
+pub fn format_clock(seconds: f64) -> String {
     clock(
         Duration::try_from_secs_f64(seconds).unwrap_or_default(),
         false,
     )
 }
 
-pub(crate) fn format_date(unix: i64) -> String {
+pub fn format_date(unix: i64) -> String {
     let (_, month, day) = civil_from_days(unix.div_euclid(86_400));
     format!("{month}-{day}")
 }
 
-pub(crate) fn format_ymd(unix: i64) -> String {
+pub fn format_ymd(unix: i64) -> String {
     let (year, month, day) = civil_from_days(unix.div_euclid(86_400));
     format!("{year}-{month:02}-{day:02}")
 }
 
-pub(crate) fn format_datetime(unix: i64) -> String {
+pub fn format_datetime(unix: i64) -> String {
     let (year, month, day) = civil_from_days(unix.div_euclid(86_400));
     let seconds = unix.rem_euclid(86_400);
     format!(

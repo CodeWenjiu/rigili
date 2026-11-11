@@ -9,8 +9,8 @@ use rigili_bilibili::{Nav, api::login::cookies_from_login_url};
 use image::RgbaImage;
 use qrcodegen::{QrCode, QrCodeEcc};
 
-use crate::backend::{self, Backend};
-use crate::platform::runtime::Tokio;
+use rigili_core::backend::{self, Backend};
+use rigili_core::runtime::Tokio;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const QR_SCALE: u32 = 6;

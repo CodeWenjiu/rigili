@@ -21,7 +21,7 @@ struct BackendState {
 
 impl Global for BackendState {}
 
-pub(crate) fn init(cx: &mut App) {
+pub fn init(cx: &mut App) {
     let state = match Backend::new() {
         Ok(backend) => BackendState {
             backend: Some(backend),
@@ -35,7 +35,7 @@ pub(crate) fn init(cx: &mut App) {
     cx.set_global(state);
 }
 
-pub(crate) fn get(cx: &App) -> Result<Backend, String> {
+pub fn get(cx: &App) -> Result<Backend, String> {
     let state = cx.global::<BackendState>();
     match (&state.backend, &state.error) {
         (Some(backend), _) => Ok(backend.clone()),

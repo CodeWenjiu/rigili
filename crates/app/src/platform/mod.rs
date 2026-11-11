@@ -3,12 +3,12 @@ use std::borrow::Cow;
 use gpui_kit::App;
 
 rigili_macro::mod_prv!(http);
-rigili_macro::mod_pub!(crate, assets, runtime, theme);
+rigili_macro::mod_pub!(crate, assets, theme);
 
 pub(crate) fn init(cx: &mut App) {
     load_ui_font(cx);
     theme::apply(cx);
-    runtime::init(cx);
+    rigili_core::runtime::init(cx);
     http::init(cx);
 }
 

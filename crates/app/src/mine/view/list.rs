@@ -8,7 +8,6 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::{FavoriteView, FolderSource, MineTab, MineView};
-use crate::format::format_ymd;
 use crate::grid::VideoCard;
 use crate::grid::{
     BangumiCards, CARD_GAP, CardGrid, CardMetrics, CardOverlay, CardStyle, FolderCards,
@@ -18,6 +17,7 @@ use crate::grid::{
 use crate::platform::theme::cover_scrim;
 use gpui_kit::component::spinner::Spinner;
 use rigili_bilibili::{BangumiFollow, FavFolder, thumbnail};
+use rigili_core::format_ymd;
 
 impl MineView {
     pub(super) fn render_content(

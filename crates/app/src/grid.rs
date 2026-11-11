@@ -10,8 +10,8 @@ use gpui_kit::*;
 use rigili_bilibili::{
     FavItem, HistoryItem, PopularVideo, RecommendVideo, SearchVideo, WatchLaterItem, thumbnail,
 };
+use rigili_core::{OpenVideo, format_count, format_date, format_duration};
 
-use crate::format::{format_count, format_date, format_duration};
 use crate::platform::theme::cover_scrim;
 
 pub(crate) const CARD_GAP: Pixels = px(16.);
@@ -60,13 +60,6 @@ pub(crate) struct BangumiCards;
 
 impl CardGrid for BangumiCards {
     const MIN_CARD_WIDTH: f32 = 200.;
-}
-
-#[derive(Clone)]
-pub(crate) struct OpenVideo {
-    pub(crate) bvid: String,
-    pub(crate) cid: Option<u64>,
-    pub(crate) title: String,
 }
 
 #[derive(Clone)]

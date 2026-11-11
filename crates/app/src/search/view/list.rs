@@ -18,7 +18,7 @@ use crate::grid::{
     CARD_GAP, CardGrid, CardMetrics, CardStyle, LIST_FOOTER_HEIGHT, VideoCards, card_text_height,
     list_footer, skeleton_card,
 };
-use crate::home::OpenLive;
+use rigili_core::OpenLive;
 
 impl SearchView {
     fn columns(&self) -> usize {

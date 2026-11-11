@@ -9,7 +9,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::{VideoInfo, VideoPage};
 
-use crate::format::{format_count, format_datetime, format_duration};
+use rigili_core::{format_count, format_datetime, format_duration};
 
 const INFO_WIDTH: Pixels = px(340.);
 

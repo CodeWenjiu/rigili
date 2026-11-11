@@ -1,11 +1,13 @@
 use gpui_kit::*;
 use rigili_bilibili::{LiveRoom, PgcIndex, Popular, Recommend};
 
-use super::{HomeItem, HomeTab, HomeView, OpenLive, OpenTarget};
-use crate::backend;
-use crate::format::api_task_error_message;
+use super::{HomeItem, HomeTab, HomeView, OpenTarget};
+use rigili_core::OpenLive;
+use rigili_core::backend;
+use rigili_core::runtime::{ApiTaskError, spawn_api};
+
+use crate::error::api_task_error_message;
 use crate::grid::{VideoCard, append_unique_by};
-use crate::platform::runtime::{ApiTaskError, spawn_api};
 
 const VIDEO_PAGE_SIZE: u32 = 30;
 const LIVE_PAGE_SIZE: u32 = 30;
@@ -235,7 +237,7 @@ impl HomeView {
 
         spawn_api(
             cx,
-            async move { crate::playback::resolve_season(backend, season_id).await },
+            async move { rigili_core::resolve_season(backend, season_id).await },
             move |this, result, cx| {
                 this.opening = None;
                 match result {

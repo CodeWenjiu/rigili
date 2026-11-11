@@ -273,7 +273,7 @@ fn next_speed(current: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::next_speed;
-    use crate::format::format_clock;
+    use rigili_core::format_clock;
 
     #[test]
     fn cycles_playback_speeds() {

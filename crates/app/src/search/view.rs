@@ -8,11 +8,9 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::api::search::{SearchOrder, SearchType};
 
-use crate::backend::{self, Backend};
-use crate::grid::OpenVideo;
-use crate::home::OpenLive;
-use crate::refresh::Refresh;
 use items::SearchItem;
+use rigili_core::backend::{self, Backend};
+use rigili_core::{OpenLive, OpenVideo, Refresh};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum SearchTab {

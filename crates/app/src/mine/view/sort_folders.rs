@@ -6,9 +6,10 @@ use gpui_kit::*;
 use rigili_bilibili::FavFolder;
 
 use super::MineView;
-use crate::backend;
-use crate::format::api_task_error_message;
-use crate::platform::runtime::spawn_api;
+use rigili_core::backend;
+use rigili_core::runtime::spawn_api;
+
+use crate::error::api_task_error_message;
 
 pub(super) struct SortFoldersDialog {
     folders: Vec<FavFolder>,
