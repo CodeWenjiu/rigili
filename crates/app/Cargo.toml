@@ -13,7 +13,7 @@ gpui-kit.workspace = true
 rigili_bilibili.workspace = true
 rigili_core.workspace = true
 rigili_macro.workspace = true
-rigili_player.workspace = true
+rigili_playback.workspace = true
 anyhow.workspace = true
 futures = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["gzip", "rustls-tls"] }

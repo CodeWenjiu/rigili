@@ -4,7 +4,7 @@ use super::{FavoriteView, FolderSource, MineTab, MineView, VideoListState};
 use rigili_core::backend::{self, Backend};
 use rigili_core::runtime::spawn_api;
 
-use crate::error::api_task_error_message;
+use rigili_core::api_task_error_message;
 use crate::grid::{VideoCard, append_unique_by};
 
 const BANGUMI_PAGE_SIZE: usize = 20;

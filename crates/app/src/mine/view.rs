@@ -12,7 +12,7 @@ use rigili_core::backend::{self, Backend};
 use rigili_core::runtime::spawn_api;
 use rigili_core::{OpenVideo, Refresh, format_count};
 
-use crate::error::api_task_error_message;
+use rigili_core::api_task_error_message;
 use crate::grid::VideoCard;
 use crate::login;
 use create_folder::CreateFolderDialog;
@@ -312,7 +312,7 @@ impl MineView {
     }
 
     fn sync_user(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let mid = login::user(cx).map(|user| user.mid);
+        let mid = rigili_core::login::user(cx).map(|user| user.mid);
         if mid == self.user_mid {
             return;
         }
@@ -348,7 +348,7 @@ impl MineView {
         let primary = theme.primary;
         let primary_foreground = theme.primary_foreground;
 
-        let Some(user) = login::user(cx) else {
+        let Some(user) = rigili_core::login::user(cx) else {
             return h_flex()
                 .w_full()
                 .p_6()

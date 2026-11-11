@@ -1,6 +1,6 @@
 use gpui_kit::*;
 
-use crate::playback::{PlaybackRequest, PlayerWindow};
+use rigili_playback::{PlaybackRequest, PlayerWindow};
 
 pub(super) struct Playback {
     handle: AnyWindowHandle,
@@ -13,7 +13,7 @@ impl Playback {
         main_window: AnyWindowHandle,
         cx: &mut App,
     ) -> Result<Self> {
-        let (handle, view) = crate::playback::open(request, Some(main_window), cx)?;
+        let (handle, view) = rigili_playback::open(request, Some(main_window), cx)?;
         Ok(Self { handle, view })
     }
 

@@ -5729,7 +5729,7 @@ dependencies = [
  "rigili_bilibili",
  "rigili_core",
  "rigili_macro",
- "rigili_player",
+ "rigili_playback",
  "tokio",
 ]
 
@@ -5761,6 +5761,18 @@ dependencies = [
 [[package]]
 name = "rigili_macro"
 version = "0.1.0"
+
+[[package]]
+name = "rigili_playback"
+version = "0.1.0"
+dependencies = [
+ "gpui-kit",
+ "image",
+ "rigili_bilibili",
+ "rigili_core",
+ "rigili_macro",
+ "rigili_player",
+]
 
 [[package]]
 name = "rigili_player"

@@ -210,7 +210,7 @@ impl PlayerWindow {
     }
 
     fn handle_error(&mut self, error: ApiTaskError, cx: &mut Context<Self>) {
-        self.error = Some(crate::error::api_task_error_message(error, cx));
+        self.error = Some(rigili_core::api_task_error_message(error, cx));
     }
 
     fn retry(&mut self, cx: &mut Context<Self>) {

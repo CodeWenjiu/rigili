@@ -10,6 +10,7 @@ use image::RgbaImage;
 use qrcodegen::{QrCode, QrCodeEcc};
 
 use rigili_core::backend::{self, Backend};
+use rigili_core::login::set_user;
 use rigili_core::runtime::Tokio;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -26,28 +27,6 @@ enum Phase {
     Expired,
     Failed(String),
     Done,
-}
-
-#[derive(Default)]
-pub(crate) struct LoginState {
-    pub(crate) user: Option<Nav>,
-}
-
-impl Global for LoginState {}
-
-pub(crate) fn user(cx: &App) -> Option<Nav> {
-    cx.global::<LoginState>().user.clone()
-}
-
-pub(crate) fn set_user(user: Option<Nav>, cx: &mut App) {
-    cx.set_global(LoginState { user });
-    cx.refresh_windows();
-}
-
-pub(crate) fn expire(cx: &mut App) {
-    if user(cx).is_some() {
-        set_user(None, cx);
-    }
 }
 
 struct LoginView {

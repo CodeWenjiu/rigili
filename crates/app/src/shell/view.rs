@@ -16,7 +16,7 @@ use super::playback::Playback;
 use crate::home::{HomeTab, HomeView};
 use crate::login;
 use crate::mine::MineView;
-use crate::playback::PlaybackRequest;
+use rigili_playback::PlaybackRequest;
 use crate::search::SearchView;
 use search_box::SearchBox;
 
@@ -207,7 +207,7 @@ impl MainView {
     }
 
     fn account(&self, cx: &mut Context<Self>) -> AnyElement {
-        if let Some(user) = login::user(cx) {
+        if let Some(user) = rigili_core::login::user(cx) {
             return Avatar::new()
                 .src(user.face)
                 .name(user.uname)

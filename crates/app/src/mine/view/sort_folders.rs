@@ -9,7 +9,7 @@ use super::MineView;
 use rigili_core::backend;
 use rigili_core::runtime::spawn_api;
 
-use crate::error::api_task_error_message;
+use rigili_core::api_task_error_message;
 
 pub(super) struct SortFoldersDialog {
     folders: Vec<FavFolder>,

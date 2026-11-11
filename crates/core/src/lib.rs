@@ -1,2 +1,2 @@
-rigili_macro::mod_pub!(backend, runtime);
-rigili_macro::mod_flat!(event, format, refresh, resolve);
+rigili_macro::mod_pub!(backend, login, runtime);
+rigili_macro::mod_flat!(error, event, format, refresh, resolve);

@@ -1,0 +1,13 @@
+[package]
+name = "rigili_playback"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+gpui-kit.workspace = true
+rigili_bilibili.workspace = true
+rigili_core.workspace = true
+rigili_macro.workspace = true
+rigili_player.workspace = true
+image = { version = "0.25", default-features = false }
