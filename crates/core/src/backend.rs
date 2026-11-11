@@ -2,11 +2,12 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use gpui_kit::*;
 use rigili_bilibili::{
-    ApiError, ArticleSearch, BangumiFollows, Client, CreatedFolder, FavFolders, FavItems,
+    ApiError, ArticleSearch, BangumiFollows, Client, CreatedFolder, Dynamics, FavFolders, FavItems,
     HistoryPage, HotWords, LiveRoom, LiveSearch, MediaSearch, Nav, NavStat, PgcIndex, PgcSeason,
     PlayUrl, Popular, QrCode, QrPoll, Recommend, SearchAll, SearchSuggestions, SessionError,
-    UserSearch, VideoInfo, VideoSearch, WatchLater, api,
+    SpaceCollections, SpaceVideos, UserSearch, VideoInfo, VideoSearch, WatchLater, api,
     api::search::{SearchOrder, SearchType},
+    api::space::SpaceVideoOrder,
 };
 
 #[derive(Clone)]
@@ -169,6 +170,24 @@ impl Backend {
         page: u32,
     ) -> Result<BangumiFollows, ApiError> {
         api::mine::bangumi_follows(&self.client, mid, season_type, page).await
+    }
+
+    pub async fn dynamics(&self, mid: u64, offset: &str) -> Result<Dynamics, ApiError> {
+        api::space::dynamics(&self.client, mid, offset).await
+    }
+
+    pub async fn space_videos(
+        &self,
+        mid: u64,
+        page: u32,
+        order: SpaceVideoOrder,
+        keyword: &str,
+    ) -> Result<SpaceVideos, ApiError> {
+        api::space::videos(&self.client, mid, page, order, keyword).await
+    }
+
+    pub async fn collections(&self, mid: u64, page: u32) -> Result<SpaceCollections, ApiError> {
+        api::space::collections(&self.client, mid, page).await
     }
 
     pub async fn fav_items(&self, media_id: u64, page: u32) -> Result<FavItems, ApiError> {

@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use gpui_kit::assets::{Assets, icon_assets};
 use gpui_kit::{AssetSource, Result, SharedString};
 
-icon_assets!(ExtraIcons, [Flame, MessageCircle, House]);
+icon_assets!(ExtraIcons, [Flame, MessageCircle, House, Share, ListVideo]);
 
 pub(crate) struct AppAssets;
 
@@ -32,6 +32,8 @@ mod tests {
         assert!(AppAssets.load("icons/play.svg").unwrap().is_some());
         assert!(AppAssets.load("icons/flame.svg").unwrap().is_some());
         assert!(AppAssets.load("icons/house.svg").unwrap().is_some());
+        assert!(AppAssets.load("icons/share.svg").unwrap().is_some());
+        assert!(AppAssets.load("icons/list-video.svg").unwrap().is_some());
         assert!(AppAssets.load("icons/zoom-in.svg").unwrap().is_none());
     }
 }

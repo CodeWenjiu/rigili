@@ -8,9 +8,10 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::{
-    FavItem, HistoryItem, PopularVideo, RecommendVideo, SearchVideo, WatchLaterItem, thumbnail,
+    FavItem, HistoryItem, PopularVideo, RecommendVideo, SearchVideo, SpaceVideo, WatchLaterItem,
+    thumbnail,
 };
-use rigili_core::{OpenVideo, format_count, format_date, format_duration};
+use rigili_core::{OpenVideo, format_count, format_date, format_duration, format_ymd};
 
 use crate::platform::theme::cover_scrim;
 
@@ -204,6 +205,22 @@ impl From<SearchVideo> for VideoCard {
             views: format_count(play),
             danmaku: format_count(danmaku),
             like: format_count(like),
+        }
+    }
+}
+
+impl From<SpaceVideo> for VideoCard {
+    fn from(video: SpaceVideo) -> Self {
+        Self {
+            bvid: video.bvid,
+            cid: None,
+            cover: video.pic,
+            title: video.title,
+            meta: format!("{} · {}", video.author, format_ymd(video.created)),
+            duration: video.length,
+            views: format_count(video.play),
+            danmaku: format_count(video.video_review),
+            like: String::new(),
         }
     }
 }

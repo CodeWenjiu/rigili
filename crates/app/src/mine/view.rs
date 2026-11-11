@@ -1,9 +1,10 @@
-rigili_macro::mod_prv!(create_folder, feed, list, sort_folders);
+rigili_macro::mod_prv!(create_folder, feed, list, sort_folders, space);
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -17,9 +18,13 @@ use crate::login;
 use create_folder::CreateFolderDialog;
 use rigili_core::api_task_error_message;
 use sort_folders::SortFoldersDialog;
+use space::{CollectionsState, DynamicsState, SpaceVideosState};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum MineTab {
+    Dynamics,
+    Videos,
+    Collections,
     History,
     Offline,
     #[default]
@@ -28,7 +33,10 @@ pub(crate) enum MineTab {
 }
 
 impl MineTab {
-    pub(crate) const ALL: [Self; 4] = [
+    pub(crate) const ALL: [Self; 7] = [
+        Self::Dynamics,
+        Self::Videos,
+        Self::Collections,
         Self::History,
         Self::Offline,
         Self::Favorites,
@@ -37,6 +45,9 @@ impl MineTab {
 
     fn label(self) -> &'static str {
         match self {
+            Self::Dynamics => "动态",
+            Self::Videos => "投稿",
+            Self::Collections => "合集和系列",
             Self::History => "历史记录",
             Self::Offline => "离线缓存",
             Self::Favorites => "我的收藏",
@@ -46,15 +57,21 @@ impl MineTab {
 
     fn index(self) -> usize {
         match self {
-            Self::History => 0,
-            Self::Offline => 1,
-            Self::Favorites => 2,
-            Self::WatchLater => 3,
+            Self::Dynamics => 0,
+            Self::Videos => 1,
+            Self::Collections => 2,
+            Self::History => 3,
+            Self::Offline => 4,
+            Self::Favorites => 5,
+            Self::WatchLater => 6,
         }
     }
 
     fn list_id(self) -> &'static str {
         match self {
+            Self::Dynamics => "mine-dynamics-list",
+            Self::Videos => "mine-space-videos-list",
+            Self::Collections => "mine-collections-list",
             Self::History => "mine-history-list",
             Self::Offline => "mine-offline-list",
             Self::Favorites => "mine-favorites-list",
@@ -240,6 +257,9 @@ pub struct MineView {
     favorites: VideoListState,
     history: VideoListState,
     watch_later: VideoListState,
+    dynamics: DynamicsState,
+    space_videos: SpaceVideosState,
+    collections: CollectionsState,
     collected: CollectedState,
     bangumi: BangumiState,
     cinema: BangumiState,
@@ -252,13 +272,21 @@ pub struct MineView {
     notice: Option<String>,
     user_mid: Option<u64>,
     list_width: Pixels,
+    space_search: Entity<InputState>,
+    _space_search_sub: Subscription,
 }
 
 impl EventEmitter<OpenVideo> for MineView {}
 
 impl MineView {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let backend = backend::get(cx).ok();
+        let space_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索投稿视频"));
+        let space_search_sub = cx.subscribe_in(&space_search, window, |this, _, event, _, cx| {
+            if let InputEvent::PressEnter { .. } = event {
+                this.submit_space_search(cx);
+            }
+        });
         Self {
             backend,
             tab: MineTab::default(),
@@ -266,6 +294,9 @@ impl MineView {
             favorites: VideoListState::new(),
             history: VideoListState::new(),
             watch_later: VideoListState::new(),
+            dynamics: DynamicsState::new(),
+            space_videos: SpaceVideosState::new(),
+            collections: CollectionsState::new(),
             collected: CollectedState::new(),
             bangumi: BangumiState::new(),
             cinema: BangumiState::new(),
@@ -278,6 +309,8 @@ impl MineView {
             notice: None,
             user_mid: None,
             list_width: px(0.),
+            space_search,
+            _space_search_sub: space_search_sub,
         }
     }
 
@@ -298,7 +331,9 @@ impl MineView {
             MineTab::History => &self.history,
             MineTab::Favorites => &self.favorites,
             MineTab::WatchLater => &self.watch_later,
-            MineTab::Offline => &self.history,
+            MineTab::Offline | MineTab::Dynamics | MineTab::Videos | MineTab::Collections => {
+                &self.history
+            }
         }
     }
 
@@ -330,6 +365,11 @@ impl MineView {
         self.collected = CollectedState::new();
         self.bangumi = BangumiState::new();
         self.cinema = BangumiState::new();
+        self.dynamics = DynamicsState::new();
+        self.space_videos = SpaceVideosState::new();
+        self.collections = CollectionsState::new();
+        self.space_search
+            .update(cx, |input, cx| input.set_value("", window, cx));
         self.opening = None;
         self.notice = None;
 
@@ -790,8 +830,11 @@ impl MineView {
                 .into_any_element();
         }
 
-        let content = if self.tab == MineTab::Favorites {
-            match self.favorites_view {
+        let content = match self.tab {
+            MineTab::Dynamics => self.render_dynamics(cx),
+            MineTab::Videos => self.render_space_videos(window, cx),
+            MineTab::Collections => self.render_collections(window, cx),
+            MineTab::Favorites => match self.favorites_view {
                 FavoriteView::Folder => self.render_content(MineTab::Favorites, window, cx),
                 FavoriteView::Folders => {
                     if self.browsing_folder == Some(FavoriteView::Folders) {
@@ -809,9 +852,8 @@ impl MineView {
                 }
                 FavoriteView::Bangumi => self.render_bangumi(false, window, cx),
                 FavoriteView::Cinema => self.render_bangumi(true, window, cx),
-            }
-        } else {
-            self.render_content(self.tab, window, cx)
+            },
+            _ => self.render_content(self.tab, window, cx),
         };
 
         v_flex()
@@ -848,6 +890,9 @@ impl Refresh for MineView {
             MineTab::History => self.load_history(cx),
             MineTab::WatchLater => self.load_watch_later(cx),
             MineTab::Offline => {}
+            MineTab::Dynamics | MineTab::Videos | MineTab::Collections => {
+                self.reload_space_tab(cx);
+            }
         }
         self.load_stat(cx);
     }

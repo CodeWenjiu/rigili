@@ -34,23 +34,29 @@ pub fn format_clock(seconds: f64) -> String {
 }
 
 pub fn format_date(unix: i64) -> String {
-    let (_, month, day) = civil_from_days(unix.div_euclid(86_400));
+    let (_, month, day) = civil_from_days(beijing_day(unix));
     format!("{month}-{day}")
 }
 
 pub fn format_ymd(unix: i64) -> String {
-    let (year, month, day) = civil_from_days(unix.div_euclid(86_400));
+    let (year, month, day) = civil_from_days(beijing_day(unix));
     format!("{year}-{month:02}-{day:02}")
 }
 
 pub fn format_datetime(unix: i64) -> String {
-    let (year, month, day) = civil_from_days(unix.div_euclid(86_400));
-    let seconds = unix.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(beijing_day(unix));
+    let seconds = (unix + BEIJING_OFFSET).rem_euclid(86_400);
     format!(
         "{year}-{month:02}-{day:02} {:02}:{:02}",
         seconds / 3600,
         seconds % 3600 / 60
     )
+}
+
+const BEIJING_OFFSET: i64 = 8 * 3600;
+
+fn beijing_day(unix: i64) -> i64 {
+    (unix + BEIJING_OFFSET).div_euclid(86_400)
 }
 
 fn clock(duration: Duration, pad_minutes: bool) -> String {
@@ -142,10 +148,10 @@ mod tests {
     fn formats_publish_dates() {
         assert_eq!(format_date(1_762_646_400), "11-9");
         assert_eq!(format_ymd(1_762_646_400), "2025-11-09");
-        assert_eq!(format_datetime(1_762_646_400), "2025-11-09 00:00");
+        assert_eq!(format_datetime(1_762_646_400), "2025-11-09 08:00");
         assert_eq!(
             format_datetime(1_762_646_400 + 13 * 3600 + 16 * 60),
-            "2025-11-09 13:16"
+            "2025-11-09 21:16"
         );
     }
 }

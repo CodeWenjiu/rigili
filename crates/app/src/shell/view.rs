@@ -16,8 +16,8 @@ use super::playback::Playback;
 use crate::home::{HomeTab, HomeView};
 use crate::login;
 use crate::mine::MineView;
-use rigili_playback::PlaybackRequest;
 use crate::search::SearchView;
+use rigili_playback::PlaybackRequest;
 use search_box::SearchBox;
 
 pub struct MainView {
@@ -110,7 +110,7 @@ impl MainView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let home = cx.new(HomeView::new);
         let search = cx.new(SearchView::new);
-        let mine = cx.new(MineView::new);
+        let mine = cx.new(|cx| MineView::new(window, cx));
         let search_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("搜索视频、番剧、用户"));
         let input_sub = cx.subscribe_in(&search_input, window, |this, _, event, _, cx| {

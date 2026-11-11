@@ -537,7 +537,7 @@ impl MineView {
     }
 }
 
-fn video_card(
+pub(super) fn video_card(
     card: &VideoCard,
     style: CardStyle,
     metrics: CardMetrics,

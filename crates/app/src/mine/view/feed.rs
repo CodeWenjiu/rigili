@@ -4,13 +4,13 @@ use super::{FavoriteView, FolderSource, MineTab, MineView, VideoListState};
 use rigili_core::backend::{self, Backend};
 use rigili_core::runtime::spawn_api;
 
-use rigili_core::api_task_error_message;
 use crate::grid::{VideoCard, append_unique_by};
+use rigili_core::api_task_error_message;
 
 const BANGUMI_PAGE_SIZE: usize = 20;
 
 impl MineView {
-    fn backend(&mut self, cx: &mut Context<Self>) -> Result<Backend, String> {
+    pub(super) fn backend(&mut self, cx: &mut Context<Self>) -> Result<Backend, String> {
         if let Some(backend) = &self.backend {
             return Ok(backend.clone());
         }
@@ -82,6 +82,9 @@ impl MineView {
                 }
             }
             MineTab::Offline => {}
+            MineTab::Dynamics | MineTab::Videos | MineTab::Collections => {
+                self.load_space_if_needed(cx);
+            }
         }
     }
 
@@ -91,6 +94,9 @@ impl MineView {
             MineTab::History => self.load_history(cx),
             MineTab::WatchLater => self.load_watch_later(cx),
             MineTab::Offline => {}
+            MineTab::Dynamics | MineTab::Videos | MineTab::Collections => {
+                self.reload_space_tab(cx);
+            }
         }
     }
 
