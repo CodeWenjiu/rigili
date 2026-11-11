@@ -10,12 +10,12 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use rigili_core::{OpenLive, OpenVideo, Refresh};
+use rigili_core::{OpenLive, OpenSpace, OpenVideo, Refresh};
 
 use super::playback::Playback;
 use crate::home::{HomeTab, HomeView};
 use crate::login;
-use crate::mine::MineView;
+use crate::mine::{CloseSpace, MineView};
 use crate::search::SearchView;
 use rigili_playback::PlaybackRequest;
 use search_box::SearchBox;
@@ -29,8 +29,18 @@ pub struct MainView {
     search_box: SearchBox,
     search_active: bool,
     mine_active: bool,
+    space_active: bool,
+    space_return: ReturnPage,
     playback: Option<Playback>,
     _search_input_sub: Subscription,
+}
+
+#[derive(Clone, Copy, Default)]
+enum ReturnPage {
+    #[default]
+    Home,
+    Search,
+    Mine,
 }
 
 type NavHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
@@ -128,6 +138,11 @@ impl MainView {
         })
         .detach();
 
+        cx.subscribe_in(&home, window, |this, _, event: &OpenSpace, window, cx| {
+            this.open_space(event.clone(), window, cx);
+        })
+        .detach();
+
         cx.subscribe_in(&search, window, |this, _, event: &OpenVideo, window, cx| {
             this.play(event.clone(), window, cx);
         })
@@ -138,8 +153,18 @@ impl MainView {
         })
         .detach();
 
+        cx.subscribe_in(&search, window, |this, _, event: &OpenSpace, window, cx| {
+            this.open_space(event.clone(), window, cx);
+        })
+        .detach();
+
         cx.subscribe_in(&mine, window, |this, _, event: &OpenVideo, window, cx| {
             this.play(event.clone(), window, cx);
+        })
+        .detach();
+
+        cx.subscribe_in(&mine, window, |this, _, _: &CloseSpace, window, cx| {
+            this.close_space(window, cx);
         })
         .detach();
 
@@ -169,6 +194,8 @@ impl MainView {
             search_box: SearchBox::new(),
             search_active: false,
             mine_active: false,
+            space_active: false,
+            space_return: ReturnPage::default(),
             playback: None,
             _search_input_sub: input_sub,
         }
@@ -178,6 +205,7 @@ impl MainView {
         let keyword = self.search_input.read(cx).value().trim().to_owned();
         self.search_box.close();
         self.mine_active = false;
+        self.space_active = false;
         if keyword.is_empty() {
             self.search_active = false;
             cx.notify();
@@ -188,6 +216,39 @@ impl MainView {
         self.search_active = true;
         self.search
             .update(cx, |search, cx| search.search(keyword, cx));
+        cx.notify();
+    }
+
+    fn open_space(&mut self, space: OpenSpace, window: &mut Window, cx: &mut Context<Self>) {
+        self.space_return = if self.search_active {
+            ReturnPage::Search
+        } else if self.mine_active {
+            ReturnPage::Mine
+        } else {
+            ReturnPage::Home
+        };
+        self.space_active = true;
+        self.search_active = false;
+        self.mine_active = false;
+        self.mine.update(cx, |mine, cx| {
+            mine.open_external_space(space.mid, space.name, window, cx);
+        });
+        cx.notify();
+    }
+
+    fn close_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.space_active {
+            return;
+        }
+        self.space_active = false;
+        self.mine
+            .update(cx, |mine, cx| mine.close_external_space(window, cx));
+        match self.space_return {
+            ReturnPage::Search => self.search_active = true,
+            ReturnPage::Mine => self.mine_active = true,
+            ReturnPage::Home => {}
+        }
+        self.space_return = ReturnPage::default();
         cx.notify();
     }
 
@@ -263,14 +324,18 @@ impl MainView {
                     .gap_y_3()
                     .child(
                         NavItem::new("首页", IconName::House)
-                            .active(!self.mine_active)
+                            .active(!self.mine_active && !self.space_active)
                             .on_click({
                                 let weak = weak.clone();
                                 move |_, _, cx| {
                                     let _ = weak.update(cx, |this, cx| {
-                                        if this.search_active || this.mine_active {
+                                        if this.search_active
+                                            || this.mine_active
+                                            || this.space_active
+                                        {
                                             this.search_active = false;
                                             this.mine_active = false;
+                                            this.space_active = false;
                                             cx.notify();
                                         }
                                     });
@@ -283,13 +348,18 @@ impl MainView {
                             .active(self.mine_active)
                             .on_click({
                                 let weak = weak.clone();
-                                move |_, _, cx| {
+                                move |_, window, cx| {
                                     let _ = weak.update(cx, |this, cx| {
-                                        if !this.mine_active {
-                                            this.mine_active = true;
-                                            this.search_active = false;
-                                            cx.notify();
+                                        if this.mine_active && !this.space_active {
+                                            return;
                                         }
+                                        this.mine.update(cx, |mine, cx| {
+                                            mine.close_external_space(window, cx);
+                                        });
+                                        this.mine_active = true;
+                                        this.search_active = false;
+                                        this.space_active = false;
+                                        cx.notify();
                                     });
                                 }
                             })
@@ -377,7 +447,9 @@ impl MainView {
             .child(
                 div()
                     .flex_shrink_0()
-                    .when(self.mine_active, |this| this.invisible())
+                    .when(self.mine_active || self.space_active, |this| {
+                        this.invisible()
+                    })
                     .child(self.render_home_tabs(home_tab, cx)),
             )
             .child(
@@ -454,7 +526,7 @@ impl MainView {
     }
 
     fn page_can_refresh(&self, cx: &App) -> bool {
-        if self.mine_active {
+        if self.mine_active || self.space_active {
             self.mine.read(cx).can_refresh()
         } else if self.search_active {
             self.search.read(cx).can_refresh()
@@ -464,7 +536,7 @@ impl MainView {
     }
 
     fn refresh_page(&mut self, cx: &mut Context<Self>) {
-        if self.mine_active {
+        if self.mine_active || self.space_active {
             self.mine.update(cx, |mine, cx| mine.refresh(cx));
         } else if self.search_active {
             self.search.update(cx, |search, cx| search.refresh(cx));
@@ -528,7 +600,7 @@ impl Render for MainView {
                             .flex_1()
                             .min_h_0()
                             .w_full()
-                            .child(if self.mine_active {
+                            .child(if self.mine_active || self.space_active {
                                 self.mine.clone().into_any_element()
                             } else if self.search_active {
                                 self.search.clone().into_any_element()

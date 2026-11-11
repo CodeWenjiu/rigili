@@ -4,6 +4,7 @@ use gpui_kit::component::button::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+use rigili_core::OpenSpace;
 
 use super::SearchView;
 use super::cards::{
@@ -19,6 +20,7 @@ impl SearchView {
         let columns = preview_columns(width);
         let card_width = preview_card_width(width, columns);
         let mid = user.mid;
+        let name = user.name.clone();
 
         v_flex()
             .w_full()
@@ -34,40 +36,68 @@ impl SearchView {
                     .items_center()
                     .gap_3()
                     .child(
-                        Avatar::new()
-                            .src(user.face.clone())
-                            .name(user.name.clone())
-                            .size(px(64.)),
-                    )
-                    .child(
-                        v_flex()
+                        h_flex()
+                            .id(SharedString::from(format!("search-user-space-{mid}")))
+                            .group("search-user-link")
                             .flex_1()
                             .min_w_0()
-                            .gap_1()
+                            .items_center()
+                            .gap_3()
+                            .cursor_pointer()
+                            .on_click({
+                                let name = name.clone();
+                                cx.listener(move |_, _: &ClickEvent, _, cx| {
+                                    cx.emit(OpenSpace {
+                                        mid,
+                                        name: name.clone(),
+                                    });
+                                })
+                            })
                             .child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .text_lg()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(style.foreground())
-                                            .child(user.name.clone()),
-                                    )
-                                    .child(level_badge(user.level, style)),
+                                Avatar::new()
+                                    .src(user.face.clone())
+                                    .name(user.name.clone())
+                                    .size(px(64.)),
                             )
                             .child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_2()
+                                v_flex()
+                                    .flex_1()
                                     .min_w_0()
-                                    .text_xs()
-                                    .text_color(style.muted())
-                                    .child(format!("粉丝: {}", user.fans))
-                                    .child("·")
-                                    .child(format!("视频: {}", user.videos))
-                                    .child(div().ml_2().truncate().child(user.description.clone())),
+                                    .gap_1()
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .truncate()
+                                                    .text_lg()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(style.foreground())
+                                                    .group_hover("search-user-link", move |this| {
+                                                        this.text_color(style.primary())
+                                                    })
+                                                    .child(user.name.clone()),
+                                            )
+                                            .child(level_badge(user.level, style)),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .min_w_0()
+                                            .text_xs()
+                                            .text_color(style.muted())
+                                            .child(format!("粉丝: {}", user.fans))
+                                            .child("·")
+                                            .child(format!("视频: {}", user.videos))
+                                            .child(
+                                                div()
+                                                    .ml_2()
+                                                    .truncate()
+                                                    .child(user.description.clone()),
+                                            ),
+                                    ),
                             ),
                     )
                     .child(
@@ -94,7 +124,10 @@ impl SearchView {
                     Button::new("search-user-videos")
                         .text()
                         .on_click(cx.listener(move |_, _, _, cx| {
-                            cx.open_url(&format!("https://space.bilibili.com/{mid}"));
+                            cx.emit(OpenSpace {
+                                mid,
+                                name: name.clone(),
+                            });
                         }))
                         .child(
                             h_flex()

@@ -133,10 +133,7 @@ pub async fn fetch_all(client: &Client, keyword: &str) -> Result<SearchAll, ApiE
         .await
 }
 
-pub async fn fetch_suggestions(
-    client: &Client,
-    term: &str,
-) -> Result<SearchSuggestions, ApiError> {
+pub async fn fetch_suggestions(client: &Client, term: &str) -> Result<SearchSuggestions, ApiError> {
     let term = term.trim();
     if term.is_empty() {
         return Ok(SearchSuggestions::default());
@@ -212,6 +209,7 @@ mod tests {
         assert_eq!(videos.videos.len(), 2);
         assert_eq!(videos.videos[0].title, "【测试】哔哩哔哩");
         assert_eq!(videos.videos[0].like, 100);
+        assert_eq!(videos.videos[0].mid, 12_345);
         assert_eq!(videos.videos[1].duration, 3_723);
 
         let users: UserSearch = parse(include_str!("../../fixtures/search_users.json"));

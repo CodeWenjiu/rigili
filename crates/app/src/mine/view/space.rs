@@ -6,17 +6,18 @@ use gpui_kit::component::button::*;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::v_virtual_list;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::api::space::SpaceVideoOrder;
-use rigili_bilibili::{DynamicArchive, DynamicItem, SeasonMeta, SeriesMeta, thumbnail};
+use rigili_bilibili::{DynamicArchive, DynamicItem, SeasonMeta, SeriesMeta, banner, thumbnail};
 use rigili_core::runtime::spawn_api;
 use rigili_core::{OpenVideo, api_task_error_message, format_count};
 
 use super::list::video_card;
-use super::{MineTab, MineView};
+use super::{CloseSpace, ExternalSpace, MineTab, MineView, profile_badge, profile_stat};
 use crate::grid::{
     CARD_GAP, CardGrid, CardMetrics, CardStyle, FolderCards, LIST_FOOTER_HEIGHT, VideoCard,
     VideoCards, append_unique_by, card_text_height, list_footer,
@@ -189,7 +190,7 @@ impl MineView {
     }
 
     fn load_dynamics(&mut self, reset: bool, cx: &mut Context<Self>) {
-        let Some(mid) = self.user_mid else {
+        let Some(mid) = self.space_mid() else {
             return;
         };
         if !reset && (self.dynamics.loading || self.dynamics.loading_more) {
@@ -259,7 +260,7 @@ impl MineView {
     }
 
     fn load_space_videos(&mut self, reset: bool, cx: &mut Context<Self>) {
-        let Some(mid) = self.user_mid else {
+        let Some(mid) = self.space_mid() else {
             return;
         };
         if !reset
@@ -354,7 +355,7 @@ impl MineView {
     }
 
     fn load_collections(&mut self, reset: bool, cx: &mut Context<Self>) {
-        let Some(mid) = self.user_mid else {
+        let Some(mid) = self.space_mid() else {
             return;
         };
         if !reset && (self.collections.loading || self.collections.loaded) {
@@ -409,6 +410,192 @@ impl MineView {
                 cx.notify();
             },
         );
+    }
+
+    pub(super) fn render_external_profile(
+        &self,
+        space: &ExternalSpace,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let foreground = theme.foreground;
+        let primary = theme.primary;
+        let primary_foreground = theme.primary_foreground;
+        let accent = theme.accent;
+        let background = theme.background;
+        let danger = theme.danger;
+        let banner_bg = linear_gradient(
+            120.,
+            linear_color_stop(primary.opacity(0.32), 0.),
+            linear_color_stop(background, 1.),
+        );
+        let radius = theme.radius_lg;
+
+        let profile = space.profile.as_ref();
+        let user = profile.map(|profile| &profile.user);
+        let name = user
+            .map(|user| user.name.as_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or(space.name.as_str());
+        let face = user.map(|user| user.face.clone()).unwrap_or_default();
+        let sign = user.map(|user| user.sign.clone()).unwrap_or_default();
+        let banner_url = user
+            .map(|user| user.top_photo.as_str())
+            .filter(|url| !url.is_empty());
+        let level = user.map(|user| user.level).unwrap_or(0);
+        let official = profile
+            .and_then(|profile| profile.official_title())
+            .map(str::to_owned);
+        let vip = profile
+            .and_then(|profile| profile.vip_label())
+            .map(str::to_owned);
+        let stat_value = |value: Option<u64>| match value {
+            Some(value) => format_count(value),
+            None => "—".into(),
+        };
+        let following = stat_value(profile.and_then(|profile| profile.following()));
+        let follower = stat_value(profile.and_then(|profile| profile.follower()));
+        let likes = stat_value(profile.and_then(|profile| profile.likes()));
+        let error = space.error.clone();
+
+        v_flex()
+            .w_full()
+            .flex_shrink_0()
+            .gap_2()
+            .child(
+                div()
+                    .relative()
+                    .w_full()
+                    .h(px(132.))
+                    .rounded(radius)
+                    .overflow_hidden()
+                    .bg(banner_bg)
+                    .when_some(banner_url, |this, url| {
+                        this.child(
+                            img(banner(url, 1280))
+                                .size_full()
+                                .object_fit(ObjectFit::Cover),
+                        )
+                    })
+                    .child(
+                        div().absolute().top_3().left_3().child(
+                            Button::new("space-back")
+                                .secondary()
+                                .rounded(ButtonRounded::Large)
+                                .w(px(32.))
+                                .h(px(32.))
+                                .icon(IconName::ChevronLeft)
+                                .accessibility_label("返回")
+                                .on_click(cx.listener(|_, _, _, cx| cx.emit(CloseSpace))),
+                        ),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .px_4()
+                    .items_start()
+                    .gap_4()
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .mt(px(-32.))
+                            .p_1()
+                            .rounded_full()
+                            .bg(background)
+                            .child(Avatar::new().src(face).name(name.to_owned()).size(px(72.))),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1()
+                            .pt_2()
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_lg()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(foreground)
+                                            .child(name.to_owned()),
+                                    )
+                                    .when(level > 0, |this| {
+                                        this.child(profile_badge(
+                                            format!("LV{level}"),
+                                            primary.opacity(0.15),
+                                            primary,
+                                        ))
+                                    })
+                                    .when_some(vip, |this, label| {
+                                        this.child(profile_badge(
+                                            label,
+                                            primary,
+                                            primary_foreground,
+                                        ))
+                                    })
+                                    .when_some(official, |this, label| {
+                                        this.child(
+                                            div()
+                                                .max_w(px(220.))
+                                                .truncate()
+                                                .child(profile_badge(label, accent, muted)),
+                                        )
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("space-sign-{}", space.mid)))
+                                    .h(px(18.))
+                                    .truncate()
+                                    .text_sm()
+                                    .text_color(muted)
+                                    .tooltip({
+                                        let sign = sign.clone();
+                                        move |window, cx| {
+                                            Tooltip::new(SharedString::from(sign.clone()))
+                                                .build(window, cx)
+                                        }
+                                    })
+                                    .child(if sign.is_empty() {
+                                        "暂无简介".to_owned()
+                                    } else {
+                                        sign.clone()
+                                    }),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .flex_shrink_0()
+                            .gap_8()
+                            .pt_3()
+                            .child(profile_stat("关注数", following, cx))
+                            .child(profile_stat("粉丝数", follower, cx))
+                            .child(profile_stat("获赞数", likes, cx)),
+                    ),
+            )
+            .when_some(error, |this, error| {
+                this.child(
+                    h_flex()
+                        .items_center()
+                        .gap_3()
+                        .child(div().text_sm().text_color(danger).child(error))
+                        .child(
+                            Button::new("space-profile-retry")
+                                .small()
+                                .label("重试")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.load_external_profile(cx);
+                                })),
+                        ),
+                )
+            })
+            .into_any_element()
     }
 
     pub(super) fn render_dynamics(&mut self, cx: &mut Context<Self>) -> AnyElement {

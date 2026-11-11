@@ -554,6 +554,7 @@ pub(super) fn video_card(
             title: card.title(),
             footer: card.meta(),
             footer_icon: None,
+            author: None,
             overlay: CardOverlay {
                 leading: (!views.is_empty()).then_some((IconName::Play, views)),
                 secondary: (!danmaku.is_empty())
@@ -701,6 +702,7 @@ fn bangumi_card(
             title: &item.title,
             footer,
             footer_icon: None,
+            author: None,
             overlay: CardOverlay {
                 leading: score.as_deref().map(|score| (IconName::Star, score)),
                 secondary: None,

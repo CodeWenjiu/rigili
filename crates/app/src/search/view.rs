@@ -10,7 +10,7 @@ use rigili_bilibili::api::search::{SearchOrder, SearchType};
 
 use items::SearchItem;
 use rigili_core::backend::{self, Backend};
-use rigili_core::{OpenLive, OpenVideo, Refresh};
+use rigili_core::{OpenLive, OpenSpace, OpenVideo, Refresh};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum SearchTab {
@@ -158,6 +158,7 @@ pub struct SearchView {
 
 impl EventEmitter<OpenVideo> for SearchView {}
 impl EventEmitter<OpenLive> for SearchView {}
+impl EventEmitter<OpenSpace> for SearchView {}
 
 impl SearchView {
     pub fn new(cx: &mut Context<Self>) -> Self {

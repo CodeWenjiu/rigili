@@ -1,7 +1,13 @@
-use crate::{ApiError, Client, Dynamics, SpaceCollections, SpaceVideos};
+use crate::{
+    ApiError, Client, Dynamics, SpaceCollections, SpaceProfile, SpaceRelation, SpaceUpStat,
+    SpaceUser, SpaceVideos,
+};
 
+const INFO_URL: &str = "https://api.bilibili.com/x/space/wbi/acc/info";
 const DYNAMICS_URL: &str = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space";
 const VIDEOS_URL: &str = "https://api.bilibili.com/x/space/wbi/arc/search";
+const RELATION_URL: &str = "https://api.bilibili.com/x/relation/stat";
+const UPSTAT_URL: &str = "https://api.bilibili.com/x/space/upstat";
 const COLLECTIONS_URL: &str = "https://api.bilibili.com/x/polymer/web-space/seasons_series_list";
 const VIDEO_PAGE_SIZE: u32 = 30;
 const COLLECTION_PAGE_SIZE: u32 = 20;
@@ -20,6 +26,38 @@ impl SpaceVideoOrder {
             Self::Plays => "click",
         }
     }
+}
+
+pub async fn user_info(client: &Client, mid: u64) -> Result<SpaceUser, ApiError> {
+    client
+        .get_wbi_json(
+            INFO_URL,
+            &[
+                ("mid", mid.to_string()),
+                ("platform", "web".into()),
+                ("web_location", "1550101".into()),
+            ],
+        )
+        .await
+}
+
+pub async fn relation_stat(client: &Client, mid: u64) -> Result<SpaceRelation, ApiError> {
+    client
+        .get_json(RELATION_URL, &[("vmid", mid.to_string())])
+        .await
+}
+
+pub async fn up_stat(client: &Client, mid: u64) -> Result<SpaceUpStat, ApiError> {
+    client
+        .get_json(UPSTAT_URL, &[("mid", mid.to_string())])
+        .await
+}
+
+pub async fn profile(client: &Client, mid: u64) -> Result<SpaceProfile, ApiError> {
+    let user = user_info(client, mid).await?;
+    let relation = relation_stat(client, mid).await.ok();
+    let up = up_stat(client, mid).await.ok();
+    Ok(SpaceProfile { user, relation, up })
 }
 
 pub async fn dynamics(client: &Client, host_mid: u64, offset: &str) -> Result<Dynamics, ApiError> {

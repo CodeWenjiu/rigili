@@ -58,7 +58,7 @@ impl MineView {
     }
 
     pub(super) fn load_if_needed(&mut self, cx: &mut Context<Self>) {
-        if self.user_mid.is_none() {
+        if self.space_mid().is_none() {
             return;
         }
         match self.tab {

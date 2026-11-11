@@ -9,7 +9,7 @@ use rigili_bilibili::{LiveRoom, PgcItem};
 
 use crate::grid::VideoCard;
 use rigili_core::backend::{self, Backend};
-use rigili_core::{OpenLive, OpenVideo, Refresh, format_count};
+use rigili_core::{OpenLive, OpenSpace, OpenVideo, Refresh, format_count};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum HomeTab {
@@ -143,6 +143,20 @@ impl HomeItem {
         }
     }
 
+    fn author(&self) -> &str {
+        match self {
+            Self::Video(video) => video.author(),
+            Self::Live(_) | Self::Pgc(_) => "",
+        }
+    }
+
+    fn author_mid(&self) -> Option<u64> {
+        match self {
+            Self::Video(video) => video.author_mid(),
+            Self::Live(_) | Self::Pgc(_) => None,
+        }
+    }
+
     fn leading(&self) -> Option<(IconName, &str)> {
         match self {
             Self::Video(video) => Some((IconName::Play, video.views())),
@@ -257,6 +271,7 @@ pub struct HomeView {
 
 impl EventEmitter<OpenVideo> for HomeView {}
 impl EventEmitter<OpenLive> for HomeView {}
+impl EventEmitter<OpenSpace> for HomeView {}
 
 impl HomeView {
     pub fn new(cx: &mut Context<Self>) -> Self {

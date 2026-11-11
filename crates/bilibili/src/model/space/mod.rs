@@ -1,1 +1,1 @@
-rigili_macro::mod_flat!(collections, dynamic, videos);
+rigili_macro::mod_flat!(collections, dynamic, profile, videos);

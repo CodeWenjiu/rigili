@@ -15,10 +15,10 @@ use super::cards::{
 use super::items::SearchItem;
 use super::{SearchLayout, SearchTab, SearchView};
 use crate::grid::{
-    CARD_GAP, CardGrid, CardMetrics, CardStyle, LIST_FOOTER_HEIGHT, VideoCards, card_text_height,
-    list_footer, skeleton_card,
+    CARD_GAP, CardGrid, CardMetrics, CardStyle, LIST_FOOTER_HEIGHT, MediaAuthor, OpenHandler,
+    VideoCards, card_text_height, list_footer, skeleton_card,
 };
-use rigili_core::OpenLive;
+use rigili_core::{OpenLive, OpenSpace};
 
 impl SearchView {
     fn columns(&self) -> usize {
@@ -54,7 +54,18 @@ impl SearchView {
                     let open = video.open();
                     let on_open =
                         cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(open.clone()));
-                    video_card(video, style, metrics, on_open)
+                    let on_author = video.author_mid().map(|mid| {
+                        let name = video.author().to_owned();
+                        let handler: Rc<OpenHandler> =
+                            Rc::new(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                                cx.emit(OpenSpace {
+                                    mid,
+                                    name: name.clone(),
+                                });
+                            }));
+                        MediaAuthor { on_click: handler }
+                    });
+                    video_card(video, style, metrics, on_open, on_author)
                 }
                 SearchItem::Media(media) => {
                     let season_id = media.season_id;
@@ -95,8 +106,12 @@ impl SearchView {
             }
             SearchItem::User(user) => {
                 let mid = user.mid;
+                let name = user.name.clone();
                 let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| {
-                    cx.open_url(&format!("https://space.bilibili.com/{mid}"));
+                    cx.emit(OpenSpace {
+                        mid,
+                        name: name.clone(),
+                    });
                 });
                 user_row(user, style, on_open)
             }

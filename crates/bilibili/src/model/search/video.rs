@@ -22,6 +22,7 @@ pub struct SearchVideo {
     pub title: String,
     pub pic: String,
     pub author: String,
+    pub mid: u64,
     pub duration: u64,
     pub pubdate: i64,
     pub play: u64,
@@ -39,6 +40,8 @@ pub(super) struct RawSearchVideo {
     pic: String,
     #[serde(default)]
     author: String,
+    #[serde(default)]
+    mid: u64,
     #[serde(default)]
     duration: String,
     #[serde(default)]
@@ -65,6 +68,7 @@ impl From<RawSearchVideo> for SearchVideo {
             title: clean_text(&raw.title),
             pic: normalize_pic(&raw.pic),
             author: raw.author,
+            mid: raw.mid,
             duration: parse_duration(&raw.duration),
             pubdate: raw.pubdate,
             play: raw.play,

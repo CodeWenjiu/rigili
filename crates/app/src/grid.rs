@@ -79,6 +79,8 @@ pub(crate) struct VideoCard {
     cid: Option<u64>,
     cover: String,
     title: String,
+    author: String,
+    author_mid: Option<u64>,
     meta: String,
     duration: String,
     views: String,
@@ -97,6 +99,14 @@ impl VideoCard {
 
     pub(crate) fn title(&self) -> &str {
         &self.title
+    }
+
+    pub(crate) fn author(&self) -> &str {
+        &self.author
+    }
+
+    pub(crate) fn author_mid(&self) -> Option<u64> {
+        self.author_mid
     }
 
     pub(crate) fn meta(&self) -> &str {
@@ -146,6 +156,8 @@ impl From<RecommendVideo> for VideoCard {
             cid: (cid != 0).then_some(cid),
             cover: pic,
             title,
+            author: owner.name.clone(),
+            author_mid: (owner.mid != 0).then_some(owner.mid),
             meta: format!("{} · {}", owner.name, format_date(pubdate)),
             duration: format_duration(duration),
             views: format_count(stat.view),
@@ -174,6 +186,8 @@ impl From<PopularVideo> for VideoCard {
             cid: (cid != 0).then_some(cid),
             cover: pic,
             title,
+            author: owner.name.clone(),
+            author_mid: (owner.mid != 0).then_some(owner.mid),
             meta: format!("{} · {}", owner.name, format_date(pubdate)),
             duration: format_duration(duration),
             views: format_count(stat.view),
@@ -190,6 +204,7 @@ impl From<SearchVideo> for VideoCard {
             title,
             pic,
             author,
+            mid,
             duration,
             pubdate,
             play,
@@ -202,6 +217,8 @@ impl From<SearchVideo> for VideoCard {
             cid: None,
             cover: pic,
             title,
+            author: author.clone(),
+            author_mid: (mid != 0).then_some(mid),
             meta: format!("{} · {}", author, format_date(pubdate)),
             duration: format_duration(duration),
             views: format_count(play),
@@ -218,6 +235,8 @@ impl From<SpaceVideo> for VideoCard {
             cid: None,
             cover: video.pic,
             title: video.title,
+            author: video.author.clone(),
+            author_mid: None,
             meta: format!("{} · {}", video.author, format_ymd(video.created)),
             duration: video.length,
             views: format_count(video.play),
@@ -234,6 +253,8 @@ impl From<FavItem> for VideoCard {
             cid: None,
             cover: item.cover,
             title: item.title,
+            author: item.upper.name.clone(),
+            author_mid: None,
             meta: format!("{} · {}", item.upper.name, format_date(item.pubtime)),
             duration: format_duration(item.duration),
             views: format_count(item.cnt_info.play),
@@ -250,6 +271,8 @@ impl From<HistoryItem> for VideoCard {
             cid: None,
             cover: item.cover,
             title: item.title,
+            author: item.author_name.clone(),
+            author_mid: None,
             meta: format!("{} · {}", item.author_name, format_date(item.view_at)),
             duration: format_duration(item.duration),
             views: String::new(),
@@ -266,6 +289,8 @@ impl From<WatchLaterItem> for VideoCard {
             cid: (item.cid != 0).then_some(item.cid),
             cover: item.pic,
             title: item.title,
+            author: item.owner.name.clone(),
+            author_mid: (item.owner.mid != 0).then_some(item.owner.mid),
             meta: format!("{} · {}", item.owner.name, format_date(item.pubdate)),
             duration: format_duration(item.duration),
             views: format_count(item.stat.view),
@@ -369,6 +394,11 @@ pub(crate) struct MediaCard<'a> {
     pub(crate) footer: &'a str,
     pub(crate) footer_icon: Option<IconName>,
     pub(crate) overlay: CardOverlay<'a>,
+    pub(crate) author: Option<MediaAuthor>,
+}
+
+pub(crate) struct MediaAuthor {
+    pub(crate) on_click: Rc<OpenHandler>,
 }
 
 pub(crate) struct CardOverlay<'a> {
@@ -378,7 +408,7 @@ pub(crate) struct CardOverlay<'a> {
     pub(crate) badge: Option<&'a str>,
 }
 
-type OpenHandler = dyn Fn(&ClickEvent, &mut Window, &mut App);
+pub(crate) type OpenHandler = dyn Fn(&ClickEvent, &mut Window, &mut App);
 
 pub(crate) fn media_card(
     card: MediaCard<'_>,
@@ -394,6 +424,7 @@ pub(crate) fn media_card(
         footer,
         footer_icon,
         overlay,
+        author,
     } = card;
 
     let on_open: Rc<OpenHandler> = Rc::new(on_open);
@@ -409,6 +440,10 @@ pub(crate) fn media_card(
     let meta_id = ElementId::Name(format!("{id}-meta").into());
     let title_tooltip = title.to_owned();
     let meta_tooltip = footer.to_owned();
+    let meta_click = match author {
+        Some(author) => navigate(author.on_click),
+        None => navigate(on_open.clone()),
+    };
 
     v_flex()
         .w(width)
@@ -556,7 +591,7 @@ pub(crate) fn media_card(
                         .text_color(style.muted)
                         .cursor_pointer()
                         .hover(|this| this.text_color(style.primary))
-                        .on_click(navigate(on_open.clone()))
+                        .on_click(meta_click)
                         .when(!meta_tooltip.is_empty(), |this| {
                             this.tooltip(move |window, cx| {
                                 Tooltip::new(meta_tooltip.clone()).build(window, cx)
@@ -719,6 +754,7 @@ mod tests {
             title: "标题".into(),
             pic: "https://example.invalid/cover.jpg".into(),
             author: "UP主".into(),
+            mid: 0,
             duration: 156,
             pubdate: 1_762_646_400,
             play: 12_345,

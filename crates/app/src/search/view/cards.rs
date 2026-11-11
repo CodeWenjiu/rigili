@@ -6,7 +6,9 @@ use gpui_kit::*;
 use rigili_bilibili::thumbnail;
 
 use super::items::{ArticleItem, LiveItem, MediaItem, UserItem};
-use crate::grid::{CardMetrics, CardOverlay, CardStyle, MediaCard as CardLayout, VideoCard};
+use crate::grid::{
+    CardMetrics, CardOverlay, CardStyle, MediaAuthor, MediaCard as CardLayout, VideoCard,
+};
 use crate::platform::theme::cover_scrim;
 
 pub(crate) const ROW_HEIGHT: Pixels = px(96.);
@@ -22,6 +24,7 @@ pub(crate) fn video_card(
     style: CardStyle,
     metrics: CardMetrics,
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_author: Option<MediaAuthor>,
 ) -> AnyElement {
     crate::grid::media_card(
         CardLayout {
@@ -30,6 +33,7 @@ pub(crate) fn video_card(
             title: video.title(),
             footer: video.meta(),
             footer_icon: Some(IconName::MonitorPlay),
+            author: on_author,
             overlay: CardOverlay {
                 leading: Some((IconName::Play, video.views())),
                 secondary: Some((Some(IconName::ThumbsUp), video.like())),
@@ -58,6 +62,7 @@ pub(crate) fn media_item_card(
             title: &item.title,
             footer: &item.subtitle,
             footer_icon: Some(IconName::Tv),
+            author: None,
             overlay: CardOverlay {
                 leading: (!item.score.is_empty()).then_some((IconName::Star, item.score.as_str())),
                 secondary: None,
@@ -86,6 +91,7 @@ pub(crate) fn live_card(
             title: &item.title,
             footer: &item.meta,
             footer_icon: Some(IconName::Radio),
+            author: None,
             overlay: CardOverlay {
                 leading: Some((IconName::Eye, &item.online)),
                 secondary: None,
@@ -332,7 +338,6 @@ fn stat(icon: IconName, text: &str) -> AnyElement {
         .child(text.to_owned())
         .into_any_element()
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -8,7 +8,7 @@ use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_bilibili::{BangumiFollow, FavFolder, NavStat};
+use rigili_bilibili::{BangumiFollow, FavFolder, NavStat, SpaceProfile};
 use rigili_core::backend::{self, Backend};
 use rigili_core::runtime::spawn_api;
 use rigili_core::{OpenVideo, Refresh, format_count};
@@ -76,6 +76,29 @@ impl MineTab {
             Self::Offline => "mine-offline-list",
             Self::Favorites => "mine-favorites-list",
             Self::WatchLater => "mine-watch-later-list",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct CloseSpace;
+
+pub(super) struct ExternalSpace {
+    pub(super) mid: u64,
+    pub(super) name: String,
+    pub(super) profile: Option<SpaceProfile>,
+    pub(super) loading: bool,
+    pub(super) error: Option<String>,
+}
+
+impl ExternalSpace {
+    fn new(mid: u64, name: String) -> Self {
+        Self {
+            mid,
+            name,
+            profile: None,
+            loading: false,
+            error: None,
         }
     }
 }
@@ -271,12 +294,14 @@ pub struct MineView {
     opening: Option<u64>,
     notice: Option<String>,
     user_mid: Option<u64>,
+    external: Option<ExternalSpace>,
     list_width: Pixels,
     space_search: Entity<InputState>,
     _space_search_sub: Subscription,
 }
 
 impl EventEmitter<OpenVideo> for MineView {}
+impl EventEmitter<CloseSpace> for MineView {}
 
 impl MineView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -308,6 +333,7 @@ impl MineView {
             opening: None,
             notice: None,
             user_mid: None,
+            external: None,
             list_width: px(0.),
             space_search,
             _space_search_sub: space_search_sub,
@@ -341,9 +367,107 @@ impl MineView {
         if self.tab == tab {
             return;
         }
+        if self.external.is_some()
+            && !matches!(
+                tab,
+                MineTab::Dynamics | MineTab::Videos | MineTab::Collections
+            )
+        {
+            return;
+        }
         self.tab = tab;
         self.load_if_needed(cx);
         cx.notify();
+    }
+
+    pub(super) fn space_mid(&self) -> Option<u64> {
+        self.external
+            .as_ref()
+            .map(|space| space.mid)
+            .or(self.user_mid)
+    }
+
+    pub(crate) fn open_external_space(
+        &mut self,
+        mid: u64,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.external = Some(ExternalSpace::new(mid, name));
+        self.tab = MineTab::Videos;
+        self.dynamics = DynamicsState::new();
+        self.space_videos = SpaceVideosState::new();
+        self.collections = CollectionsState::new();
+        self.space_search
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.notice = None;
+        self.load_external_profile(cx);
+        self.load_space_if_needed(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn close_external_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.external.take().is_none() {
+            return;
+        }
+        self.dynamics = DynamicsState::new();
+        self.space_videos = SpaceVideosState::new();
+        self.collections = CollectionsState::new();
+        self.space_search
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.tab = MineTab::default();
+        self.notice = None;
+        self.load_if_needed(cx);
+        cx.notify();
+    }
+
+    pub(super) fn load_external_profile(&mut self, cx: &mut Context<Self>) {
+        let Some(mid) = self.external.as_ref().map(|space| space.mid) else {
+            return;
+        };
+        let backend = match self.backend(cx) {
+            Ok(backend) => backend,
+            Err(error) => {
+                if let Some(space) = self.external.as_mut() {
+                    space.loading = false;
+                    space.error = Some(error);
+                }
+                cx.notify();
+                return;
+            }
+        };
+        if let Some(space) = self.external.as_mut() {
+            if space.loading {
+                return;
+            }
+            space.loading = true;
+            space.profile = None;
+            space.error = None;
+        }
+        cx.notify();
+
+        spawn_api(
+            cx,
+            async move { backend.space_profile(mid).await },
+            move |this, result, cx| {
+                let Some(space) = this.external.as_mut() else {
+                    return;
+                };
+                if space.mid != mid {
+                    return;
+                }
+                space.loading = false;
+                match result {
+                    Ok(profile) => {
+                        space.profile = Some(profile);
+                        space.error = None;
+                    }
+                    Err(error) => space.error = Some(api_task_error_message(error, cx)),
+                }
+                cx.notify();
+            },
+        );
     }
 
     fn sync_user(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -365,13 +489,19 @@ impl MineView {
         self.collected = CollectedState::new();
         self.bangumi = BangumiState::new();
         self.cinema = BangumiState::new();
+        self.opening = None;
+        self.notice = None;
+
+        if self.external.is_some() {
+            cx.notify();
+            return;
+        }
+
         self.dynamics = DynamicsState::new();
         self.space_videos = SpaceVideosState::new();
         self.collections = CollectionsState::new();
         self.space_search
             .update(cx, |input, cx| input.set_value("", window, cx));
-        self.opening = None;
-        self.notice = None;
 
         let weak = cx.entity().downgrade();
         window.defer(cx, move |_, cx| {
@@ -383,6 +513,10 @@ impl MineView {
     }
 
     fn render_profile(&self, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(space) = self.external.as_ref() {
+            return self.render_external_profile(space, cx);
+        }
+
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let primary = theme.primary;
@@ -520,13 +654,19 @@ impl MineView {
         let hover_bg = cx.theme().accent.opacity(0.5);
         let radius = cx.theme().radius;
 
+        let tabs: &[MineTab] = if self.external.is_some() {
+            &[MineTab::Dynamics, MineTab::Videos, MineTab::Collections]
+        } else {
+            &MineTab::ALL
+        };
+
         h_flex()
             .flex_shrink_0()
             .items_end()
             .gap_4()
             .border_b_1()
             .border_color(border)
-            .children(MineTab::ALL.map(|tab| {
+            .children(tabs.iter().copied().map(|tab| {
                 let active = tab == self.tab;
                 let group = SharedString::from(format!("mine-tab-{}", tab.index()));
 
@@ -870,6 +1010,12 @@ impl MineView {
 
 impl Refresh for MineView {
     fn refresh(&mut self, cx: &mut Context<Self>) {
+        if self.external.is_some() {
+            self.load_external_profile(cx);
+            self.reload_space_tab(cx);
+            return;
+        }
+
         self.stat = None;
         self.stat_loading = false;
         self.stat_error = None;
@@ -898,7 +1044,7 @@ impl Refresh for MineView {
     }
 
     fn can_refresh(&self) -> bool {
-        self.user_mid.is_some() && self.tab != MineTab::Offline
+        self.space_mid().is_some() && self.tab != MineTab::Offline
     }
 }
 
@@ -908,7 +1054,7 @@ impl Render for MineView {
 
         let background = cx.theme().background;
         let foreground = cx.theme().foreground;
-        let logged_in = self.user_mid.is_some();
+        let show_body = self.user_mid.is_some() || self.external.is_some();
         let profile = self.render_profile(cx);
         let notice = self.notice.clone();
 
@@ -931,7 +1077,7 @@ impl Render for MineView {
                         })),
                 )
             })
-            .when(logged_in, |this| {
+            .when(show_body, |this| {
                 this.child(self.render_tabs(cx))
                     .child(self.render_body(window, cx))
             })

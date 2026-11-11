@@ -10,9 +10,10 @@ use gpui_kit::*;
 
 use super::{HomeItem, HomeTab, HomeView};
 use crate::grid::{
-    CARD_GAP, CardGrid, CardMetrics, CardOverlay, CardStyle, LIST_FOOTER_HEIGHT, MediaCard,
-    VideoCards, card_text_height, list_footer, media_card, skeleton_card,
+    CARD_GAP, CardGrid, CardMetrics, CardOverlay, CardStyle, LIST_FOOTER_HEIGHT, MediaAuthor,
+    MediaCard, OpenHandler, VideoCards, card_text_height, list_footer, media_card, skeleton_card,
 };
+use rigili_core::OpenSpace;
 
 impl HomeView {
     fn render_row(
@@ -41,7 +42,18 @@ impl HomeView {
                 let on_open = cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.open_target(target.clone(), cx);
                 });
-                home_card(item, is_opening, style, metrics, on_open)
+                let on_author = item.author_mid().map(|mid| {
+                    let name = item.author().to_owned();
+                    let handler: Rc<OpenHandler> =
+                        Rc::new(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                            cx.emit(OpenSpace {
+                                mid,
+                                name: name.clone(),
+                            });
+                        }));
+                    MediaAuthor { on_click: handler }
+                });
+                home_card(item, is_opening, style, metrics, on_open, on_author)
             }))
             .into_any_element()
     }
@@ -203,6 +215,7 @@ fn home_card(
     style: CardStyle,
     metrics: CardMetrics,
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_author: Option<MediaAuthor>,
 ) -> AnyElement {
     let card = media_card(
         MediaCard {
@@ -217,6 +230,7 @@ fn home_card(
                 trailing: item.trailing(),
                 badge: item.badge(),
             },
+            author: on_author,
         },
         style,
         metrics.width,

@@ -5,7 +5,8 @@ use rigili_bilibili::{
     ApiError, ArticleSearch, BangumiFollows, Client, CreatedFolder, Dynamics, FavFolders, FavItems,
     HistoryPage, HotWords, LiveRoom, LiveSearch, MediaSearch, Nav, NavStat, PgcIndex, PgcSeason,
     PlayUrl, Popular, QrCode, QrPoll, Recommend, SearchAll, SearchSuggestions, SessionError,
-    SpaceCollections, SpaceVideos, UserSearch, VideoInfo, VideoSearch, WatchLater, api,
+    SpaceCollections, SpaceProfile, SpaceVideos, UserSearch, VideoInfo, VideoSearch, WatchLater,
+    api,
     api::search::{SearchOrder, SearchType},
     api::space::SpaceVideoOrder,
 };
@@ -170,6 +171,10 @@ impl Backend {
         page: u32,
     ) -> Result<BangumiFollows, ApiError> {
         api::mine::bangumi_follows(&self.client, mid, season_type, page).await
+    }
+
+    pub async fn space_profile(&self, mid: u64) -> Result<SpaceProfile, ApiError> {
+        api::space::profile(&self.client, mid).await
     }
 
     pub async fn dynamics(&self, mid: u64, offset: &str) -> Result<Dynamics, ApiError> {
