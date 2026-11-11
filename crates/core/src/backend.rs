@@ -2,11 +2,12 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use gpui_kit::*;
 use rigili_bilibili::{
-    ApiError, ArticleSearch, BangumiFollows, Client, CreatedFolder, Dynamics, FavFolders, FavItems,
-    HistoryPage, HotWords, LiveRoom, LiveSearch, MediaSearch, Nav, NavStat, PgcIndex, PgcSeason,
-    PlayUrl, Popular, QrCode, QrPoll, Recommend, SearchAll, SearchSuggestions, SessionError,
-    SpaceCollections, SpaceProfile, SpaceVideos, UserSearch, VideoInfo, VideoSearch, WatchLater,
-    api,
+    ApiError, ArticleSearch, BangumiFollows, Client, CommentPage, CreatedFolder, Dynamics,
+    FavFolders, FavItems, HistoryPage, HotWords, LiveRoom, LiveSearch, MediaSearch, Nav, NavStat,
+    PgcIndex, PgcSeason, PlayUrl, Popular, QrCode, QrPoll, Recommend, SearchAll, SearchSuggestions,
+    SessionError, SpaceCollections, SpaceProfile, SpaceVideos, UserSearch, VideoInfo, VideoSearch,
+    WatchLater, api,
+    api::comment::CommentSort,
     api::search::{SearchOrder, SearchType},
     api::space::SpaceVideoOrder,
 };
@@ -175,6 +176,16 @@ impl Backend {
 
     pub async fn space_profile(&self, mid: u64) -> Result<SpaceProfile, ApiError> {
         api::space::profile(&self.client, mid).await
+    }
+
+    pub async fn comments(
+        &self,
+        kind: u32,
+        oid: &str,
+        page: u32,
+        sort: CommentSort,
+    ) -> Result<CommentPage, ApiError> {
+        api::comment::fetch(&self.client, kind, oid, page, sort).await
     }
 
     pub async fn dynamics(&self, mid: u64, offset: &str) -> Result<Dynamics, ApiError> {

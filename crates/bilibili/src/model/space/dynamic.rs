@@ -19,7 +19,17 @@ pub struct DynamicItem {
     #[serde(default)]
     pub modules: DynamicModules,
     #[serde(default)]
+    pub basic: DynamicBasic,
+    #[serde(default)]
     pub orig: Option<Box<DynamicItem>>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct DynamicBasic {
+    #[serde(default)]
+    pub comment_id_str: String,
+    #[serde(default)]
+    pub comment_type: u32,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -227,11 +237,39 @@ impl DynamicItem {
     pub fn stat(&self) -> Option<&DynamicStat> {
         self.modules.module_stat.as_ref()
     }
+
+    /// Returns the comment API type and object id for this dynamic.
+    pub fn comment_target(&self) -> (u32, &str) {
+        let kind = if self.basic.comment_type != 0 {
+            self.basic.comment_type
+        } else {
+            17
+        };
+        let oid = if self.basic.comment_id_str.is_empty() {
+            self.id_str.as_str()
+        } else {
+            self.basic.comment_id_str.as_str()
+        };
+        (kind, oid)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{DynamicItem, Dynamics};
+
+    #[test]
+    fn chooses_dynamic_comment_target() {
+        let page: Dynamics = serde_json::from_str(
+            r#"{"items":[
+                {"id_str":"7","basic":{"comment_id_str":"414959757","comment_type":11}},
+                {"id_str":"9"}
+            ]}"#,
+        )
+        .expect("comment targets");
+        assert_eq!(page.items[0].comment_target(), (11, "414959757"));
+        assert_eq!(page.items[1].comment_target(), (17, "9"));
+    }
 
     #[test]
     fn parses_forwarded_dynamic_with_deleted_source() {

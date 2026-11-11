@@ -20,6 +20,7 @@ use rigili_core::login;
 use rigili_core::runtime::spawn_api;
 use rigili_core::{OpenVideo, Refresh, api_task_error_message, format_count};
 
+use super::comment;
 use crate::grid::{
     CARD_GAP, CardGrid, CardMetrics, CardStyle, FolderCards, LIST_FOOTER_HEIGHT, VideoCard,
     VideoCards, append_unique_by, card_text_height, list_footer, profile_badge, profile_stat,
@@ -875,6 +876,12 @@ impl SpaceView {
         let stat = item.stat();
         let comment_count = stat.map(|stat| stat.comment.count).unwrap_or(0);
         let like_count = stat.map(|stat| stat.like.count).unwrap_or(0);
+        let on_comments = {
+            let dynamic = item.clone();
+            cx.listener(move |_, _: &ClickEvent, window, cx| {
+                comment::open(dynamic.clone(), window, cx);
+            })
+        };
 
         v_flex()
             .id(("space-dynamic", index))
@@ -967,10 +974,27 @@ impl SpaceView {
                     .text_sm()
                     .text_color(muted)
                     .child(action_item(IconName::Share, "转发".to_owned()))
-                    .child(action_item(
-                        IconName::MessageCircle,
-                        format_count(comment_count),
-                    ))
+                    .child(
+                        div().flex_1().flex().justify_center().child(
+                            Button::new(("space-dynamic-comments", index))
+                                .text()
+                                .small()
+                                .px_2()
+                                .accessibility_label("查看评论")
+                                .tooltip("查看评论")
+                                .on_click(on_comments)
+                                .child(
+                                    h_flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .text_color(muted)
+                                        .child(
+                                            Icon::new(IconName::MessageCircle).with_size(px(16.)),
+                                        )
+                                        .child(format_count(comment_count)),
+                                ),
+                        ),
+                    )
                     .child(action_item(IconName::ThumbsUp, format_count(like_count))),
             )
             .into_any_element()
@@ -1085,11 +1109,7 @@ impl SpaceView {
             .into_any_element()
     }
 
-    fn render_space_videos(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn render_space_videos(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let toolbar = self.render_space_videos_toolbar(cx);
         let content = self.render_space_videos_content(window, cx);
         v_flex()
@@ -1303,11 +1323,7 @@ impl SpaceView {
         )
     }
 
-    fn render_collections(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn render_collections(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let muted = cx.theme().muted_foreground;
         let danger = cx.theme().danger;
 
