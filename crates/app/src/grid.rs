@@ -1,9 +1,11 @@
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::*;
 use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -376,6 +378,8 @@ pub(crate) struct CardOverlay<'a> {
     pub(crate) badge: Option<&'a str>,
 }
 
+type OpenHandler = dyn Fn(&ClickEvent, &mut Window, &mut App);
+
 pub(crate) fn media_card(
     card: MediaCard<'_>,
     style: CardStyle,
@@ -392,26 +396,78 @@ pub(crate) fn media_card(
         overlay,
     } = card;
 
+    let on_open: Rc<OpenHandler> = Rc::new(on_open);
+    let navigate = |handler: Rc<OpenHandler>| {
+        move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
+            cx.stop_propagation();
+            handler.as_ref()(event, window, cx);
+        }
+    };
+
+    let cover_id = ElementId::Name(format!("{id}-cover").into());
+    let title_id = ElementId::Name(format!("{id}-title").into());
+    let meta_id = ElementId::Name(format!("{id}-meta").into());
+    let title_tooltip = title.to_owned();
+    let meta_tooltip = footer.to_owned();
+
     v_flex()
-        .group("media-card")
         .w(width)
         .h(card_height(width, text_height))
         .gap(px(CARD_BODY_GAP))
         .id(id)
         .cursor_pointer()
-        .on_click(on_open)
+        .on_click({
+            let on_open = on_open.clone();
+            move |event, window, cx| on_open.as_ref()(event, window, cx)
+        })
         .child(
             div()
+                .id(cover_id)
+                .group("media-cover")
                 .w_full()
                 .aspect_ratio(16. / 9.)
                 .relative()
                 .rounded(style.radius)
                 .overflow_hidden()
                 .bg(style.placeholder)
+                .cursor_pointer()
+                .on_click(navigate(on_open.clone()))
                 .child(
                     img(thumbnail(cover, 480))
                         .size_full()
                         .object_fit(ObjectFit::Cover),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .bg(hsla(0., 0., 0., 0.28))
+                        .opacity(0.)
+                        .group_hover("media-cover", |this| this.opacity(1.)),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .opacity(0.)
+                        .group_hover("media-cover", |this| this.opacity(1.))
+                        .child(
+                            div()
+                                .size(px(40.))
+                                .rounded_full()
+                                .bg(Hsla::white().opacity(0.92))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(
+                                    Icon::new(IconName::Play)
+                                        .with_size(px(18.))
+                                        .text_color(Hsla::black().opacity(0.72)),
+                                ),
+                        ),
                 )
                 .when_some(overlay.badge, |this, badge| {
                     this.child(
@@ -474,19 +530,38 @@ pub(crate) fn media_card(
                 .overflow_hidden()
                 .child(
                     div()
+                        .id(title_id)
+                        .w_full()
+                        .min_w_0()
                         .text_sm()
                         .line_clamp(2)
+                        .text_ellipsis()
                         .text_color(style.foreground)
-                        .group_hover("media-card", |this| this.text_color(style.primary))
+                        .cursor_pointer()
+                        .hover(|this| this.text_color(style.primary))
+                        .on_click(navigate(on_open.clone()))
+                        .tooltip(move |window, cx| {
+                            Tooltip::new(title_tooltip.clone()).build(window, cx)
+                        })
                         .child(title.to_owned()),
                 )
                 .child(
                     h_flex()
+                        .id(meta_id)
                         .items_center()
                         .gap_1()
+                        .min_w_0()
                         .overflow_hidden()
                         .text_xs()
                         .text_color(style.muted)
+                        .cursor_pointer()
+                        .hover(|this| this.text_color(style.primary))
+                        .on_click(navigate(on_open.clone()))
+                        .when(!meta_tooltip.is_empty(), |this| {
+                            this.tooltip(move |window, cx| {
+                                Tooltip::new(meta_tooltip.clone()).build(window, cx)
+                            })
+                        })
                         .when_some(footer_icon, |this, icon| {
                             this.child(Icon::new(icon).with_size(px(12.)))
                         })
