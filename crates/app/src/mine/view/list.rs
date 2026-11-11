@@ -50,7 +50,11 @@ impl MineView {
 
         if loading {
             let columns = VideoCards::columns(self.list_width);
-            let metrics = VideoCards::metrics(self.list_width, card_text_height(window));
+            let metrics = VideoCards::metrics(
+                self.list_width,
+                card_text_height(window),
+                window.scale_factor(),
+            );
             return div()
                 .id(("mine-loading", tab.index()))
                 .flex_1()
@@ -97,6 +101,7 @@ impl MineView {
     pub(super) fn render_folder_grid(
         &mut self,
         source: FolderSource,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let muted = cx.theme().muted_foreground;
@@ -117,19 +122,21 @@ impl MineView {
 
         if loading && folders.is_empty() {
             let columns = FolderCards::columns(self.list_width).max(2);
-            let width = FolderCards::card_width(self.list_width, columns);
+            let width = FolderCards::card_width(self.list_width, columns, window.scale_factor());
+            let rows = (0..2)
+                .map(|_| {
+                    h_flex()
+                        .gap_x(CARD_GAP)
+                        .children((0..columns).map(|_| skeleton_card(width, radius)))
+                        .into_any_element()
+                })
+                .collect::<Vec<_>>();
             return div()
                 .id("mine-folder-grid-loading")
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
-                .child(
-                    h_flex()
-                        .flex_wrap()
-                        .gap_x(CARD_GAP)
-                        .gap_y_6()
-                        .children((0..columns * 2).map(|_| skeleton_card(width, radius))),
-                )
+                .child(v_flex().gap_y_6().children(rows))
                 .into_any_element();
         }
 
@@ -172,9 +179,26 @@ impl MineView {
         }
 
         let columns = FolderCards::columns(self.list_width);
-        let width = FolderCards::card_width(self.list_width, columns);
+        let width = FolderCards::card_width(self.list_width, columns, window.scale_factor());
         let known_width = self.list_width;
         let weak = cx.entity().downgrade();
+        let rows = (0..visible.len().div_ceil(columns))
+            .map(|row| {
+                let start = row * columns;
+                let end = (start + columns).min(visible.len());
+                h_flex()
+                    .gap_x(CARD_GAP)
+                    .children(
+                        visible[start..end]
+                            .iter()
+                            .enumerate()
+                            .map(|(offset, folder)| {
+                                folder_card(folder, start + offset, source, width, cx)
+                            }),
+                    )
+                    .into_any_element()
+            })
+            .collect::<Vec<_>>();
 
         div()
             .id("mine-folder-grid")
@@ -196,14 +220,7 @@ impl MineView {
                     });
                 });
             })
-            .child(
-                h_flex().flex_wrap().gap_x(CARD_GAP).gap_y_6().children(
-                    visible
-                        .into_iter()
-                        .enumerate()
-                        .map(|(index, folder)| folder_card(folder, index, source, width, cx)),
-                ),
-            )
+            .child(v_flex().gap_y_6().children(rows))
             .into_any_element()
     }
 
@@ -230,7 +247,11 @@ impl MineView {
 
         if loading {
             let columns = BangumiCards::columns(self.list_width);
-            let metrics = BangumiCards::metrics(self.list_width, card_text_height(window));
+            let metrics = BangumiCards::metrics(
+                self.list_width,
+                card_text_height(window),
+                window.scale_factor(),
+            );
             return div()
                 .id("mine-bangumi-loading")
                 .flex_1()
@@ -331,7 +352,11 @@ impl MineView {
         let style = CardStyle::new(cx);
         let state = self.bangumi_state(cinema);
         let columns = BangumiCards::columns(self.list_width);
-        let metrics = BangumiCards::metrics(self.list_width, card_text_height(window));
+        let metrics = BangumiCards::metrics(
+            self.list_width,
+            card_text_height(window),
+            window.scale_factor(),
+        );
         let row_height = metrics.height();
         let rows = state.items.len().div_ceil(columns);
         let known_width = self.list_width;
@@ -444,7 +469,11 @@ impl MineView {
         let style = CardStyle::new(cx);
         let state = self.state(tab);
         let columns = VideoCards::columns(self.list_width);
-        let metrics = VideoCards::metrics(self.list_width, card_text_height(window));
+        let metrics = VideoCards::metrics(
+            self.list_width,
+            card_text_height(window),
+            window.scale_factor(),
+        );
         let row_height = metrics.height();
         let rows = state.items.len().div_ceil(columns);
         let known_width = self.list_width;

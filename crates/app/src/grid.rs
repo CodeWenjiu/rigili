@@ -30,18 +30,26 @@ pub(crate) trait CardGrid {
         (((width.as_f32() + gap) / (Self::MIN_CARD_WIDTH + gap)).floor() as usize).max(1)
     }
 
-    fn card_width(width: Pixels, columns: usize) -> Pixels {
+    fn card_width(width: Pixels, columns: usize, scale_factor: f32) -> Pixels {
         if width <= px(0.) || columns == 0 {
             return px(Self::MIN_CARD_WIDTH);
         }
-        let gaps = CARD_GAP.as_f32() * (columns - 1) as f32;
-        px(((width.as_f32() - gaps) / columns as f32).max(0.))
+        // GPUI rounds authored lengths to device pixels before Taffy lays out
+        // the row; resize by one device pixel so the last column still fits.
+        let gaps_dp = round_to_device_pixel(CARD_GAP.as_f32(), scale_factor) * (columns - 1) as f32;
+        let available_dp = (width.as_f32() * scale_factor - 1.).max(0.);
+        let card_dp = ((available_dp - gaps_dp) / columns as f32).floor().max(0.);
+        px(card_dp / scale_factor)
     }
 
-    fn metrics(width: Pixels, text_height: Pixels) -> CardMetrics {
+    fn metrics(width: Pixels, text_height: Pixels, scale_factor: f32) -> CardMetrics {
         let columns = Self::columns(width);
-        CardMetrics::new(Self::card_width(width, columns), text_height)
+        CardMetrics::new(Self::card_width(width, columns, scale_factor), text_height)
     }
+}
+
+fn round_to_device_pixel(logical: f32, scale_factor: f32) -> f32 {
+    (logical * scale_factor - 0.5).ceil()
 }
 
 pub(crate) struct VideoCards;
@@ -523,7 +531,10 @@ pub(crate) fn skeleton_card(width: Pixels, radius: Pixels) -> impl IntoElement {
 
 #[cfg(test)]
 mod tests {
-    use super::{CARD_GAP, CardGrid, FolderCards, VideoCard, VideoCards, append_unique_by};
+    use super::{
+        CARD_GAP, CardGrid, FolderCards, VideoCard, VideoCards, append_unique_by,
+        round_to_device_pixel,
+    };
     use gpui_kit::px;
     use rigili_bilibili::SearchVideo;
 
@@ -540,22 +551,20 @@ mod tests {
 
         let width = px(min * 2. + gap + 1.);
         let columns = VideoCards::columns(width);
-        let card_width = VideoCards::card_width(width, columns);
+        let card_width = VideoCards::card_width(width, columns, 1.);
         assert_eq!(columns, 2);
-        assert!((card_width.as_f32() - (min + 0.5)).abs() < 0.01);
+        assert_eq!(card_width, px(min));
         assert!(
-            (card_width.as_f32() * columns as f32 + gap * (columns - 1) as f32 - width.as_f32())
-                .abs()
-                < 0.01
+            card_width.as_f32() * columns as f32 + gap * (columns - 1) as f32 <= width.as_f32()
         );
 
         let width = px(min * 4. + gap * 3. + 1.);
         let columns = VideoCards::columns(width);
-        let card_width = VideoCards::card_width(width, columns);
+        let card_width = VideoCards::card_width(width, columns, 1.);
         assert_eq!(columns, 4);
-        assert!((card_width.as_f32() - (min + 0.25)).abs() < 0.01);
+        assert_eq!(card_width, px(min));
 
-        assert_eq!(VideoCards::card_width(px(0.), 1), px(min));
+        assert_eq!(VideoCards::card_width(px(0.), 1, 1.), px(min));
     }
 
     #[test]
@@ -565,8 +574,39 @@ mod tests {
 
         let columns = FolderCards::columns(width);
         assert_eq!(columns, 3);
-        let card_width = FolderCards::card_width(width, columns);
-        assert!((card_width.as_f32() * 3. + CARD_GAP.as_f32() * 2. - 1000.).abs() < 0.01);
+        let card_width = FolderCards::card_width(width, columns, 1.);
+        assert!(
+            card_width.as_f32() * columns as f32 + CARD_GAP.as_f32() * (columns - 1) as f32
+                <= 1000.
+        );
+    }
+
+    #[test]
+    fn exact_fit_keeps_the_last_column_on_the_same_row() {
+        let width = px(1433.);
+        let columns = FolderCards::columns(width);
+        let card_width = FolderCards::card_width(width, columns, 1.);
+        assert_eq!(columns, 5);
+        assert_eq!(card_width, px(273.));
+        assert!(
+            card_width.as_f32() * columns as f32 + CARD_GAP.as_f32() * (columns - 1) as f32
+                <= width.as_f32()
+        );
+    }
+
+    #[test]
+    fn fractional_scale_keeps_the_last_column_on_the_same_row() {
+        let gap = CARD_GAP.as_f32();
+        for scale in [1., 1.25, 1.5, 1.75, 2.] {
+            for width in [900., 1000., 1100., 1261., 1433., 1727.] {
+                let width = px(width);
+                let columns = FolderCards::columns(width);
+                let card_width = FolderCards::card_width(width, columns, scale);
+                let total_dp = round_to_device_pixel(card_width.as_f32(), scale) * columns as f32
+                    + round_to_device_pixel(gap, scale) * (columns - 1) as f32;
+                assert!(total_dp <= width.as_f32() * scale, "{width:?} @ {scale}x");
+            }
+        }
     }
 
     #[test]

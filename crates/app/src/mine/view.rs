@@ -12,10 +12,10 @@ use rigili_core::backend::{self, Backend};
 use rigili_core::runtime::spawn_api;
 use rigili_core::{OpenVideo, Refresh, format_count};
 
-use rigili_core::api_task_error_message;
 use crate::grid::VideoCard;
 use crate::login;
 use create_folder::CreateFolderDialog;
+use rigili_core::api_task_error_message;
 use sort_folders::SortFoldersDialog;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -797,14 +797,14 @@ impl MineView {
                     if self.browsing_folder == Some(FavoriteView::Folders) {
                         self.render_folder_detail(window, cx)
                     } else {
-                        self.render_folder_grid(FolderSource::Created, cx)
+                        self.render_folder_grid(FolderSource::Created, window, cx)
                     }
                 }
                 FavoriteView::Subscribed => {
                     if self.browsing_folder == Some(FavoriteView::Subscribed) {
                         self.render_folder_detail(window, cx)
                     } else {
-                        self.render_folder_grid(FolderSource::Collected, cx)
+                        self.render_folder_grid(FolderSource::Collected, window, cx)
                     }
                 }
                 FavoriteView::Bangumi => self.render_bangumi(false, window, cx),

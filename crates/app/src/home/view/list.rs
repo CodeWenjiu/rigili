@@ -65,7 +65,11 @@ impl HomeView {
         let style = CardStyle::new(cx);
         let state = self.state(tab);
         let columns = VideoCards::columns(self.list_width);
-        let metrics = VideoCards::metrics(self.list_width, card_text_height(window));
+        let metrics = VideoCards::metrics(
+            self.list_width,
+            card_text_height(window),
+            window.scale_factor(),
+        );
         let row_height = metrics.height();
         let rows = state.items.len().div_ceil(columns);
         let known_width = self.list_width;
@@ -144,7 +148,11 @@ impl HomeView {
 
         if loading {
             let columns = VideoCards::columns(self.list_width);
-            let metrics = VideoCards::metrics(self.list_width, card_text_height(window));
+            let metrics = VideoCards::metrics(
+                self.list_width,
+                card_text_height(window),
+                window.scale_factor(),
+            );
             return div()
                 .id("loading")
                 .flex_1()

@@ -26,7 +26,11 @@ impl SearchView {
     }
 
     fn card_metrics(&self, window: &Window) -> CardMetrics {
-        VideoCards::metrics(self.list_width, card_text_height(window))
+        VideoCards::metrics(
+            self.list_width,
+            card_text_height(window),
+            window.scale_factor(),
+        )
     }
 
     fn render_grid_row(
@@ -289,7 +293,11 @@ impl SearchView {
                     .into_any_element();
             }
 
-            let metrics = VideoCards::metrics(self.list_width, card_text_height(window));
+            let metrics = VideoCards::metrics(
+                self.list_width,
+                card_text_height(window),
+                window.scale_factor(),
+            );
             return div()
                 .id("search-loading")
                 .flex_1()
