@@ -317,7 +317,7 @@ impl MainView {
         h_flex()
             .flex_shrink_0()
             .items_center()
-            .gap_1()
+            .gap_2()
             .children(HomeTab::ALL.map(|tab| {
                 let active = tab == selected;
                 let group = SharedString::from(format!("top-tab-{}", tab.index()));
@@ -331,7 +331,7 @@ impl MainView {
                     .child(
                         Button::new(("top-tab", tab.index()))
                             .text()
-                            .px_2()
+                            .px_3()
                             .py_1()
                             .accessibility_label(tab.label())
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -342,7 +342,7 @@ impl MainView {
                             }))
                             .child(
                                 div()
-                                    .text_sm()
+                                    .text_base()
                                     .text_color(if active { primary } else { muted })
                                     .group_hover(group, move |this| this.text_color(primary))
                                     .child(tab.label()),
@@ -379,7 +379,7 @@ impl MainView {
             })
             .child(
                 div().flex_1().min_w_0().flex().justify_center().child(
-                    h_flex().w_full().max_w(rems(40.)).items_center().child(
+                    h_flex().w_full().max_w(px(420.)).items_center().child(
                         div()
                             .id("search-input")
                             .flex_1()
@@ -418,6 +418,7 @@ impl MainView {
                             .child(
                                 Input::new(&self.search_input)
                                     .large()
+                                    .h(px(40.))
                                     .cleanable(true)
                                     .suffix(
                                         Button::new("search-submit")
@@ -434,6 +435,14 @@ impl MainView {
                             ),
                     ),
                 ),
+            )
+            .child(
+                Button::new("window-close")
+                    .ghost()
+                    .icon(IconName::Close)
+                    .accessibility_label("关闭窗口")
+                    .tooltip("关闭")
+                    .on_click(|_, window, _| window.remove_window()),
             )
             .when_some(self.render_search_panel(cx), |this, panel| {
                 this.child(panel)
