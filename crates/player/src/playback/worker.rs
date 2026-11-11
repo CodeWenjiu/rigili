@@ -86,9 +86,17 @@ pub(super) fn run_worker(
         }
 
         let update = render.update();
+        let info = render.next_frame_info();
+        let ready = if state.has_frame {
+            info.present
+        } else {
+            info.present && !info.redraw
+        };
         if (state.needs_redraw || update & MPV_RENDER_UPDATE_FRAME != 0)
+            && ready
             && let Some(frame) = state.render(&mpv, &render)
         {
+            state.has_frame = true;
             *lock(&frame_slot) = Some(frame);
         }
 
@@ -106,6 +114,7 @@ struct State {
     buffer: Vec<u8>,
     needs_redraw: bool,
     loading: bool,
+    has_frame: bool,
 }
 
 impl State {
@@ -120,6 +129,7 @@ impl State {
             Command::Load { video, audio } => {
                 self.pending_audio = audio;
                 self.loading = true;
+                self.has_frame = false;
                 {
                     let mut status = lock(status);
                     status.phase = PlaybackPhase::Loading;

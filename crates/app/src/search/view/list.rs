@@ -2,7 +2,6 @@ use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::*;
-use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::v_virtual_list;
 use gpui_kit::component::*;
@@ -15,8 +14,9 @@ use super::cards::{
 use super::items::SearchItem;
 use super::{SearchLayout, SearchTab, SearchView};
 use crate::grid::{
-    CARD_GAP, CardGrid, CardMetrics, CardStyle, LIST_FOOTER_HEIGHT, MediaAuthor, OpenHandler,
-    VideoCards, card_text_height, list_footer, skeleton_card,
+    CARD_GAP, CardFrame, CardGrid, CardMetrics, CardStyle, LIST_FOOTER_HEIGHT, MediaAuthor,
+    OpenHandler, VideoCards, card_text_height, list_content_size, list_footer, page_gutter,
+    skeleton_card, virtual_list_scrollbar,
 };
 use rigili_core::{OpenLive, OpenSpace};
 
@@ -37,10 +37,11 @@ impl SearchView {
         &self,
         tab: SearchTab,
         row: usize,
-        metrics: CardMetrics,
-        style: CardStyle,
+        frame: CardFrame,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let CardFrame { style, metrics } = frame;
         let state = self.state(tab);
         let columns = self.columns().max(1);
         let start = row * columns;
@@ -65,14 +66,14 @@ impl SearchView {
                             }));
                         MediaAuthor { on_click: handler }
                     });
-                    video_card(video, style, metrics, on_open, on_author)
+                    video_card(video, style, metrics, window, cx, on_open, on_author)
                 }
                 SearchItem::Media(media) => {
                     let season_id = media.season_id;
                     let on_open = cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.open_season(season_id, cx)
                     });
-                    media_item_card(media, style, metrics, on_open)
+                    media_item_card(media, style, metrics, window, cx, on_open)
                 }
                 SearchItem::Live(live) => {
                     let room_id = live.room_id;
@@ -83,7 +84,7 @@ impl SearchView {
                             title: title.clone(),
                         });
                     });
-                    live_card(live, style, metrics, on_open)
+                    live_card(live, style, metrics, window, cx, on_open)
                 }
                 SearchItem::Article(_) | SearchItem::User(_) => div().into_any_element(),
             }))
@@ -119,9 +120,14 @@ impl SearchView {
         }
     }
 
-    fn render_user_block_at(&self, tab: SearchTab, cx: &mut Context<Self>) -> AnyElement {
+    fn render_user_block_at(
+        &self,
+        tab: SearchTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         match self.state(tab).users.first() {
-            Some(user) => self.render_user_block(user, cx),
+            Some(user) => self.render_user_block(user, window, cx),
             None => div().into_any_element(),
         }
     }
@@ -131,16 +137,16 @@ impl SearchView {
         tab: SearchTab,
         row: usize,
         layout: SearchLayout,
-        metrics: CardMetrics,
-        style: CardStyle,
+        frame: CardFrame,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if layout == SearchLayout::Grid {
-            return self.render_grid_row(tab, row, metrics, style, cx);
+            return self.render_grid_row(tab, row, frame, window, cx);
         }
 
         match self.state(tab).items.get(row) {
-            Some(item) => self.render_row_item(item, style, cx),
+            Some(item) => self.render_row_item(item, frame.style, cx),
             None => div().into_any_element(),
         }
     }
@@ -162,7 +168,9 @@ impl SearchView {
     fn render_list(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let tab = self.tab;
         let style = CardStyle::new(cx);
+        let gutter = page_gutter(window);
         let metrics = self.card_metrics(window);
+        let frame = CardFrame { style, metrics };
         let columns = self.columns().max(1);
         let layout = tab.layout();
         let has_header = tab == SearchTab::All && !self.state(tab).users.is_empty();
@@ -189,6 +197,7 @@ impl SearchView {
         if footer {
             sizes.push(size(px(0.), LIST_FOOTER_HEIGHT));
         }
+        let content_size = list_content_size(&sizes, rems(1.5).to_pixels(window.rem_size()));
         let sizes = Rc::new(sizes);
 
         let view = cx.entity();
@@ -197,7 +206,7 @@ impl SearchView {
             view,
             tab.list_id(),
             sizes,
-            move |this, visible_range, _, cx| {
+            move |this, visible_range, window, cx| {
                 this.maybe_load_more(
                     tab,
                     visible_range.end.saturating_sub(1),
@@ -210,16 +219,9 @@ impl SearchView {
                         if footer && row == footer_index {
                             this.render_footer(tab, cx)
                         } else if has_header && row == 0 {
-                            this.render_user_block_at(tab, cx)
+                            this.render_user_block_at(tab, window, cx)
                         } else {
-                            this.render_item_at(
-                                tab,
-                                row - header_offset,
-                                layout,
-                                metrics,
-                                style,
-                                cx,
-                            )
+                            this.render_item_at(tab, row - header_offset, layout, frame, window, cx)
                         }
                     })
                     .collect::<Vec<_>>()
@@ -232,6 +234,8 @@ impl SearchView {
             .relative()
             .flex_1()
             .min_h_0()
+            .mr(px(-gutter.as_f32()))
+            .pr(gutter)
             .overflow_hidden()
             .on_children_prepainted(move |bounds, window, cx| {
                 let Some(width) = bounds.first().map(|bounds| bounds.size.width) else {
@@ -252,7 +256,10 @@ impl SearchView {
                 });
             })
             .child(list)
-            .child(Scrollbar::vertical(&self.state(tab).scroll).viewport_from_layout())
+            .child(virtual_list_scrollbar(
+                &self.state(tab).scroll,
+                content_size,
+            ))
             .into_any_element()
     }
 

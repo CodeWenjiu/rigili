@@ -3,6 +3,8 @@ use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::*;
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::scroll::{Scrollbar, ScrollbarHandle};
 use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tooltip::Tooltip;
@@ -13,12 +15,18 @@ use rigili_bilibili::{
     FavItem, HistoryItem, PopularVideo, RecommendVideo, SearchVideo, SpaceVideo, WatchLaterItem,
     thumbnail,
 };
-use rigili_core::{OpenVideo, format_count, format_date, format_duration, format_ymd};
+use rigili_core::backend;
+use rigili_core::runtime::Tokio;
+use rigili_core::{
+    OpenVideo, api_error_message, format_count, format_date, format_duration, format_ymd, login,
+};
 
 use crate::platform::theme::cover_scrim;
+use crate::preview::{self, PreviewSource};
 
 pub(crate) const CARD_GAP: Pixels = px(16.);
 pub(crate) const LIST_FOOTER_HEIGHT: Pixels = px(56.);
+pub(crate) const PAGE_GUTTER_REMS: f32 = 1.5;
 const CARD_TEXT_HEIGHT_REMS: f32 = 4.25;
 const CARD_BODY_GAP: f32 = 8.;
 
@@ -129,6 +137,10 @@ impl VideoCard {
 
     pub(crate) fn duration(&self) -> &str {
         &self.duration
+    }
+
+    pub(crate) fn cid(&self) -> Option<u64> {
+        self.cid
     }
 
     pub(crate) fn views(&self) -> &str {
@@ -360,6 +372,12 @@ pub(crate) struct CardMetrics {
     pub(crate) thumb_width: u32,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct CardFrame {
+    pub(crate) style: CardStyle,
+    pub(crate) metrics: CardMetrics,
+}
+
 impl CardMetrics {
     pub(crate) fn height(self) -> Pixels {
         card_height(self.width, self.text_height)
@@ -442,6 +460,13 @@ pub(crate) struct MediaCard<'a> {
     pub(crate) thumb_width: u32,
     pub(crate) overlay: CardOverlay<'a>,
     pub(crate) author: Option<MediaAuthor>,
+    pub(crate) video: Option<MediaVideo>,
+}
+
+#[derive(Clone)]
+pub(crate) struct MediaVideo {
+    pub(crate) bvid: SharedString,
+    pub(crate) cid: Option<u64>,
 }
 
 pub(crate) struct MediaAuthor {
@@ -462,6 +487,8 @@ pub(crate) fn media_card(
     style: CardStyle,
     width: Pixels,
     text_height: Pixels,
+    window: &mut Window,
+    cx: &mut App,
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let MediaCard {
@@ -474,6 +501,7 @@ pub(crate) fn media_card(
         thumb_width,
         overlay,
         author,
+        video,
     } = card;
 
     let on_open: Rc<OpenHandler> = Rc::new(on_open);
@@ -484,9 +512,30 @@ pub(crate) fn media_card(
         }
     };
 
+    let preview = video.as_ref().map(|video| {
+        preview::slot(
+            window,
+            cx,
+            ElementId::NamedInteger(id.clone(), 3),
+            PreviewSource::new(video.bvid.clone(), video.cid),
+        )
+    });
+    let cover_click = {
+        let on_open = on_open.clone();
+        let preview = preview.clone();
+        move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
+            if let Some(preview) = &preview {
+                preview.update(cx, |preview, cx| preview.stop(Some(&mut *window), cx));
+            }
+            cx.stop_propagation();
+            on_open.as_ref()(event, window, cx);
+        }
+    };
+
     let cover_id = ElementId::NamedInteger(id.clone(), 0);
     let title_id = ElementId::NamedInteger(id.clone(), 1);
     let meta_id = ElementId::NamedInteger(id.clone(), 2);
+    let watch_later_id = ElementId::NamedInteger(id.clone(), 4);
     let title_tooltip = title.to_owned();
     let meta_tooltip = footer.unwrap_or_default().to_owned();
     let meta_click = match author {
@@ -515,7 +564,14 @@ pub(crate) fn media_card(
                 .overflow_hidden()
                 .bg(style.placeholder)
                 .cursor_pointer()
-                .on_click(navigate(on_open.clone()))
+                .on_click(cover_click)
+                .when_some(preview.clone(), |this, preview| {
+                    this.on_hover(move |hovered, window, cx| {
+                        preview.update(cx, |preview, cx| {
+                            preview.set_hovered(*hovered, window, cx);
+                        });
+                    })
+                })
                 .child(
                     img(thumbnail(cover, thumb_width))
                         .size_full()
@@ -529,30 +585,33 @@ pub(crate) fn media_card(
                         .opacity(0.)
                         .group_hover("media-cover", |this| this.opacity(1.)),
                 )
-                .child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .opacity(0.)
-                        .group_hover("media-cover", |this| this.opacity(1.))
-                        .child(
-                            div()
-                                .size(px(40.))
-                                .rounded_full()
-                                .bg(Hsla::white().opacity(0.92))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(
-                                    Icon::new(IconName::Play)
-                                        .with_size(px(18.))
-                                        .text_color(Hsla::black().opacity(0.72)),
-                                ),
-                        ),
-                )
+                .when(preview.is_none(), |this| {
+                    this.child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .opacity(0.)
+                            .group_hover("media-cover", |this| this.opacity(1.))
+                            .child(
+                                div()
+                                    .size(px(40.))
+                                    .rounded_full()
+                                    .bg(Hsla::white().opacity(0.92))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        Icon::new(IconName::Play)
+                                            .with_size(px(18.))
+                                            .text_color(Hsla::black().opacity(0.72)),
+                                    ),
+                            ),
+                    )
+                })
+                .when_some(preview.clone(), |this, preview| this.child(preview))
                 .when_some(overlay.badge, |this, badge| {
                     this.child(
                         div()
@@ -604,7 +663,32 @@ pub(crate) fn media_card(
                         .when_some(overlay.trailing, |this, trailing| {
                             this.child(trailing.to_owned())
                         }),
-                ),
+                )
+                .when_some(video, |this, video| {
+                    this.child(
+                        Button::new(watch_later_id)
+                            .ghost()
+                            .absolute()
+                            .top_2()
+                            .right_2()
+                            .w(px(28.))
+                            .h(px(28.))
+                            .p_0()
+                            .rounded(px(6.))
+                            .bg(hsla(0., 0., 0., 0.55))
+                            .text_color(Hsla::white())
+                            .opacity(0.)
+                            .group_hover("media-cover", |this| this.opacity(1.))
+                            .focus_visible(|this| this.opacity(1.))
+                            .icon(IconName::Clock)
+                            .tooltip("稍后再看")
+                            .accessibility_label("稍后再看")
+                            .on_click(move |_event, window, cx| {
+                                cx.stop_propagation();
+                                add_to_watch_later(video.bvid.clone(), window, cx);
+                            }),
+                    )
+                }),
         )
         .child(
             v_flex()
@@ -660,6 +744,8 @@ pub(crate) fn video_card(
     card: &VideoCard,
     style: CardStyle,
     metrics: CardMetrics,
+    window: &mut Window,
+    cx: &mut App,
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
     let views = card.views();
@@ -676,6 +762,10 @@ pub(crate) fn video_card(
             title_lines: 2,
             thumb_width: metrics.thumb_width,
             author: None,
+            video: Some(MediaVideo {
+                bvid: card.id().clone(),
+                cid: card.cid(),
+            }),
             overlay: CardOverlay {
                 leading: (!views.is_empty()).then_some((IconName::Play, views)),
                 secondary: (!danmaku.is_empty())
@@ -687,9 +777,68 @@ pub(crate) fn video_card(
         style,
         metrics.width,
         metrics.text_height,
+        window,
+        cx,
         on_open,
     )
     .into_any_element()
+}
+
+fn add_to_watch_later(bvid: SharedString, window: &mut Window, cx: &mut App) {
+    let Ok(backend) = backend::get(cx) else {
+        return;
+    };
+    let handle = window.window_handle();
+    let request = Tokio::spawn(cx, async move { backend.watch_later_add(&bvid).await });
+
+    cx.spawn(async move |cx| {
+        let result = request.await;
+        let expired = matches!(&result, Ok(Err(error)) if error.is_login_required());
+        let note = match result {
+            Ok(Ok(())) => Notification::success("已加入稍后再看"),
+            Ok(Err(error)) => Notification::error(api_error_message(&error)),
+            Err(_) => Notification::error("加入稍后再看失败"),
+        };
+        let _ = cx.update_window(handle, |_, window, cx| {
+            if expired {
+                login::expire(cx);
+            }
+            window.push_notification(note, cx);
+        });
+    })
+    .detach();
+}
+
+pub(crate) fn page_gutter(window: &Window) -> Pixels {
+    rems(PAGE_GUTTER_REMS).to_pixels(window.rem_size())
+}
+
+pub(crate) fn virtual_list_scrollbar<H: ScrollbarHandle + Clone>(
+    handle: &H,
+    content_size: gpui_kit::Size<Pixels>,
+) -> AnyElement {
+    scrollbar_overlay(
+        Scrollbar::vertical(handle)
+            .scroll_size(content_size)
+            .viewport_from_layout(),
+    )
+}
+
+fn scrollbar_overlay(scrollbar: Scrollbar) -> AnyElement {
+    div()
+        .absolute()
+        .inset_0()
+        .child(scrollbar)
+        .into_any_element()
+}
+
+pub(crate) fn list_content_size(
+    sizes: &[gpui_kit::Size<Pixels>],
+    gap: Pixels,
+) -> gpui_kit::Size<Pixels> {
+    let height = sizes.iter().map(|size| size.height.as_f32()).sum::<f32>()
+        + gap.as_f32() * sizes.len().saturating_sub(1) as f32;
+    size(px(0.), px(height))
 }
 
 pub(crate) fn profile_badge(

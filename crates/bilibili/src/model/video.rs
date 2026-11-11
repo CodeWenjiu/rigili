@@ -75,6 +75,17 @@ impl Dash {
     pub fn best_audio(&self) -> Option<&DashAudio> {
         self.audio.iter().max_by_key(|audio| audio.bandwidth)
     }
+
+    pub fn preview_video(&self) -> Option<&DashVideo> {
+        self.usable_videos()
+            .min_by_key(|video| (video.height, video.codecid != 7, video.bandwidth))
+    }
+
+    fn usable_videos(&self) -> impl Iterator<Item = &DashVideo> {
+        self.video
+            .iter()
+            .filter(|video| !video.base_url.is_empty() && video.width > 0 && video.height > 0)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -247,5 +258,51 @@ mod tests {
             audio: Vec::new(),
         };
         assert_eq!(no_avc.best_video().map(|video| video.codecid), Some(13));
+    }
+
+    #[test]
+    fn selects_the_smallest_preview_track() {
+        let dash = Dash {
+            video: vec![
+                track(80, 1080, 7, 2_000_000),
+                track(32, 480, 7, 600_000),
+                track(16, 360, 12, 400_000),
+                track(16, 360, 7, 500_000),
+            ],
+            audio: Vec::new(),
+        };
+        assert_eq!(
+            dash.preview_video().map(|video| video.codecid),
+            Some(7),
+            "prefer the AVC track at the smallest size"
+        );
+        assert_eq!(dash.preview_video().map(|video| video.height), Some(360));
+
+        let no_avc = Dash {
+            video: vec![track(80, 1080, 13, 2_000_000), track(32, 480, 13, 600_000)],
+            audio: Vec::new(),
+        };
+        assert_eq!(no_avc.preview_video().map(|video| video.id), Some(32));
+
+        let unavailable = Dash {
+            video: vec![DashVideo {
+                base_url: String::new(),
+                ..track(16, 360, 7, 500_000)
+            }],
+            audio: Vec::new(),
+        };
+        assert!(unavailable.preview_video().is_none());
+    }
+
+    fn track(id: u32, height: u32, codecid: u32, bandwidth: u64) -> DashVideo {
+        DashVideo {
+            id,
+            base_url: format!("https://example.invalid/{id}-{codecid}.m4s"),
+            bandwidth,
+            width: height * 16 / 9,
+            height,
+            codecs: String::new(),
+            codecid,
+        }
     }
 }

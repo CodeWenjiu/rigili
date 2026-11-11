@@ -5,7 +5,6 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::v_virtual_list;
@@ -24,8 +23,8 @@ use rigili_core::{OpenVideo, Refresh, api_error_message, api_task_error_message,
 use super::comment;
 use crate::grid::{
     CARD_GAP, CardGrid, CardMetrics, CardStyle, FolderCards, LIST_FOOTER_HEIGHT, VideoCard,
-    VideoCards, append_unique_by, card_text_height, list_footer, profile_badge, profile_stat,
-    video_card,
+    VideoCards, append_unique_by, card_text_height, list_content_size, list_footer, page_gutter,
+    profile_badge, profile_stat, video_card, virtual_list_scrollbar,
 };
 
 const DYNAMIC_CARD_MAX_WIDTH: Pixels = px(840.);
@@ -1215,6 +1214,7 @@ impl SpaceView {
         }
 
         let style = CardStyle::new(cx);
+        let gutter = page_gutter(window);
         let columns = VideoCards::columns(self.list_width);
         let metrics = VideoCards::metrics(
             self.list_width,
@@ -1231,6 +1231,7 @@ impl SpaceView {
         if footer {
             sizes.push(size(px(0.), LIST_FOOTER_HEIGHT));
         }
+        let content_size = list_content_size(&sizes, rems(1.5).to_pixels(window.rem_size()));
         let sizes = Rc::new(sizes);
 
         let view = cx.entity();
@@ -1239,14 +1240,14 @@ impl SpaceView {
             view,
             "space-video-list",
             sizes,
-            move |this, visible_range, _, cx| {
+            move |this, visible_range, window, cx| {
                 this.maybe_load_more_space_videos(visible_range.end.saturating_sub(1), rows, cx);
                 visible_range
                     .map(|row| {
                         if footer && row == footer_index {
                             this.render_space_videos_footer(cx)
                         } else {
-                            this.render_space_video_row(row, columns, metrics, style, cx)
+                            this.render_space_video_row(row, columns, metrics, style, window, cx)
                         }
                     })
                     .collect::<Vec<_>>()
@@ -1259,6 +1260,8 @@ impl SpaceView {
             .relative()
             .flex_1()
             .min_h_0()
+            .mr(px(-gutter.as_f32()))
+            .pr(gutter)
             .overflow_hidden()
             .on_children_prepainted(move |bounds, window, cx| {
                 let Some(width) = bounds.first().map(|bounds| bounds.size.width) else {
@@ -1278,7 +1281,10 @@ impl SpaceView {
                 });
             })
             .child(list)
-            .child(Scrollbar::vertical(&self.space_videos.scroll).viewport_from_layout())
+            .child(virtual_list_scrollbar(
+                &self.space_videos.scroll,
+                content_size,
+            ))
             .into_any_element()
     }
 
@@ -1299,6 +1305,7 @@ impl SpaceView {
         columns: usize,
         metrics: CardMetrics,
         style: CardStyle,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let start = row * columns;
@@ -1313,7 +1320,7 @@ impl SpaceView {
                 let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| {
                     cx.emit(open.clone());
                 });
-                video_card(card, style, metrics, on_open)
+                video_card(card, style, metrics, window, cx, on_open)
             }))
             .into_any_element()
     }

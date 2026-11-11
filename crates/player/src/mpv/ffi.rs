@@ -6,11 +6,15 @@ pub(super) const MPV_FORMAT_INT64: c_int = 4;
 pub(super) const MPV_FORMAT_DOUBLE: c_int = 5;
 
 pub(super) const MPV_RENDER_PARAM_API_TYPE: c_int = 1;
+pub(super) const MPV_RENDER_PARAM_NEXT_FRAME_INFO: c_int = 11;
 pub(super) const MPV_RENDER_PARAM_SW_SIZE: c_int = 17;
 pub(super) const MPV_RENDER_PARAM_SW_FORMAT: c_int = 18;
 pub(super) const MPV_RENDER_PARAM_SW_STRIDE: c_int = 19;
 pub(super) const MPV_RENDER_PARAM_SW_POINTER: c_int = 20;
 pub(super) const MPV_RENDER_PARAM_INVALID: c_int = 0;
+
+pub(super) const MPV_RENDER_FRAME_INFO_PRESENT: u64 = 1 << 0;
+pub(super) const MPV_RENDER_FRAME_INFO_REDRAW: u64 = 1 << 1;
 
 #[repr(C)]
 pub(super) struct MpvHandle {
@@ -26,6 +30,12 @@ pub(super) struct MpvRenderContext {
 pub(super) struct MpvRenderParam {
     pub(super) kind: c_int,
     pub(super) data: *mut c_void,
+}
+
+#[repr(C)]
+pub(super) struct MpvRenderFrameInfo {
+    pub(super) flags: u64,
+    pub(super) target_time: i64,
 }
 
 #[repr(C)]
@@ -69,6 +79,10 @@ unsafe extern "C" {
         params: *mut MpvRenderParam,
     ) -> c_int;
     pub(super) fn mpv_render_context_update(ctx: *mut MpvRenderContext) -> u64;
+    pub(super) fn mpv_render_context_get_info(
+        ctx: *mut MpvRenderContext,
+        param: MpvRenderParam,
+    ) -> c_int;
     pub(super) fn mpv_render_context_render(
         ctx: *mut MpvRenderContext,
         params: *mut MpvRenderParam,

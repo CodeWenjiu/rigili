@@ -65,6 +65,24 @@ pub(super) async fn resolve_streams(
     best_streams(dash).ok_or_else(|| ApiError::InvalidResponse("没有可用的视频流".into()))
 }
 
+pub async fn resolve_preview(
+    backend: Backend,
+    bvid: String,
+    cid: Option<u64>,
+) -> Result<String, ApiError> {
+    let cid = match cid {
+        Some(cid) => cid,
+        None => backend.view(&bvid).await?.cid,
+    };
+    let playurl = backend.playurl(&bvid, cid).await?;
+    playurl
+        .dash
+        .as_ref()
+        .and_then(|dash| dash.preview_video())
+        .map(|video| video.base_url.clone())
+        .ok_or_else(|| ApiError::InvalidResponse("没有可用的预览流".into()))
+}
+
 fn best_streams(dash: &Dash) -> Option<Streams> {
     let video = dash.best_video()?;
     Some(Streams {

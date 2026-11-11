@@ -1,4 +1,6 @@
-rigili_macro::mod_prv!(grid, home, login, mine, platform, search, shell, space);
+rigili_macro::mod_prv!(
+    grid, home, login, mine, platform, preview, search, shell, space
+);
 
 use crate::platform::assets::AppAssets;
 
@@ -9,6 +11,7 @@ fn main() {
         cx.set_global(rigili_core::login::LoginState::default());
         platform::init(cx);
         rigili_core::backend::init(cx);
+        preview::init(cx);
 
         if let Err(error) = shell::open_main(cx) {
             eprintln!("failed to open window: {error}");

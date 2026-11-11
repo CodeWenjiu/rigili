@@ -18,6 +18,7 @@ use crate::home::{HomeTab, HomeView};
 use crate::login;
 use crate::mine::MineView;
 use crate::platform::image_cache;
+use crate::preview;
 use crate::search::SearchView;
 use crate::space::{CloseSpace, SpaceView};
 use rigili_playback::PlaybackRequest;
@@ -220,6 +221,7 @@ impl MainView {
     }
 
     fn submit_search(&mut self, cx: &mut Context<Self>) {
+        preview::stop_all(cx);
         let keyword = self.search_box.value(cx).trim().to_owned();
         self.search_box.close();
         self.spaces.clear();
@@ -237,6 +239,7 @@ impl MainView {
     }
 
     fn open_space(&mut self, request: OpenSpace, window: &mut Window, cx: &mut Context<Self>) {
+        preview::stop_all(cx);
         if self
             .spaces
             .last()
@@ -256,6 +259,7 @@ impl MainView {
     }
 
     fn close_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        preview::stop_all(cx);
         if self.spaces.pop().is_none() {
             return;
         }
@@ -353,6 +357,7 @@ impl MainView {
                                 let weak = weak.clone();
                                 move |_, _, cx| {
                                     let _ = weak.update(cx, |this, cx| {
+                                        preview::stop_all(cx);
                                         if this.page != Page::Home || !this.spaces.is_empty() {
                                             this.page = Page::Home;
                                             this.spaces.clear();
@@ -370,6 +375,7 @@ impl MainView {
                                 let weak = weak.clone();
                                 move |_, _, cx| {
                                     let _ = weak.update(cx, |this, cx| {
+                                        preview::stop_all(cx);
                                         if this.page == Page::Mine && this.spaces.is_empty() {
                                             return;
                                         }

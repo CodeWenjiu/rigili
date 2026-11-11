@@ -1,7 +1,6 @@
 use std::rc::Rc;
 
 use gpui_kit::component::button::*;
-use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::v_virtual_list;
 use gpui_kit::component::*;
@@ -10,8 +9,9 @@ use gpui_kit::*;
 
 use super::{HomeItem, HomeTab, HomeView};
 use crate::grid::{
-    CARD_GAP, CardGrid, CardMetrics, CardOverlay, CardStyle, LIST_FOOTER_HEIGHT, MediaAuthor,
-    MediaCard, OpenHandler, VideoCards, card_text_height, list_footer, media_card, skeleton_card,
+    CARD_GAP, CardFrame, CardGrid, CardOverlay, CardStyle, LIST_FOOTER_HEIGHT, MediaAuthor,
+    MediaCard, MediaVideo, OpenHandler, VideoCards, card_text_height, list_content_size,
+    list_footer, media_card, page_gutter, skeleton_card, virtual_list_scrollbar,
 };
 use rigili_core::OpenSpace;
 
@@ -21,8 +21,8 @@ impl HomeView {
         tab: HomeTab,
         row: usize,
         columns: usize,
-        metrics: CardMetrics,
-        style: CardStyle,
+        frame: CardFrame,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let state = self.state(tab);
@@ -31,7 +31,7 @@ impl HomeView {
         let opening = self.opening;
 
         h_flex()
-            .h(metrics.height())
+            .h(frame.metrics.height())
             .gap(CARD_GAP)
             .children((start..end).map(|index| {
                 let item = &state.items[index];
@@ -53,7 +53,7 @@ impl HomeView {
                         }));
                     MediaAuthor { on_click: handler }
                 });
-                home_card(item, is_opening, style, metrics, on_open, on_author)
+                home_card(item, is_opening, frame, window, cx, on_open, on_author)
             }))
             .into_any_element()
     }
@@ -75,6 +75,7 @@ impl HomeView {
     fn render_list(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let tab = self.tab;
         let style = CardStyle::new(cx);
+        let gutter = page_gutter(window);
         let state = self.state(tab);
         let columns = VideoCards::columns(self.list_width);
         let metrics = VideoCards::metrics(
@@ -82,6 +83,7 @@ impl HomeView {
             card_text_height(window),
             window.scale_factor(),
         );
+        let frame = CardFrame { style, metrics };
         let row_height = metrics.height();
         let rows = state.items.len().div_ceil(columns);
         let known_width = self.list_width;
@@ -92,6 +94,7 @@ impl HomeView {
         if footer {
             sizes.push(size(px(0.), LIST_FOOTER_HEIGHT));
         }
+        let content_size = list_content_size(&sizes, rems(1.5).to_pixels(window.rem_size()));
         let sizes = Rc::new(sizes);
 
         let view = cx.entity();
@@ -100,14 +103,14 @@ impl HomeView {
             view,
             tab.list_id(),
             sizes,
-            move |this, visible_range, _, cx| {
+            move |this, visible_range, window, cx| {
                 this.maybe_load_more(tab, visible_range.end.saturating_sub(1), rows, cx);
                 visible_range
                     .map(|row| {
                         if footer && row == footer_index {
                             this.render_footer(tab, cx)
                         } else {
-                            this.render_row(tab, row, columns, metrics, style, cx)
+                            this.render_row(tab, row, columns, frame, window, cx)
                         }
                     })
                     .collect::<Vec<_>>()
@@ -120,6 +123,8 @@ impl HomeView {
             .relative()
             .flex_1()
             .min_h_0()
+            .mr(px(-gutter.as_f32()))
+            .pr(gutter)
             .overflow_hidden()
             .on_children_prepainted(move |bounds, window, cx| {
                 let Some(width) = bounds.first().map(|bounds| bounds.size.width) else {
@@ -140,7 +145,10 @@ impl HomeView {
                 });
             })
             .child(list)
-            .child(Scrollbar::vertical(&self.state(tab).scroll).viewport_from_layout())
+            .child(virtual_list_scrollbar(
+                &self.state(tab).scroll,
+                content_size,
+            ))
             .into_any_element()
     }
 
@@ -212,11 +220,20 @@ impl HomeView {
 fn home_card(
     item: &HomeItem,
     opening: bool,
-    style: CardStyle,
-    metrics: CardMetrics,
+    frame: CardFrame,
+    window: &mut Window,
+    cx: &mut App,
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_author: Option<MediaAuthor>,
 ) -> AnyElement {
+    let CardFrame { style, metrics } = frame;
+    let video = match item {
+        HomeItem::Video(video) => Some(MediaVideo {
+            bvid: video.id().clone(),
+            cid: video.cid(),
+        }),
+        HomeItem::Live(_) | HomeItem::Pgc(_) => None,
+    };
     let card = media_card(
         MediaCard {
             id: item.id().clone(),
@@ -233,10 +250,13 @@ fn home_card(
                 badge: item.badge(),
             },
             author: on_author,
+            video,
         },
         style,
         metrics.width,
         metrics.text_height,
+        window,
+        cx,
         on_open,
     );
 

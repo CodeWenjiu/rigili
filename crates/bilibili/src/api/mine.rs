@@ -12,6 +12,7 @@ const FOLDER_SORT_URL: &str = "https://api.bilibili.com/x/v3/fav/folder/sort";
 const BANGUMI_FOLLOW_URL: &str = "https://api.bilibili.com/x/space/bangumi/follow/list";
 const HISTORY_URL: &str = "https://api.bilibili.com/x/web-interface/history/cursor";
 const WATCH_LATER_URL: &str = "https://api.bilibili.com/x/v2/history/toview";
+const WATCH_LATER_ADD_URL: &str = "https://api.bilibili.com/x/v2/history/toview/add";
 const PAGE_SIZE: u32 = 20;
 const FOLDER_LIMIT: u32 = 100;
 
@@ -134,6 +135,15 @@ pub async fn history(client: &Client, max: u64, view_at: i64) -> Result<HistoryP
 
 pub async fn watch_later(client: &Client) -> Result<WatchLater, ApiError> {
     client.get_json(WATCH_LATER_URL, &[]).await
+}
+
+pub async fn watch_later_add(client: &Client, bvid: &str) -> Result<(), ApiError> {
+    client
+        .post_form_ack(
+            WATCH_LATER_ADD_URL,
+            &[("bvid", bvid.to_owned()), ("csrf", csrf(client)?)],
+        )
+        .await
 }
 
 fn csrf(client: &Client) -> Result<String, ApiError> {

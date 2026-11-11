@@ -5730,6 +5730,7 @@ dependencies = [
  "rigili_core",
  "rigili_macro",
  "rigili_playback",
+ "rigili_player",
  "tokio",
 ]
 

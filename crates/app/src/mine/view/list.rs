@@ -2,7 +2,6 @@ use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::*;
-use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -10,9 +9,9 @@ use gpui_kit::*;
 use super::{FavoriteView, FolderSource, MineTab, MineView};
 
 use crate::grid::{
-    BangumiCards, CARD_GAP, CardGrid, CardMetrics, CardOverlay, CardStyle, FolderCards,
-    LIST_FOOTER_HEIGHT, MediaCard, VideoCards, card_text_height, list_footer, media_card,
-    skeleton_card,
+    BangumiCards, CARD_GAP, CardFrame, CardGrid, CardMetrics, CardOverlay, CardStyle, FolderCards,
+    LIST_FOOTER_HEIGHT, MediaCard, VideoCards, card_text_height, list_content_size, list_footer,
+    media_card, page_gutter, skeleton_card, virtual_list_scrollbar,
 };
 use crate::platform::theme::cover_scrim;
 use gpui_kit::component::spinner::Spinner;
@@ -300,10 +299,11 @@ impl MineView {
         cinema: bool,
         row: usize,
         columns: usize,
-        metrics: CardMetrics,
-        style: CardStyle,
+        frame: CardFrame,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let CardFrame { style, metrics } = frame;
         let state = self.bangumi_state(cinema);
         let start = row * columns;
         let end = (start + columns).min(state.items.len());
@@ -319,7 +319,7 @@ impl MineView {
                 let on_open = cx.listener(move |this, _, _, cx| {
                     this.open_season(season_id, cx);
                 });
-                bangumi_card(item, is_opening, style, metrics, on_open)
+                bangumi_card(item, is_opening, style, metrics, window, cx, on_open)
             }))
             .into_any_element()
     }
@@ -350,6 +350,7 @@ impl MineView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let style = CardStyle::new(cx);
+        let gutter = page_gutter(window);
         let state = self.bangumi_state(cinema);
         let columns = BangumiCards::columns(self.list_width);
         let metrics = BangumiCards::metrics(
@@ -357,6 +358,7 @@ impl MineView {
             card_text_height(window),
             window.scale_factor(),
         );
+        let frame = CardFrame { style, metrics };
         let row_height = metrics.height();
         let rows = state.items.len().div_ceil(columns);
         let known_width = self.list_width;
@@ -367,6 +369,7 @@ impl MineView {
         if footer {
             sizes.push(size(px(0.), LIST_FOOTER_HEIGHT));
         }
+        let content_size = list_content_size(&sizes, rems(1.5).to_pixels(window.rem_size()));
         let sizes = Rc::new(sizes);
 
         let view = cx.entity();
@@ -376,18 +379,23 @@ impl MineView {
         } else {
             "mine-bangumi-list"
         };
-        let list = v_virtual_list(view, list_id, sizes, move |this, visible_range, _, cx| {
-            this.maybe_load_more_bangumi(cinema, visible_range.end.saturating_sub(1), rows, cx);
-            visible_range
-                .map(|row| {
-                    if footer && row == footer_index {
-                        this.render_bangumi_footer(cinema, cx)
-                    } else {
-                        this.render_bangumi_row(cinema, row, columns, metrics, style, cx)
-                    }
-                })
-                .collect::<Vec<_>>()
-        })
+        let list = v_virtual_list(
+            view,
+            list_id,
+            sizes,
+            move |this, visible_range, window, cx| {
+                this.maybe_load_more_bangumi(cinema, visible_range.end.saturating_sub(1), rows, cx);
+                visible_range
+                    .map(|row| {
+                        if footer && row == footer_index {
+                            this.render_bangumi_footer(cinema, cx)
+                        } else {
+                            this.render_bangumi_row(cinema, row, columns, frame, window, cx)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            },
+        )
         .gap_y_6()
         .track_scroll(&self.bangumi_state(cinema).scroll);
 
@@ -395,6 +403,8 @@ impl MineView {
             .relative()
             .flex_1()
             .min_h_0()
+            .mr(px(-gutter.as_f32()))
+            .pr(gutter)
             .overflow_hidden()
             .on_children_prepainted(move |bounds, window, cx| {
                 let Some(width) = bounds.first().map(|bounds| bounds.size.width) else {
@@ -415,7 +425,10 @@ impl MineView {
                 });
             })
             .child(list)
-            .child(Scrollbar::vertical(&self.bangumi_state(cinema).scroll).viewport_from_layout())
+            .child(virtual_list_scrollbar(
+                &self.bangumi_state(cinema).scroll,
+                content_size,
+            ))
             .into_any_element()
     }
 
@@ -424,10 +437,11 @@ impl MineView {
         tab: MineTab,
         row: usize,
         columns: usize,
-        metrics: CardMetrics,
-        style: CardStyle,
+        frame: CardFrame,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let CardFrame { style, metrics } = frame;
         let state = self.state(tab);
         let start = row * columns;
         let end = (start + columns).min(state.items.len());
@@ -441,7 +455,7 @@ impl MineView {
                 let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| {
                     cx.emit(open.clone());
                 });
-                crate::grid::video_card(card, style, metrics, on_open)
+                crate::grid::video_card(card, style, metrics, window, cx, on_open)
             }))
             .into_any_element()
     }
@@ -467,6 +481,7 @@ impl MineView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let style = CardStyle::new(cx);
+        let gutter = page_gutter(window);
         let state = self.state(tab);
         let columns = VideoCards::columns(self.list_width);
         let metrics = VideoCards::metrics(
@@ -474,6 +489,7 @@ impl MineView {
             card_text_height(window),
             window.scale_factor(),
         );
+        let frame = CardFrame { style, metrics };
         let row_height = metrics.height();
         let rows = state.items.len().div_ceil(columns);
         let known_width = self.list_width;
@@ -484,6 +500,7 @@ impl MineView {
         if footer {
             sizes.push(size(px(0.), LIST_FOOTER_HEIGHT));
         }
+        let content_size = list_content_size(&sizes, rems(1.5).to_pixels(window.rem_size()));
         let sizes = Rc::new(sizes);
 
         let view = cx.entity();
@@ -492,14 +509,14 @@ impl MineView {
             view,
             tab.list_id(),
             sizes,
-            move |this, visible_range, _, cx| {
+            move |this, visible_range, window, cx| {
                 this.maybe_load_more(tab, visible_range.end.saturating_sub(1), rows, cx);
                 visible_range
                     .map(|row| {
                         if footer && row == footer_index {
                             this.render_footer(tab, cx)
                         } else {
-                            this.render_row(tab, row, columns, metrics, style, cx)
+                            this.render_row(tab, row, columns, frame, window, cx)
                         }
                     })
                     .collect::<Vec<_>>()
@@ -512,6 +529,8 @@ impl MineView {
             .relative()
             .flex_1()
             .min_h_0()
+            .mr(px(-gutter.as_f32()))
+            .pr(gutter)
             .overflow_hidden()
             .on_children_prepainted(move |bounds, window, cx| {
                 let Some(width) = bounds.first().map(|bounds| bounds.size.width) else {
@@ -532,7 +551,10 @@ impl MineView {
                 });
             })
             .child(list)
-            .child(Scrollbar::vertical(&self.state(tab).scroll).viewport_from_layout())
+            .child(virtual_list_scrollbar(
+                &self.state(tab).scroll,
+                content_size,
+            ))
             .into_any_element()
     }
 }
@@ -652,6 +674,8 @@ fn bangumi_card(
     opening: bool,
     style: CardStyle,
     metrics: CardMetrics,
+    window: &mut Window,
+    cx: &mut App,
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
     let latest = item.latest_ep();
@@ -671,6 +695,7 @@ fn bangumi_card(
             title_lines: 2,
             thumb_width: metrics.thumb_width,
             author: None,
+            video: None,
             overlay: CardOverlay {
                 leading: score.as_deref().map(|score| (IconName::Star, score)),
                 secondary: None,
@@ -681,6 +706,8 @@ fn bangumi_card(
         style,
         metrics.width,
         metrics.text_height,
+        window,
+        cx,
         on_open,
     );
 

@@ -214,6 +214,10 @@ impl Backend {
         api::mine::watch_later(&self.client).await
     }
 
+    pub async fn watch_later_add(&self, bvid: &str) -> Result<(), ApiError> {
+        api::mine::watch_later_add(&self.client, bvid).await
+    }
+
     pub async fn view(&self, bvid: &str) -> Result<VideoInfo, ApiError> {
         api::view::fetch(&self.client, bvid).await
     }

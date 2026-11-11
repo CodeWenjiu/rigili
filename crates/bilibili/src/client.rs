@@ -155,6 +155,16 @@ impl Client {
         self.parse(&body)
     }
 
+    pub async fn post_form_ack(
+        &self,
+        url: &str,
+        params: &[(&str, String)],
+    ) -> Result<(), ApiError> {
+        let response = self.send(|| self.http.post(url).form(params)).await?;
+        let body = response.text().await?;
+        self.parse_ack(&body)
+    }
+
     pub(crate) async fn get_raw<T>(&self, url: &str) -> Result<T, ApiError>
     where
         T: DeserializeOwned,
@@ -186,6 +196,22 @@ impl Client {
                 Err(error)
             }
         }
+    }
+
+    fn parse_ack(&self, body: &str) -> Result<(), ApiError> {
+        let envelope: Envelope<serde_json::Value> = serde_json::from_str(body)?;
+        if envelope.code == 0 {
+            return Ok(());
+        }
+
+        let error = ApiError::Bilibili {
+            code: envelope.code,
+            message: envelope.message,
+        };
+        if error.is_login_required() {
+            let _ = self.clear_session();
+        }
+        Err(error)
     }
 
     async fn send(
@@ -393,5 +419,18 @@ mod tests {
         let missing =
             parse_envelope::<Popular>(r#"{"code":0,"message":"0"}"#).expect_err("missing data");
         assert!(matches!(missing, ApiError::InvalidResponse(_)));
+    }
+
+    #[test]
+    fn accepts_acknowledgements_without_data() {
+        let client = Client::with_data_dir(None).expect("client");
+        client
+            .parse_ack(r#"{"code":0,"message":"0"}"#)
+            .expect("acknowledgement");
+
+        let error = client
+            .parse_ack(r#"{"code":-400,"message":"请求错误"}"#)
+            .expect_err("api error");
+        assert!(matches!(error, ApiError::Bilibili { code: -400, .. }));
     }
 }

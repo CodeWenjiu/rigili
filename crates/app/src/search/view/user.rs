@@ -12,7 +12,12 @@ use super::items::UserItem;
 use crate::grid::{CardGrid, CardStyle, VideoCards};
 
 impl SearchView {
-    pub(super) fn render_user_block(&self, user: &UserItem, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_user_block(
+        &self,
+        user: &UserItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let style = CardStyle::new(cx);
         let width = self.user_content_width();
         let columns = VideoCards::columns(width);
@@ -114,7 +119,7 @@ impl SearchView {
                         let open = video.open();
                         let on_open =
                             cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(open.clone()));
-                        preview_card(video, style, card_width, on_open)
+                        preview_card(video, style, card_width, window, cx, on_open)
                     })),
             )
             .child(
