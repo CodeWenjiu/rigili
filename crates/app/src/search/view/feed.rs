@@ -8,7 +8,7 @@ use rigili_core::backend::{self, Backend};
 use rigili_core::runtime::{ApiTaskError, spawn_api};
 
 use crate::grid::{VideoCard, append_unique_by};
-use rigili_core::api_task_error_message;
+use rigili_core::{api_error_message, api_task_error_message};
 
 struct Page {
     items: Vec<SearchItem>,
@@ -35,7 +35,7 @@ impl SearchView {
                 Err(error) => {
                     let state = self.state_mut(tab);
                     state.loading = false;
-                    state.error = Some(error);
+                    state.error = Some(api_error_message(error));
                     cx.notify();
                     return;
                 }
@@ -65,6 +65,7 @@ impl SearchView {
 
         if tab == SearchTab::All {
             let header_backend = backend.clone();
+            let preview_backend = backend.clone();
             let header_keyword = keyword.clone();
             spawn_api(
                 cx,
@@ -81,6 +82,46 @@ impl SearchView {
                             .collect();
                         let users = all.users.into_iter().map(UserItem::from).collect();
                         this.state_mut(SearchTab::All).users = users;
+
+                        if let Some(mid) = this
+                            .state(SearchTab::All)
+                            .users
+                            .first()
+                            .map(|user| user.mid)
+                        {
+                            let backend = preview_backend.clone();
+                            spawn_api(
+                                cx,
+                                async move { backend.space_preview_videos(mid).await },
+                                move |this, result, cx| {
+                                    if this.state(SearchTab::All).generation != generation {
+                                        return;
+                                    }
+                                    let Ok(videos) = result else {
+                                        return;
+                                    };
+                                    let incoming = videos
+                                        .list
+                                        .vlist
+                                        .into_iter()
+                                        .map(VideoCard::from)
+                                        .collect::<Vec<_>>();
+                                    let Some(user) =
+                                        this.state_mut(SearchTab::All).users.first_mut()
+                                    else {
+                                        return;
+                                    };
+                                    let mut preview = incoming;
+                                    append_unique_by(
+                                        &mut preview,
+                                        std::mem::take(&mut user.preview),
+                                        |card| card.bvid().to_owned(),
+                                    );
+                                    user.preview = preview;
+                                    cx.notify();
+                                },
+                            );
+                        }
                     }
                     cx.notify();
                 },

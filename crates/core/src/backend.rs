@@ -17,33 +17,25 @@ pub struct Backend {
     client: Arc<Client>,
 }
 
-struct BackendState {
-    backend: Option<Backend>,
-    error: Option<String>,
+enum BackendState {
+    Ready(Backend),
+    Failed(ApiError),
 }
 
 impl Global for BackendState {}
 
 pub fn init(cx: &mut App) {
     let state = match Backend::new() {
-        Ok(backend) => BackendState {
-            backend: Some(backend),
-            error: None,
-        },
-        Err(error) => BackendState {
-            backend: None,
-            error: Some(error.to_string()),
-        },
+        Ok(backend) => BackendState::Ready(backend),
+        Err(error) => BackendState::Failed(error),
     };
     cx.set_global(state);
 }
 
-pub fn get(cx: &App) -> Result<Backend, String> {
-    let state = cx.global::<BackendState>();
-    match (&state.backend, &state.error) {
-        (Some(backend), _) => Ok(backend.clone()),
-        (None, Some(error)) => Err(error.clone()),
-        (None, None) => Err("客户端尚未初始化".into()),
+pub fn get(cx: &App) -> Result<Backend, &ApiError> {
+    match cx.global::<BackendState>() {
+        BackendState::Ready(backend) => Ok(backend.clone()),
+        BackendState::Failed(error) => Err(error),
     }
 }
 
@@ -200,6 +192,10 @@ impl Backend {
         keyword: &str,
     ) -> Result<SpaceVideos, ApiError> {
         api::space::videos(&self.client, mid, page, order, keyword).await
+    }
+
+    pub async fn space_preview_videos(&self, mid: u64) -> Result<SpaceVideos, ApiError> {
+        api::space::preview_videos(&self.client, mid).await
     }
 
     pub async fn collections(&self, mid: u64, page: u32) -> Result<SpaceCollections, ApiError> {

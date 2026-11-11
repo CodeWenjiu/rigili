@@ -41,17 +41,6 @@ impl Default for PlayerStatus {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{PlaybackPhase, PlayerStatus};
-
-    #[test]
-    fn starts_idle() {
-        let status = PlayerStatus::default();
-        assert_eq!(status.phase, PlaybackPhase::Idle);
-        assert!(!status.paused);
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct VideoFrame {

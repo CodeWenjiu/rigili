@@ -7,18 +7,16 @@ use gpui_kit::*;
 use rigili_core::OpenSpace;
 
 use super::SearchView;
-use super::cards::{
-    level_badge, preview_card, preview_card_width, preview_columns, user_block_height,
-};
+use super::cards::{level_badge, preview_card, user_block_height};
 use super::items::UserItem;
-use crate::grid::CardStyle;
+use crate::grid::{CardGrid, CardStyle, VideoCards};
 
 impl SearchView {
     pub(super) fn render_user_block(&self, user: &UserItem, cx: &mut Context<Self>) -> AnyElement {
         let style = CardStyle::new(cx);
         let width = self.user_content_width();
-        let columns = preview_columns(width);
-        let card_width = preview_card_width(width, columns);
+        let columns = VideoCards::columns(width);
+        let card_width = VideoCards::card_width(width, columns, 1.);
         let mid = user.mid;
         let name = user.name.clone();
 
@@ -111,7 +109,7 @@ impl SearchView {
             )
             .child(
                 h_flex()
-                    .gap_3()
+                    .gap(VideoCards::GAP)
                     .children(user.preview.iter().take(columns).map(|video| {
                         let open = video.open();
                         let on_open =

@@ -9,7 +9,7 @@ use super::MineView;
 use rigili_core::backend;
 use rigili_core::runtime::spawn_api;
 
-use rigili_core::api_task_error_message;
+use rigili_core::{api_error_message, api_task_error_message};
 
 pub(super) struct SortFoldersDialog {
     folders: Vec<FavFolder>,
@@ -62,7 +62,7 @@ impl SortFoldersDialog {
         let backend = match backend::get(cx) {
             Ok(backend) => backend,
             Err(error) => {
-                self.error = Some(error);
+                self.error = Some(api_error_message(error));
                 cx.notify();
                 return;
             }

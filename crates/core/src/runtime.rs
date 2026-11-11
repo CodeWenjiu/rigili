@@ -28,6 +28,9 @@ where
 }
 
 pub fn init(cx: &mut App) {
+    // Tokio spawns one worker per logical core by default and never scales on demand.
+    // This runtime shares CPU with GPUI rendering and the player, while its workload is
+    // IO-bound and already bounded by request semaphores, so two workers suffice.
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()

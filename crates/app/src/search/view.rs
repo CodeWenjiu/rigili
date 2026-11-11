@@ -10,7 +10,7 @@ use rigili_bilibili::api::search::{SearchOrder, SearchType};
 
 use items::SearchItem;
 use rigili_core::backend::{self, Backend};
-use rigili_core::{OpenLive, OpenSpace, OpenVideo, Refresh};
+use rigili_core::{OpenLive, OpenSpace, OpenVideo, Refresh, api_error_message};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum SearchTab {
@@ -164,7 +164,7 @@ impl SearchView {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let (backend, error) = match backend::get(cx) {
             Ok(backend) => (Some(backend), None),
-            Err(error) => (None, Some(error)),
+            Err(error) => (None, Some(api_error_message(error))),
         };
         let mut view = Self {
             backend,

@@ -1,9 +1,8 @@
 use std::time::Duration;
 
 use gpui_kit::assets::IconName;
-use gpui_kit::base::{Align, Placement, Positioner};
 use gpui_kit::component::button::*;
-use gpui_kit::component::input::InputEvent;
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
@@ -20,6 +19,8 @@ const SUGGESTION_LIMIT: usize = 10;
 const SUGGESTION_DEBOUNCE: Duration = Duration::from_millis(160);
 
 pub(super) struct SearchBox {
+    input: Entity<InputState>,
+    _input_sub: Subscription,
     open: bool,
     suppress_focus_open: bool,
     suppress_change: bool,
@@ -34,8 +35,14 @@ pub(super) struct SearchBox {
 }
 
 impl SearchBox {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(window: &mut Window, cx: &mut Context<MainView>) -> Self {
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索视频、番剧、用户"));
+        let input_sub = cx.subscribe_in(&input, window, |this, _, event, _, cx| {
+            this.handle_search_input(event, cx);
+        });
         Self {
+            input,
+            _input_sub: input_sub,
             open: false,
             suppress_focus_open: false,
             suppress_change: false,
@@ -48,6 +55,27 @@ impl SearchBox {
             active_suggestion: None,
             suggestion_generation: 0,
         }
+    }
+
+    pub(super) fn input(&self) -> &Entity<InputState> {
+        &self.input
+    }
+
+    pub(super) fn value(&self, cx: &App) -> String {
+        self.input.read(cx).value().to_string()
+    }
+
+    pub(super) fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.input.read(cx).focus_handle(cx)
+    }
+
+    pub(super) fn set_value(&self, value: String, window: &mut Window, cx: &mut App) {
+        self.input
+            .update(cx, |input, cx| input.set_value(value, window, cx));
+    }
+
+    pub(super) fn focus(&self, window: &mut Window, cx: &mut App) {
+        self.input.update(cx, |input, cx| input.focus(window, cx));
     }
 
     pub(super) fn close(&mut self) {
@@ -93,16 +121,25 @@ impl MainView {
     }
 
     pub(super) fn dismiss_search_box(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let focused = self
-            .search_input
-            .read(cx)
-            .focus_handle(cx)
-            .is_focused(window);
+        let focused = self.search_box.focus_handle(cx).is_focused(window);
         self.search_box.close();
         if focused {
             window.blur(cx);
         }
         cx.notify();
+    }
+
+    pub(super) fn search_popover_open_changed(
+        &mut self,
+        open: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if open {
+            self.open_search_box(cx);
+        } else {
+            self.dismiss_search_box(window, cx);
+        }
     }
 
     pub(super) fn search_box_is_open(&self) -> bool {
@@ -154,7 +191,7 @@ impl MainView {
 
     fn refresh_suggestions(&mut self, cx: &mut Context<Self>) {
         self.search_box.active_suggestion = None;
-        let term = self.search_input.read(cx).value().trim().to_owned();
+        let term = self.search_box.value(cx).trim().to_owned();
         if term.is_empty() {
             self.search_box.suggestion_generation += 1;
             self.search_box.suggestions.clear();
@@ -224,8 +261,7 @@ impl MainView {
         cx: &mut Context<Self>,
     ) {
         self.search_box.suppress_change = true;
-        self.search_input
-            .update(cx, |input, cx| input.set_value(keyword, window, cx));
+        self.search_box.set_value(keyword, window, cx);
         self.search_box.suppress_change = false;
         self.search_box.open = false;
         self.submit_search(cx);
@@ -233,82 +269,57 @@ impl MainView {
         cx.notify();
     }
 
-    pub(super) fn render_search_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn render_search_panel(
+        &self,
+        weak: &WeakEntity<Self>,
+        width: Pixels,
+        cx: &App,
+    ) -> AnyElement {
         if !self.search_box.open {
-            return None;
+            return div().into_any_element();
         }
-        let bounds = self.search_bounds.get()?;
-        let query = self.search_input.read(cx).value();
+
+        let query = self.search_box.value(cx);
         let query_empty = query.trim().is_empty();
-
-        if query_empty {
-            let has_idle = !self.search_box.history.is_empty()
+        let has_content = if query_empty {
+            !self.search_box.history.is_empty()
                 || !self.search_box.hot.is_empty()
-                || self.search_box.hot_loading;
-            if !has_idle {
-                return None;
-            }
-        } else if self.search_box.suggestions.is_empty() {
-            return None;
-        }
-
-        let content = if query_empty {
-            self.render_search_idle(cx)
+                || self.search_box.hot_loading
         } else {
-            self.render_suggestions(cx)
+            !self.search_box.suggestions.is_empty()
+        };
+        let content = if query_empty {
+            self.render_search_idle(weak, cx)
+        } else {
+            self.render_suggestions(weak, cx)
         };
 
-        let panel = v_flex()
+        v_flex()
             .id("search-panel")
             .occlude()
-            .w(bounds.size.width)
+            .w(width)
             .max_h(px(560.))
             .overflow_y_scroll()
-            .bg(cx.theme().popover)
-            .text_color(cx.theme().popover_foreground)
-            .border_1()
-            .border_color(cx.theme().border)
-            .rounded(cx.theme().radius_lg)
-            .p_4()
-            .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                let inside_input = this
-                    .search_bounds
-                    .get()
-                    .is_some_and(|bounds| bounds.contains(&event.position));
-                if !inside_input {
-                    this.dismiss_search_box(window, cx);
-                }
-            }))
-            .child(content);
-
-        Some(
-            deferred(
-                Positioner::side(bounds)
-                    .placement(Placement::Bottom)
-                    .align(Align::Start)
-                    .offset(px(6.))
-                    .margin(px(8.))
-                    .occlude()
-                    .child(panel),
-            )
-            .into_any_element(),
-        )
+            .when(has_content, |this| this.popover_style(cx).p_4())
+            .when(!has_content, |this| this.h(px(0.)))
+            .child(v_flex().id("search-content").w_full().child(content))
+            .into_any_element()
     }
 
-    fn render_search_idle(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_search_idle(&self, weak: &WeakEntity<Self>, cx: &App) -> AnyElement {
         v_flex()
             .gap_4()
             .when(!self.search_box.history.is_empty(), |this| {
-                this.child(self.render_history(cx))
+                this.child(self.render_history(weak, cx))
             })
             .when(
                 !self.search_box.hot.is_empty() || self.search_box.hot_loading,
-                |this| this.child(self.render_hot(cx)),
+                |this| this.child(self.render_hot(weak, cx)),
             )
             .into_any_element()
     }
 
-    fn render_history(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_history(&self, weak: &WeakEntity<Self>, cx: &App) -> AnyElement {
         let muted = cx.theme().muted_foreground;
         let total = self.search_box.history.keywords().len();
         let visible = if self.search_box.history_expanded {
@@ -337,11 +348,16 @@ impl MainView {
                             .small()
                             .text_color(muted)
                             .label("清空")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.search_box.history.clear();
-                                this.search_box.history_expanded = false;
-                                cx.notify();
-                            })),
+                            .on_click({
+                                let weak = weak.clone();
+                                move |_, _, cx| {
+                                    let _ = weak.update(cx, |this, cx| {
+                                        this.search_box.history.clear();
+                                        this.search_box.history_expanded = false;
+                                        cx.notify();
+                                    });
+                                }
+                            }),
                     ),
             )
             .child(
@@ -350,13 +366,16 @@ impl MainView {
                     .gap_2()
                     .children(keywords.into_iter().enumerate().map(|(index, keyword)| {
                         let term = keyword.clone();
+                        let weak = weak.clone();
                         Button::new(("history-chip", index))
                             .custom(history_chip(cx))
                             .small()
                             .label(keyword)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.pick_search(term.clone(), window, cx);
-                            }))
+                            .on_click(move |_, window, cx| {
+                                let _ = weak.update(cx, |this, cx| {
+                                    this.pick_search(term.clone(), window, cx);
+                                });
+                            })
                     })),
             )
             .when(total > HISTORY_COLLAPSED, |this| {
@@ -366,11 +385,16 @@ impl MainView {
                             .text()
                             .small()
                             .text_color(muted)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.search_box.history_expanded =
-                                    !this.search_box.history_expanded;
-                                cx.notify();
-                            }))
+                            .on_click({
+                                let weak = weak.clone();
+                                move |_, _, cx| {
+                                    let _ = weak.update(cx, |this, cx| {
+                                        this.search_box.history_expanded =
+                                            !this.search_box.history_expanded;
+                                        cx.notify();
+                                    });
+                                }
+                            })
                             .child(
                                 h_flex()
                                     .items_center()
@@ -391,7 +415,7 @@ impl MainView {
             .into_any_element()
     }
 
-    fn render_hot(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_hot(&self, weak: &WeakEntity<Self>, cx: &App) -> AnyElement {
         let muted = cx.theme().muted_foreground;
 
         let body = if self.search_box.hot.is_empty() {
@@ -407,8 +431,8 @@ impl MainView {
             h_flex()
                 .items_start()
                 .gap_4()
-                .child(self.render_hot_column(&self.search_box.hot[..split], 0, cx))
-                .child(self.render_hot_column(&self.search_box.hot[split..], split, cx))
+                .child(self.render_hot_column(&self.search_box.hot[..split], 0, weak, cx))
+                .child(self.render_hot_column(&self.search_box.hot[split..], split, weak, cx))
                 .into_any_element()
         };
 
@@ -428,7 +452,8 @@ impl MainView {
         &self,
         words: &[HotWord],
         offset: usize,
-        cx: &mut Context<Self>,
+        weak: &WeakEntity<Self>,
+        cx: &App,
     ) -> AnyElement {
         v_flex()
             .flex_1()
@@ -437,18 +462,25 @@ impl MainView {
                 words
                     .iter()
                     .enumerate()
-                    .map(|(index, word)| self.render_hot_row(offset + index, word, cx)),
+                    .map(|(index, word)| self.render_hot_row(offset + index, word, weak, cx)),
             )
             .into_any_element()
     }
 
-    fn render_hot_row(&self, index: usize, word: &HotWord, cx: &mut Context<Self>) -> AnyElement {
+    fn render_hot_row(
+        &self,
+        index: usize,
+        word: &HotWord,
+        weak: &WeakEntity<Self>,
+        cx: &App,
+    ) -> AnyElement {
         let muted = cx.theme().muted_foreground;
         let foreground = cx.theme().foreground;
         let hover = cx.theme().accent;
         let keyword = word.keyword.clone();
         let name = word.name.clone();
         let badge = word.badge;
+        let weak = weak.clone();
 
         h_flex()
             .id(("hot-word", index))
@@ -459,9 +491,11 @@ impl MainView {
             .rounded(cx.theme().radius)
             .cursor_pointer()
             .hover(move |this| this.bg(hover))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.pick_search(keyword.clone(), window, cx);
-            }))
+            .on_click(move |_, window, cx| {
+                let _ = weak.update(cx, |this, cx| {
+                    this.pick_search(keyword.clone(), window, cx);
+                });
+            })
             .child(
                 div()
                     .w(px(20.))
@@ -474,7 +508,7 @@ impl MainView {
             .into_any_element()
     }
 
-    fn render_suggestions(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_suggestions(&self, weak: &WeakEntity<Self>, cx: &App) -> AnyElement {
         let foreground = cx.theme().foreground;
         let primary = cx.theme().primary;
         let hover = cx.theme().accent;
@@ -490,6 +524,7 @@ impl MainView {
                         let value = suggestion.value.clone();
                         let segments = suggestion.segments.clone();
                         let active = self.search_box.active_suggestion == Some(index);
+                        let weak = weak.clone();
 
                         h_flex()
                             .id(("search-suggestion", index))
@@ -500,9 +535,11 @@ impl MainView {
                             .cursor_pointer()
                             .when(active, |this| this.bg(hover))
                             .hover(move |this| this.bg(hover))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.pick_search(value.clone(), window, cx);
-                            }))
+                            .on_click(move |_, window, cx| {
+                                let _ = weak.update(cx, |this, cx| {
+                                    this.pick_search(value.clone(), window, cx);
+                                });
+                            })
                             .children(segments.into_iter().map(|segment| {
                                 div()
                                     .text_sm()
@@ -562,15 +599,11 @@ mod tests {
     use super::next_selection;
 
     #[test]
-    fn selects_the_first_suggestion_on_down_and_the_last_on_up() {
+    fn selects_and_clamps_suggestions() {
         assert_eq!(next_selection(None, 3, true), Some(0));
         assert_eq!(next_selection(None, 3, false), Some(2));
         assert_eq!(next_selection(None, 0, true), None);
         assert_eq!(next_selection(Some(0), 0, false), None);
-    }
-
-    #[test]
-    fn clamps_selection_to_the_available_suggestions() {
         assert_eq!(next_selection(Some(0), 3, true), Some(1));
         assert_eq!(next_selection(Some(2), 3, true), Some(2));
         assert_eq!(next_selection(Some(0), 3, false), Some(0));

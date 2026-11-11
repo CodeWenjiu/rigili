@@ -93,7 +93,7 @@ mod tests {
     use super::CommentPage;
 
     #[test]
-    fn parses_comments_with_nested_replies() {
+    fn parses_comments_and_tolerates_missing_replies() {
         let page: CommentPage = serde_json::from_str(
             r#"{
                 "page": {"acount": 2, "count": 2, "num": 1, "size": 20},
@@ -133,12 +133,9 @@ mod tests {
         assert_eq!(items[0].reply_control.time_desc, "1天前发布");
         assert_eq!(items[0].replies().len(), 1);
         assert_eq!(items[0].replies()[0].content.message, "回复内容");
-    }
 
-    #[test]
-    fn tolerates_missing_replies() {
-        let page: CommentPage =
+        let empty: CommentPage =
             serde_json::from_str(r#"{"page": {"count": 0}}"#).expect("empty comment fixture");
-        assert!(page.into_replies().is_empty());
+        assert!(empty.into_replies().is_empty());
     }
 }

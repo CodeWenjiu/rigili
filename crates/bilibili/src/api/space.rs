@@ -84,12 +84,27 @@ pub async fn videos(
     order: SpaceVideoOrder,
     keyword: &str,
 ) -> Result<SpaceVideos, ApiError> {
+    fetch_videos(client, mid, page, VIDEO_PAGE_SIZE, order, keyword).await
+}
+
+pub async fn preview_videos(client: &Client, mid: u64) -> Result<SpaceVideos, ApiError> {
+    fetch_videos(client, mid, 1, VIDEO_PAGE_SIZE, SpaceVideoOrder::Latest, "").await
+}
+
+async fn fetch_videos(
+    client: &Client,
+    mid: u64,
+    page: u32,
+    page_size: u32,
+    order: SpaceVideoOrder,
+    keyword: &str,
+) -> Result<SpaceVideos, ApiError> {
     client
         .get_wbi_json(
             VIDEOS_URL,
             &[
                 ("mid", mid.to_string()),
-                ("ps", VIDEO_PAGE_SIZE.to_string()),
+                ("ps", page_size.to_string()),
                 ("pn", page.max(1).to_string()),
                 ("tid", "0".into()),
                 ("keyword", keyword.to_owned()),

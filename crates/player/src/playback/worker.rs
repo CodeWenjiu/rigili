@@ -259,29 +259,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn target_dimensions_fits_inside_viewport() {
-        assert_eq!(
-            target_dimensions(size(1920, 1080), size(1280, 720)),
-            size(1280, 720)
-        );
-        assert_eq!(
-            target_dimensions(size(1920, 1080), size(1000, 1000)),
-            size(1000, 563)
-        );
-    }
-
-    #[test]
-    fn target_dimensions_does_not_upscale() {
-        assert_eq!(
-            target_dimensions(size(1280, 720), size(1920, 1080)),
-            size(1280, 720)
-        );
-    }
-
-    #[test]
-    fn target_dimensions_waits_for_viewport() {
-        assert_eq!(target_dimensions(size(1920, 1080), size(0, 0)), size(0, 0));
-        assert_eq!(target_dimensions(size(0, 0), size(1280, 720)), size(0, 0));
+    fn target_dimensions_fit_the_viewport() {
+        let cases = [
+            (size(1920, 1080), size(1280, 720), size(1280, 720)),
+            (size(1920, 1080), size(1000, 1000), size(1000, 563)),
+            (size(1280, 720), size(1920, 1080), size(1280, 720)),
+            (size(1920, 1080), size(0, 0), size(0, 0)),
+            (size(0, 0), size(1280, 720), size(0, 0)),
+        ];
+        for (video, viewport, expected) in cases {
+            assert_eq!(
+                target_dimensions(video, viewport),
+                expected,
+                "{video:?} in {viewport:?}"
+            );
+        }
     }
 
     fn size(width: u32, height: u32) -> VideoSize {

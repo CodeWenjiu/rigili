@@ -222,8 +222,9 @@ fn home_card(
             id: SharedString::from(item.key()),
             cover: item.cover(),
             title: item.title(),
-            footer: item.footer(),
+            footer: Some(item.footer()),
             footer_icon: None,
+            title_lines: 2,
             overlay: CardOverlay {
                 leading: item.leading(),
                 secondary: item.secondary(),

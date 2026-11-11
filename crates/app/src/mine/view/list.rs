@@ -666,8 +666,9 @@ fn bangumi_card(
             id: SharedString::from(format!("mine-bangumi-{}", item.season_id)),
             cover: &item.cover,
             title: &item.title,
-            footer,
+            footer: Some(footer),
             footer_icon: None,
+            title_lines: 2,
             author: None,
             overlay: CardOverlay {
                 leading: score.as_deref().map(|score| (IconName::Star, score)),

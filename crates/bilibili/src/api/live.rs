@@ -56,24 +56,18 @@ mod tests {
     }
 
     #[test]
-    fn parses_live_list_fixture() {
-        let envelope: ListEnvelope = serde_json::from_str(LIVE_FIXTURE).expect("live fixture");
-        let rooms = envelope.data;
+    fn parses_live_fixtures() {
+        let list: ListEnvelope = serde_json::from_str(LIVE_FIXTURE).expect("live fixture");
+        let rooms = list.data;
 
         assert_eq!(rooms.len(), 1);
         assert_eq!(rooms[0].roomid, 7_734_200);
         assert_eq!(rooms[0].uname, "测试主播");
         assert_eq!(rooms[0].online, 895_359);
         assert_eq!(rooms[0].area_name, "游戏赛事");
-    }
 
-    #[test]
-    fn parses_live_play_fixture() {
-        let envelope: PlayEnvelope =
+        let play: PlayEnvelope =
             serde_json::from_str(LIVE_PLAY_FIXTURE).expect("live play fixture");
-        assert_eq!(
-            envelope.data.durl[0].url,
-            "https://example.invalid/live.flv"
-        );
+        assert_eq!(play.data.durl[0].url, "https://example.invalid/live.flv");
     }
 }

@@ -5,10 +5,11 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_bilibili::{Nav, api::login::cookies_from_login_url};
 use image::RgbaImage;
 use qrcodegen::{QrCode, QrCodeEcc};
+use rigili_bilibili::{Nav, api::login::cookies_from_login_url};
 
+use rigili_core::api_error_message;
 use rigili_core::backend::{self, Backend};
 use rigili_core::login::set_user;
 use rigili_core::runtime::Tokio;
@@ -65,7 +66,7 @@ impl LoginView {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (backend, phase) = match backend::get(cx) {
             Ok(backend) => (Some(backend), Phase::Starting),
-            Err(error) => (None, Phase::Failed(error)),
+            Err(error) => (None, Phase::Failed(api_error_message(error))),
         };
         let mut view = Self {
             backend,

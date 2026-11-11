@@ -79,10 +79,6 @@ pub fn data_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("RIGILI_DATA_DIR") {
         return Some(PathBuf::from(dir));
     }
-    // Keep the pre-rename env var and data directory working.
-    if let Some(dir) = std::env::var_os("GPUILI_DATA_DIR") {
-        return Some(PathBuf::from(dir));
-    }
 
     let base = std::env::var_os("XDG_DATA_HOME")
         .filter(|dir| !dir.is_empty())
@@ -90,14 +86,8 @@ pub fn data_dir() -> Option<PathBuf> {
         .or_else(|| {
             std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
         })?;
-    let dir = base.join("rigili");
-    let legacy = base.join("gpuili");
 
-    if !dir.exists() && legacy.exists() && fs::rename(&legacy, &dir).is_err() {
-        return Some(legacy);
-    }
-
-    Some(dir)
+    Some(base.join("rigili"))
 }
 
 #[cfg(unix)]
@@ -141,29 +131,28 @@ mod tests {
     }
 
     #[test]
-    fn saves_and_loads_a_session() {
+    fn saves_loads_and_clears_a_session() {
         let dir = temp_dir("roundtrip");
-        let session = Session::new(cookies());
-        session.save(&dir).expect("save");
+        Session::new(cookies()).save(&dir).expect("save");
 
         let loaded = Session::load(&dir).expect("load").expect("session");
         assert_eq!(loaded.cookies(), &cookies());
 
+        Session::clear(&dir).expect("clear");
+        assert!(Session::load(&dir).expect("load").is_none());
+        Session::clear(&dir).expect("clear again");
+
         fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
-    fn missing_file_is_not_an_error() {
+    fn ignores_missing_and_rejects_malformed_files() {
         let dir = temp_dir("missing");
         assert!(Session::load(&dir).expect("load").is_none());
-        fs::remove_dir_all(&dir).ok();
-    }
 
-    #[test]
-    fn rejects_broken_session_files() {
-        let dir = temp_dir("broken");
         fs::write(dir.join("session.json"), b"not json").expect("write");
         assert!(matches!(Session::load(&dir), Err(SessionError::Format(_))));
+
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -182,16 +171,6 @@ mod tests {
             & 0o777;
         assert_eq!(mode, 0o600);
 
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn clear_is_idempotent() {
-        let dir = temp_dir("clear");
-        Session::new(cookies()).save(&dir).expect("save");
-        Session::clear(&dir).expect("clear");
-        assert!(Session::load(&dir).expect("load").is_none());
-        Session::clear(&dir).expect("clear again");
         fs::remove_dir_all(&dir).ok();
     }
 }

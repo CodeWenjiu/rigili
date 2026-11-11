@@ -18,7 +18,7 @@ use rigili_bilibili::{
 use rigili_core::backend::{self, Backend};
 use rigili_core::login;
 use rigili_core::runtime::spawn_api;
-use rigili_core::{OpenVideo, Refresh, api_task_error_message, format_count};
+use rigili_core::{OpenVideo, Refresh, api_error_message, api_task_error_message, format_count};
 
 use super::comment;
 use crate::grid::{
@@ -104,10 +104,6 @@ impl SpaceView {
         }
     }
 
-    pub(crate) fn mid(&self) -> Option<u64> {
-        self.mid
-    }
-
     pub(crate) fn open(
         &mut self,
         mid: u64,
@@ -141,7 +137,7 @@ impl SpaceView {
                 self.backend = Some(backend.clone());
                 Ok(backend)
             }
-            Err(error) => Err(error),
+            Err(error) => Err(api_error_message(error)),
         }
     }
 

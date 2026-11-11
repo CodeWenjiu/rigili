@@ -6,8 +6,8 @@ use rigili_core::OpenLive;
 use rigili_core::backend;
 use rigili_core::runtime::{ApiTaskError, spawn_api};
 
-use rigili_core::api_task_error_message;
 use crate::grid::{VideoCard, append_unique_by};
+use rigili_core::{api_error_message, api_task_error_message};
 
 const VIDEO_PAGE_SIZE: u32 = 30;
 const LIVE_PAGE_SIZE: u32 = 30;
@@ -26,7 +26,7 @@ impl HomeView {
                 Err(error) => {
                     let state = self.state_mut(tab);
                     state.loading = false;
-                    state.error = Some(error);
+                    state.error = Some(api_error_message(error));
                     cx.notify();
                     return;
                 }

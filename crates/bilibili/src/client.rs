@@ -309,12 +309,26 @@ mod tests {
     }
 
     #[test]
-    fn loads_a_saved_session() {
-        let dir = temp_dir("load");
-        Session::new(session_cookies()).save(&dir).expect("save");
-
+    fn persists_and_clears_a_session() {
+        let dir = temp_dir("session");
         let client = Client::with_data_dir(Some(dir.clone())).expect("client");
-        assert_eq!(client.cookie_values(), session_cookies());
+
+        client.set_cookies(session_cookies());
+        client.save_session().expect("save session");
+        assert_eq!(
+            Session::load(&dir)
+                .expect("load")
+                .expect("session")
+                .cookies(),
+            &session_cookies()
+        );
+
+        let restored = Client::with_data_dir(Some(dir.clone())).expect("client");
+        assert_eq!(restored.cookie_values(), session_cookies());
+
+        restored.clear_session().expect("clear session");
+        assert!(restored.cookie_values().is_empty());
+        assert!(Session::load(&dir).expect("load").is_none());
 
         fs::remove_dir_all(&dir).ok();
     }
@@ -349,45 +363,18 @@ mod tests {
     }
 
     #[test]
-    fn saves_and_clears_a_session() {
-        let dir = temp_dir("save-clear");
-        let client = Client::with_data_dir(Some(dir.clone())).expect("client");
-        client.set_cookies(session_cookies());
-        client.save_session().expect("save session");
-        assert_eq!(
-            Session::load(&dir)
-                .expect("load")
-                .expect("session")
-                .cookies(),
-            &session_cookies()
-        );
-
-        client.clear_session().expect("clear session");
-        assert!(client.cookie_values().is_empty());
-        assert!(Session::load(&dir).expect("load").is_none());
-
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn parses_popular_fixture() {
+    fn parses_api_fixtures() {
         let popular: Popular = parse_envelope(POPULAR_FIXTURE).expect("popular fixture");
         assert!(!popular.list.is_empty());
         assert_eq!(popular.list[0].bvid, "BV1TgWp6MEHJ");
         assert_eq!(popular.list[0].owner.name, "哔哩哔哩英雄联盟赛事");
-    }
 
-    #[test]
-    fn parses_view_fixture() {
-        let video: VideoInfo = parse_envelope(VIEW_FIXTURE).expect("view fixture");
-        assert_eq!(video.bvid, "BV1TgWp6MEHJ");
-        assert_eq!(video.cid, 43_448_467_681);
-        assert_eq!(video.pages.len(), 2);
-        assert_eq!(video.pages[1].part, "第二局");
-    }
+        let info: VideoInfo = parse_envelope(VIEW_FIXTURE).expect("view fixture");
+        assert_eq!(info.bvid, "BV1TgWp6MEHJ");
+        assert_eq!(info.cid, 43_448_467_681);
+        assert_eq!(info.pages.len(), 2);
+        assert_eq!(info.pages[1].part, "第二局");
 
-    #[test]
-    fn parses_playurl_fixture_and_prefers_avc() {
         let playurl: PlayUrl = parse_envelope(PLAYURL_FIXTURE).expect("playurl fixture");
         let dash = playurl.dash.as_ref().expect("dash");
         let video = dash.best_video().expect("video");
@@ -398,16 +385,13 @@ mod tests {
     }
 
     #[test]
-    fn exposes_risk_control_errors() {
-        let error = parse_envelope::<Popular>(r#"{"code":-352,"message":"风控校验失败"}"#)
+    fn surfaces_api_errors() {
+        let risk = parse_envelope::<Popular>(r#"{"code":-352,"message":"风控校验失败"}"#)
             .expect_err("risk control response");
-        assert!(error.is_risk_control());
-    }
+        assert!(risk.is_risk_control());
 
-    #[test]
-    fn rejects_missing_data() {
-        let error =
+        let missing =
             parse_envelope::<Popular>(r#"{"code":0,"message":"0"}"#).expect_err("missing data");
-        assert!(matches!(error, ApiError::InvalidResponse(_)));
+        assert!(matches!(missing, ApiError::InvalidResponse(_)));
     }
 }

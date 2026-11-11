@@ -48,22 +48,18 @@ mod tests {
     }
 
     #[test]
-    fn parses_pgc_index_fixture() {
-        let envelope: IndexEnvelope = serde_json::from_str(INDEX_FIXTURE).expect("pgc index");
-        let index = envelope.data;
+    fn parses_pgc_fixtures() {
+        let index: IndexEnvelope = serde_json::from_str(INDEX_FIXTURE).expect("pgc index");
+        let index = index.data;
 
         assert_eq!(index.has_next, 1);
         assert_eq!(index.list.len(), 1);
         assert_eq!(index.list[0].season_id, 47_836);
         assert_eq!(index.list[0].subtitle, "羁绊连结，传承信念");
         assert_eq!(index.list[0].score, "9.7");
-    }
 
-    #[test]
-    fn parses_pgc_season_fixture() {
-        let envelope: SeasonEnvelope =
-            serde_json::from_str(SEASON_FIXTURE).expect("pgc season");
-        let season = envelope.result;
+        let season: SeasonEnvelope = serde_json::from_str(SEASON_FIXTURE).expect("pgc season");
+        let season = season.result;
 
         assert_eq!(season.season_id, 47_836);
         assert_eq!(season.episodes.len(), 1);

@@ -1,11 +1,12 @@
 rigili_macro::mod_prv!(search_box, search_history);
 
-use std::{cell::Cell, rc::Rc};
+use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
-use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::input::Input;
+use gpui_kit::component::popover::Popover;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -26,23 +27,24 @@ pub struct MainView {
     search: Entity<SearchView>,
     mine: Entity<MineView>,
     space: Entity<SpaceView>,
-    search_input: Entity<InputState>,
-    search_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     search_box: SearchBox,
-    search_active: bool,
-    mine_active: bool,
-    space_active: bool,
-    space_return: ReturnPage,
+    page: Page,
+    spaces: Vec<SpaceRoute>,
     playback: Option<Playback>,
-    _search_input_sub: Subscription,
 }
 
-#[derive(Clone, Copy, Default)]
-enum ReturnPage {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Page {
     #[default]
     Home,
     Search,
     Mine,
+}
+
+#[derive(Clone)]
+struct SpaceRoute {
+    mid: u64,
+    name: String,
 }
 
 type NavHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
@@ -118,68 +120,25 @@ pub fn open_main(cx: &mut App) -> Result<()> {
     .map(|_| ())
 }
 
+fn search_width(window: &Window) -> Pixels {
+    (window.viewport_size().width - px(24.)).clamp(px(240.), px(420.))
+}
+
 impl MainView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let home = cx.new(HomeView::new);
         let search = cx.new(SearchView::new);
         let mine = cx.new(|cx| MineView::new(window, cx));
         let space = cx.new(|cx| SpaceView::new(window, cx));
-        let search_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("搜索视频、番剧、用户"));
-        let input_sub = cx.subscribe_in(&search_input, window, |this, _, event, _, cx| {
-            this.handle_search_input(event, cx);
-        });
+        let search_box = SearchBox::new(window, cx);
         login::restore(window, cx);
 
-        cx.subscribe_in(&home, window, |this, _, event: &OpenVideo, window, cx| {
-            this.play(event.clone(), window, cx);
-        })
-        .detach();
-
-        cx.subscribe_in(&home, window, |this, _, event: &OpenLive, window, cx| {
-            this.play_live(event.clone(), window, cx);
-        })
-        .detach();
-
-        cx.subscribe_in(&home, window, |this, _, event: &OpenSpace, window, cx| {
-            this.open_space(event.clone(), window, cx);
-        })
-        .detach();
-
-        cx.subscribe_in(&search, window, |this, _, event: &OpenVideo, window, cx| {
-            this.play(event.clone(), window, cx);
-        })
-        .detach();
-
-        cx.subscribe_in(&search, window, |this, _, event: &OpenLive, window, cx| {
-            this.play_live(event.clone(), window, cx);
-        })
-        .detach();
-
-        cx.subscribe_in(&search, window, |this, _, event: &OpenSpace, window, cx| {
-            this.open_space(event.clone(), window, cx);
-        })
-        .detach();
-
-        cx.subscribe_in(&mine, window, |this, _, event: &OpenVideo, window, cx| {
-            this.play(event.clone(), window, cx);
-        })
-        .detach();
-
-        cx.subscribe_in(&mine, window, |this, _, event: &OpenSpace, window, cx| {
-            this.open_space(event.clone(), window, cx);
-        })
-        .detach();
-
-        cx.subscribe_in(&space, window, |this, _, event: &OpenVideo, window, cx| {
-            this.play(event.clone(), window, cx);
-        })
-        .detach();
-
-        cx.subscribe_in(&space, window, |this, _, _: &CloseSpace, window, cx| {
-            this.close_space(window, cx);
-        })
-        .detach();
+        Self::forward_page_events(cx, &home, window);
+        Self::forward_page_events(cx, &search, window);
+        Self::forward_video_events(cx, &mine, window);
+        Self::forward_space_events(cx, &mine, window);
+        Self::forward_video_events(cx, &space, window);
+        Self::forward_close_space_events(cx, &space, window);
 
         cx.on_window_closed({
             let weak = cx.entity().downgrade();
@@ -203,83 +162,117 @@ impl MainView {
             search,
             mine,
             space,
-            search_input,
-            search_bounds: Rc::new(Cell::new(None)),
-            search_box: SearchBox::new(),
-            search_active: false,
-            mine_active: false,
-            space_active: false,
-            space_return: ReturnPage::default(),
+            search_box,
+            page: Page::default(),
+            spaces: Vec::new(),
             playback: None,
-            _search_input_sub: input_sub,
         }
     }
 
+    fn forward_page_events<T>(cx: &mut Context<Self>, page: &Entity<T>, window: &mut Window)
+    where
+        T: EventEmitter<OpenVideo> + EventEmitter<OpenLive> + EventEmitter<OpenSpace> + 'static,
+    {
+        Self::forward_video_events(cx, page, window);
+        Self::forward_live_events(cx, page, window);
+        Self::forward_space_events(cx, page, window);
+    }
+
+    fn forward_video_events<T>(cx: &mut Context<Self>, page: &Entity<T>, window: &mut Window)
+    where
+        T: EventEmitter<OpenVideo> + 'static,
+    {
+        cx.subscribe_in(page, window, |this, _, event: &OpenVideo, window, cx| {
+            this.play(event.clone(), window, cx);
+        })
+        .detach();
+    }
+
+    fn forward_live_events<T>(cx: &mut Context<Self>, page: &Entity<T>, window: &mut Window)
+    where
+        T: EventEmitter<OpenLive> + 'static,
+    {
+        cx.subscribe_in(page, window, |this, _, event: &OpenLive, window, cx| {
+            this.play_live(event.clone(), window, cx);
+        })
+        .detach();
+    }
+
+    fn forward_space_events<T>(cx: &mut Context<Self>, page: &Entity<T>, window: &mut Window)
+    where
+        T: EventEmitter<OpenSpace> + 'static,
+    {
+        cx.subscribe_in(page, window, |this, _, event: &OpenSpace, window, cx| {
+            this.open_space(event.clone(), window, cx);
+        })
+        .detach();
+    }
+
+    fn forward_close_space_events<T>(cx: &mut Context<Self>, page: &Entity<T>, window: &mut Window)
+    where
+        T: EventEmitter<CloseSpace> + 'static,
+    {
+        cx.subscribe_in(page, window, |this, _, _: &CloseSpace, window, cx| {
+            this.close_space(window, cx);
+        })
+        .detach();
+    }
+
     fn submit_search(&mut self, cx: &mut Context<Self>) {
-        let keyword = self.search_input.read(cx).value().trim().to_owned();
+        let keyword = self.search_box.value(cx).trim().to_owned();
         self.search_box.close();
-        self.mine_active = false;
-        self.space_active = false;
+        self.spaces.clear();
         if keyword.is_empty() {
-            self.search_active = false;
+            self.page = Page::Home;
             cx.notify();
             return;
         }
 
         self.search_box.record(&keyword);
-        self.search_active = true;
+        self.page = Page::Search;
         self.search
             .update(cx, |search, cx| search.search(keyword, cx));
         cx.notify();
     }
 
     fn open_space(&mut self, request: OpenSpace, window: &mut Window, cx: &mut Context<Self>) {
-        if self.space_active && self.space.read(cx).mid() == Some(request.mid) {
+        if self
+            .spaces
+            .last()
+            .is_some_and(|route| route.mid == request.mid)
+        {
             return;
         }
-        self.space_return = if self.search_active {
-            ReturnPage::Search
-        } else if self.mine_active {
-            ReturnPage::Mine
-        } else {
-            ReturnPage::Home
-        };
-        self.space_active = true;
-        self.search_active = false;
-        self.mine_active = false;
+        let OpenSpace { mid, name } = request;
+        self.spaces.push(SpaceRoute {
+            mid,
+            name: name.clone(),
+        });
         self.space.update(cx, |space, cx| {
-            space.open(request.mid, request.name, window, cx);
+            space.open(mid, name, window, cx);
         });
         cx.notify();
     }
 
-    fn close_space(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        if !self.space_active {
+    fn close_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.spaces.pop().is_none() {
             return;
         }
-        self.space_active = false;
-        match self.space_return {
-            ReturnPage::Search => self.search_active = true,
-            ReturnPage::Mine => self.mine_active = true,
-            ReturnPage::Home => {}
+        if let Some(previous) = self.spaces.last().cloned() {
+            self.space.update(cx, |space, cx| {
+                space.open(previous.mid, previous.name, window, cx);
+            });
         }
-        self.space_return = ReturnPage::default();
         cx.notify();
     }
 
     fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self
-            .search_input
-            .read(cx)
-            .focus_handle(cx)
-            .is_focused(window)
-        {
+        if self.search_box.focus_handle(cx).is_focused(window) {
             return;
         }
 
         self.search_box.suppress_next_focus_open();
-        self.search_input
-            .update(cx, |input, cx| input.focus(window, cx));
+        self.search_box.focus(window, cx);
     }
 
     fn account(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -327,7 +320,7 @@ impl MainView {
             .justify_center()
             .child(
                 Icon::default()
-                    .data(include_bytes!("../../assets/rigili-mark.svg"))
+                    .data(include_bytes!("../../../assets/rigili-mark.svg"))
                     .with_size(px(36.))
                     .text_color(cx.theme().sidebar_primary),
             )
@@ -354,18 +347,14 @@ impl MainView {
                     .gap_y_3()
                     .child(
                         NavItem::new("首页", IconName::House)
-                            .active(!self.mine_active && !self.space_active)
+                            .active(matches!(self.page, Page::Home | Page::Search))
                             .on_click({
                                 let weak = weak.clone();
                                 move |_, _, cx| {
                                     let _ = weak.update(cx, |this, cx| {
-                                        if this.search_active
-                                            || this.mine_active
-                                            || this.space_active
-                                        {
-                                            this.search_active = false;
-                                            this.mine_active = false;
-                                            this.space_active = false;
+                                        if this.page != Page::Home || !this.spaces.is_empty() {
+                                            this.page = Page::Home;
+                                            this.spaces.clear();
                                             cx.notify();
                                         }
                                     });
@@ -375,17 +364,16 @@ impl MainView {
                     )
                     .child(
                         NavItem::new("我的", IconName::CircleUser)
-                            .active(self.mine_active)
+                            .active(self.page == Page::Mine)
                             .on_click({
                                 let weak = weak.clone();
                                 move |_, _, cx| {
                                     let _ = weak.update(cx, |this, cx| {
-                                        if this.mine_active && !this.space_active {
+                                        if this.page == Page::Mine && this.spaces.is_empty() {
                                             return;
                                         }
-                                        this.mine_active = true;
-                                        this.search_active = false;
-                                        this.space_active = false;
+                                        this.page = Page::Mine;
+                                        this.spaces.clear();
                                         cx.notify();
                                     });
                                 }
@@ -432,8 +420,8 @@ impl MainView {
                             .py_1()
                             .accessibility_label(tab.label())
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.search_active = false;
-                                this.mine_active = false;
+                                this.page = Page::Home;
+                                this.spaces.clear();
                                 this.home.update(cx, |home, cx| home.show_tab(tab, cx));
                                 cx.notify();
                             }))
@@ -454,9 +442,10 @@ impl MainView {
             .into_any_element()
     }
 
-    fn render_top_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_top_bar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let background = cx.theme().background;
         let border = cx.theme().border;
+        let search_width = search_width(window);
         let foreground = cx.theme().foreground;
         let home_tab = self.home.read(cx).current_tab();
 
@@ -474,51 +463,55 @@ impl MainView {
             .child(
                 div()
                     .flex_shrink_0()
-                    .when(self.mine_active || self.space_active, |this| {
-                        this.invisible()
-                    })
+                    .when(
+                        matches!(self.page, Page::Mine) || !self.spaces.is_empty(),
+                        |this| this.invisible(),
+                    )
                     .child(self.render_home_tabs(home_tab, cx)),
             )
             .child(
-                div().flex_1().min_w_0().flex().justify_center().child(
-                    h_flex().w_full().max_w(px(420.)).items_center().child(
-                        div()
-                            .id("search-input")
-                            .flex_1()
-                            .min_w_0()
-                            .on_prepaint({
-                                let bounds = self.search_bounds.clone();
-                                move |value, _, _| bounds.set(Some(value))
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .justify_center()
+                    .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                        let handled = match event.keystroke.key.as_str() {
+                            "escape" => {
+                                let open = this.search_box_is_open();
+                                if open {
+                                    this.dismiss_search_box(window, cx);
+                                }
+                                open
+                            }
+                            "down" => this.move_suggestion_selection(true, cx),
+                            "up" => this.move_suggestion_selection(false, cx),
+                            "enter" => this.pick_active_suggestion(window, cx),
+                            _ => false,
+                        };
+                        if handled {
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .child({
+                        let weak = cx.entity().downgrade();
+                        let focus = self.search_box.focus_handle(cx);
+                        Popover::new("search-popover")
+                            .offset(px(6.))
+                            .open(self.search_box_is_open())
+                            .appearance(false)
+                            .track_focus(&focus)
+                            .trigger_style(StyleRefinement::default().w_full().max_w(search_width))
+                            .on_open_change({
+                                let weak = weak.clone();
+                                move |open, window, cx| {
+                                    let _ = weak.update(cx, |this, cx| {
+                                        this.search_popover_open_changed(*open, window, cx)
+                                    });
+                                }
                             })
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, window, cx| {
-                                    this.open_search_box(cx);
-                                    this.focus_search(window, cx);
-                                }),
-                            )
-                            .capture_key_down(cx.listener(
-                                |this, event: &KeyDownEvent, window, cx| {
-                                    let handled = match event.keystroke.key.as_str() {
-                                        "escape" => {
-                                            let open = this.search_box_is_open();
-                                            if open {
-                                                this.dismiss_search_box(window, cx);
-                                            }
-                                            open
-                                        }
-                                        "down" => this.move_suggestion_selection(true, cx),
-                                        "up" => this.move_suggestion_selection(false, cx),
-                                        "enter" => this.pick_active_suggestion(window, cx),
-                                        _ => false,
-                                    };
-                                    if handled {
-                                        cx.stop_propagation();
-                                    }
-                                },
-                            ))
-                            .child(
-                                Input::new(&self.search_input)
+                            .trigger(
+                                Input::new(self.search_box.input())
                                     .large()
                                     .h(px(40.))
                                     .cleanable(true)
@@ -534,9 +527,17 @@ impl MainView {
                                                 this.focus_search(window, cx);
                                             })),
                                     ),
-                            ),
-                    ),
-                ),
+                            )
+                            .content({
+                                let weak = weak.clone();
+                                move |_, _, cx| {
+                                    weak.read_with(cx, |this, cx| {
+                                        this.render_search_panel(&weak, search_width, cx)
+                                    })
+                                    .unwrap_or_else(|_| div().into_any_element())
+                                }
+                            })
+                    }),
             )
             .child(
                 Button::new("window-close")
@@ -546,33 +547,29 @@ impl MainView {
                     .tooltip("关闭")
                     .on_click(|_, window, _| window.remove_window()),
             )
-            .when_some(self.render_search_panel(cx), |this, panel| {
-                this.child(panel)
-            })
             .into_any_element()
     }
 
     fn page_can_refresh(&self, cx: &App) -> bool {
-        if self.space_active {
-            self.space.read(cx).can_refresh()
-        } else if self.mine_active {
-            self.mine.read(cx).can_refresh()
-        } else if self.search_active {
-            self.search.read(cx).can_refresh()
-        } else {
-            self.home.read(cx).can_refresh()
+        if !self.spaces.is_empty() {
+            return self.space.read(cx).can_refresh();
+        }
+        match self.page {
+            Page::Mine => self.mine.read(cx).can_refresh(),
+            Page::Search => self.search.read(cx).can_refresh(),
+            Page::Home => self.home.read(cx).can_refresh(),
         }
     }
 
     fn refresh_page(&mut self, cx: &mut Context<Self>) {
-        if self.space_active {
+        if !self.spaces.is_empty() {
             self.space.update(cx, |space, cx| space.refresh(cx));
-        } else if self.mine_active {
-            self.mine.update(cx, |mine, cx| mine.refresh(cx));
-        } else if self.search_active {
-            self.search.update(cx, |search, cx| search.refresh(cx));
-        } else {
-            self.home.update(cx, |home, cx| home.refresh(cx));
+            return;
+        }
+        match self.page {
+            Page::Mine => self.mine.update(cx, |mine, cx| mine.refresh(cx)),
+            Page::Search => self.search.update(cx, |search, cx| search.refresh(cx)),
+            Page::Home => self.home.update(cx, |home, cx| home.refresh(cx)),
         }
     }
 
@@ -610,7 +607,7 @@ impl MainView {
 }
 
 impl Render for MainView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let background = cx.theme().background;
         let foreground = cx.theme().foreground;
 
@@ -624,21 +621,21 @@ impl Render for MainView {
                     .flex_1()
                     .min_w_0()
                     .h_full()
-                    .child(self.render_top_bar(cx))
+                    .child(self.render_top_bar(window, cx))
                     .child(
                         div()
                             .relative()
                             .flex_1()
                             .min_h_0()
                             .w_full()
-                            .child(if self.space_active {
+                            .child(if !self.spaces.is_empty() {
                                 self.space.clone().into_any_element()
-                            } else if self.mine_active {
-                                self.mine.clone().into_any_element()
-                            } else if self.search_active {
-                                self.search.clone().into_any_element()
                             } else {
-                                self.home.clone().into_any_element()
+                                match self.page {
+                                    Page::Mine => self.mine.clone().into_any_element(),
+                                    Page::Search => self.search.clone().into_any_element(),
+                                    Page::Home => self.home.clone().into_any_element(),
+                                }
                             })
                             .when(self.page_can_refresh(cx), |this| {
                                 this.child(

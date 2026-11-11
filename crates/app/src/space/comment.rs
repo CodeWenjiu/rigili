@@ -1,4 +1,3 @@
-
 use gpui_kit::assets::IconName;
 use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
@@ -10,7 +9,7 @@ use rigili_bilibili::api::comment::CommentSort;
 use rigili_bilibili::{Comment, CommentPage, DynamicItem};
 use rigili_core::backend::{self, Backend};
 use rigili_core::runtime::spawn_api;
-use rigili_core::{api_task_error_message, format_count, format_date};
+use rigili_core::{api_error_message, api_task_error_message, format_count, format_date};
 
 use crate::grid::append_unique_by;
 
@@ -70,7 +69,7 @@ impl CommentsView {
                 self.backend = Some(backend.clone());
                 Ok(backend)
             }
-            Err(error) => Err(error),
+            Err(error) => Err(api_error_message(error)),
         }
     }
 

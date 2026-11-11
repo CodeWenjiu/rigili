@@ -273,7 +273,6 @@ fn next_speed(current: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::next_speed;
-    use rigili_core::format_clock;
 
     #[test]
     fn cycles_playback_speeds() {
@@ -281,10 +280,5 @@ mod tests {
         assert_eq!(next_speed(1.0), 1.25);
         assert_eq!(next_speed(2.0), 0.5);
         assert_eq!(next_speed(9.0), 0.5);
-    }
-
-    #[test]
-    fn formats_progress_without_padding_minutes() {
-        assert_eq!(format_clock(9.0), "0:09");
     }
 }

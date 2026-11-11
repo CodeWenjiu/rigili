@@ -9,7 +9,7 @@ use rigili_bilibili::{LiveRoom, PgcItem};
 
 use crate::grid::VideoCard;
 use rigili_core::backend::{self, Backend};
-use rigili_core::{OpenLive, OpenSpace, OpenVideo, Refresh, format_count};
+use rigili_core::{OpenLive, OpenSpace, OpenVideo, Refresh, api_error_message, format_count};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum HomeTab {
@@ -277,7 +277,7 @@ impl HomeView {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let (backend, error) = match backend::get(cx) {
             Ok(backend) => (Some(backend), None),
-            Err(error) => (None, Some(error)),
+            Err(error) => (None, Some(api_error_message(error))),
         };
         let mut view = Self {
             backend,

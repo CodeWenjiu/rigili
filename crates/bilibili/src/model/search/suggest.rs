@@ -108,7 +108,7 @@ mod tests {
     use super::{SearchSuggestion, SearchSuggestions, SuggestionSegment};
 
     #[test]
-    fn splits_highlighted_suggestion_names() {
+    fn splits_highlighted_names_and_falls_back_to_values() {
         let suggestions: SearchSuggestions = serde_json::from_str(
             r#"{
                 "tag": [
@@ -150,16 +150,12 @@ mod tests {
                 highlight: false
             }]
         );
-    }
 
-    #[test]
-    fn falls_back_to_the_value_when_the_name_is_missing() {
-        let suggestion: SearchSuggestion =
+        let fallback: SearchSuggestion =
             serde_json::from_str(r#"{"value":"没有高亮"}"#).expect("suggestion");
-
-        assert_eq!(suggestion.value, "没有高亮");
+        assert_eq!(fallback.value, "没有高亮");
         assert_eq!(
-            suggestion.segments,
+            fallback.segments,
             [SuggestionSegment {
                 text: "没有高亮".into(),
                 highlight: false

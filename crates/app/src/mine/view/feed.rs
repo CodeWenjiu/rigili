@@ -5,7 +5,7 @@ use rigili_core::backend::{self, Backend};
 use rigili_core::runtime::spawn_api;
 
 use crate::grid::{VideoCard, append_unique_by};
-use rigili_core::api_task_error_message;
+use rigili_core::{api_error_message, api_task_error_message};
 
 const BANGUMI_PAGE_SIZE: usize = 20;
 
@@ -19,7 +19,7 @@ impl MineView {
                 self.backend = Some(backend.clone());
                 Ok(backend)
             }
-            Err(error) => Err(error),
+            Err(error) => Err(api_error_message(error)),
         }
     }
 

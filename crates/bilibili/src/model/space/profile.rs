@@ -102,7 +102,7 @@ mod tests {
     use super::{SpaceRelation, SpaceUpStat, SpaceUser};
 
     #[test]
-    fn parses_space_user_info() {
+    fn parses_space_user_info_and_tolerates_missing_fields() {
         let user: SpaceUser = serde_json::from_str(
             r#"{
                 "mid": 35161381,
@@ -122,10 +122,7 @@ mod tests {
         assert_eq!(user.top_photo, "https://example.com/banner.jpg");
         assert_eq!(user.official.title, "bilibili 知名UP主");
         assert_eq!(user.vip.label.text, "年度大会员");
-    }
 
-    #[test]
-    fn tolerates_missing_profile_fields() {
         let user: SpaceUser = serde_json::from_str(r#"{"mid": 1, "name": "UP"}"#)
             .expect("minimal space user fixture");
         assert!(user.top_photo.is_empty());

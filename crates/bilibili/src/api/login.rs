@@ -46,7 +46,7 @@ mod tests {
     use super::cookies_from_login_url;
 
     #[test]
-    fn extracts_login_cookies_from_the_cross_domain_url() {
+    fn extracts_login_cookies_and_ignores_other_urls() {
         let cookies = cookies_from_login_url(
             "https://passport.biligame.com/crossDomain?DedeUserID=42&DedeUserID__ckMd5=abc\
              &Expires=1762732800&SESSDATA=token%2C1762732800%2Csign&bili_jct=csrf&gourl=https%3A%2F%2Fwww.bilibili.com",
@@ -57,10 +57,7 @@ mod tests {
         assert_eq!(cookies["DedeUserID__ckMd5"], "abc");
         assert_eq!(cookies["SESSDATA"], "token,1762732800,sign");
         assert_eq!(cookies["bili_jct"], "csrf");
-    }
 
-    #[test]
-    fn ignores_urls_without_login_cookies() {
         assert!(cookies_from_login_url("https://www.bilibili.com").is_empty());
         assert!(cookies_from_login_url("https://example.com/?other=1").is_empty());
     }

@@ -30,7 +30,7 @@ mod tests {
     use super::{banner, thumbnail};
 
     #[test]
-    fn upgrades_and_resizes_cover_urls() {
+    fn builds_thumbnail_and_banner_urls() {
         assert_eq!(
             thumbnail("http://i0.hdslb.com/cover.jpg", 480),
             "https://i0.hdslb.com/cover.jpg@480w_270h_1c.webp"
@@ -39,10 +39,7 @@ mod tests {
             thumbnail("https://i0.hdslb.com/cover.jpg@320w_200h_1c.webp", 720),
             "https://i0.hdslb.com/cover.jpg@720w_405h_1c.webp"
         );
-    }
 
-    #[test]
-    fn resizes_space_banners_by_width() {
         assert_eq!(
             banner("http://i0.hdslb.com/banner.jpg", 1280),
             "https://i0.hdslb.com/banner.jpg@1280w_1c.webp"

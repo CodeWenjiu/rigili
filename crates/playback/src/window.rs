@@ -8,6 +8,7 @@ use gpui_kit::*;
 use super::info::{InfoEvent, InfoPanel};
 use super::request::{PlaybackRequest, PlaybackSource, resolve, resolve_streams};
 use super::surface::PlayerView;
+use rigili_core::api_error_message;
 use rigili_core::backend::{self, Backend};
 use rigili_core::runtime::{ApiTaskError, spawn_api};
 
@@ -43,7 +44,7 @@ impl PlayerWindow {
         });
         let (backend, error) = match backend::get(cx) {
             Ok(backend) => (Some(backend), None),
-            Err(error) => (None, Some(error)),
+            Err(error) => (None, Some(api_error_message(error))),
         };
         let mut view = Self {
             player,

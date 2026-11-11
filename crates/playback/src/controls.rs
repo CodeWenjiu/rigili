@@ -189,22 +189,18 @@ mod tests {
     #[test]
     fn labels_every_phase() {
         let mut status = PlayerStatus::default();
-        assert_eq!(phase_label(&status), "未播放");
-
-        status.phase = PlaybackPhase::Loading;
-        assert_eq!(phase_label(&status), "加载中");
-
-        status.phase = PlaybackPhase::Buffering;
-        assert_eq!(phase_label(&status), "缓冲中");
-
-        status.phase = PlaybackPhase::Ended;
-        assert_eq!(phase_label(&status), "播放结束");
-
-        status.phase = PlaybackPhase::Playing;
-        assert_eq!(phase_label(&status), "播放中");
-
-        status.paused = true;
-        assert_eq!(phase_label(&status), "已暂停");
+        for (phase, paused, label) in [
+            (PlaybackPhase::Idle, false, "未播放"),
+            (PlaybackPhase::Loading, false, "加载中"),
+            (PlaybackPhase::Buffering, false, "缓冲中"),
+            (PlaybackPhase::Ended, false, "播放结束"),
+            (PlaybackPhase::Playing, false, "播放中"),
+            (PlaybackPhase::Playing, true, "已暂停"),
+        ] {
+            status.phase = phase;
+            status.paused = paused;
+            assert_eq!(phase_label(&status), label);
+        }
     }
 
     #[test]

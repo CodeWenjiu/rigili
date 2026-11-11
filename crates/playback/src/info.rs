@@ -333,12 +333,8 @@ mod tests {
     }
 
     #[test]
-    fn labels_pages_with_part() {
+    fn labels_pages() {
         assert_eq!(short_label(&page(2, "第二局")), "P2 · 第二局");
-    }
-
-    #[test]
-    fn labels_pages_without_part() {
         assert_eq!(short_label(&page(1, "")), "P1");
     }
 }

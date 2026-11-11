@@ -65,7 +65,7 @@ mod tests {
     use super::BangumiFollows;
 
     #[test]
-    fn parses_followed_bangumi() {
+    fn parses_followed_bangumi_and_tolerates_missing_metadata() {
         let follows: BangumiFollows = serde_json::from_str(
             r#"{
                 "total": 170,
@@ -90,10 +90,7 @@ mod tests {
         assert_eq!(item.season_id, 1733);
         assert_eq!(item.latest_ep(), "更新至第42话");
         assert_eq!(item.score(), Some(9.9));
-    }
 
-    #[test]
-    fn tolerates_missing_new_episode_and_rating() {
         let follows: BangumiFollows = serde_json::from_str(
             r#"{"list":[{"season_id":1,"title":"测试","new_ep":null,"rating":null}]}"#,
         )

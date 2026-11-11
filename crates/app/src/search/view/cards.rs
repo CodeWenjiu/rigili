@@ -7,15 +7,12 @@ use rigili_bilibili::thumbnail;
 
 use super::items::{ArticleItem, LiveItem, MediaItem, UserItem};
 use crate::grid::{
-    CardMetrics, CardOverlay, CardStyle, MediaAuthor, MediaCard as CardLayout, VideoCard,
+    CardGrid, CardMetrics, CardOverlay, CardStyle, MediaAuthor, MediaCard as CardLayout, VideoCard,
+    VideoCards, card_height,
 };
-use crate::platform::theme::cover_scrim;
 
 pub(crate) const ROW_HEIGHT: Pixels = px(96.);
 
-const PREVIEW_GAP: Pixels = px(12.);
-const PREVIEW_MIN_WIDTH: f32 = 150.;
-const PREVIEW_MAX_COLUMNS: usize = 5;
 const PREVIEW_TEXT_HEIGHT: f32 = 22.;
 const USER_BLOCK_CHROME: f32 = 156.;
 
@@ -31,8 +28,9 @@ pub(crate) fn video_card(
             id: SharedString::from(video.bvid().to_owned()),
             cover: video.cover(),
             title: video.title(),
-            footer: video.meta(),
+            footer: Some(video.meta()),
             footer_icon: Some(IconName::MonitorPlay),
+            title_lines: 2,
             author: on_author,
             overlay: CardOverlay {
                 leading: Some((IconName::Play, video.views())),
@@ -60,8 +58,9 @@ pub(crate) fn media_item_card(
             id: SharedString::from(format!("search-pgc-{}", item.season_id)),
             cover: &item.cover,
             title: &item.title,
-            footer: &item.subtitle,
+            footer: Some(&item.subtitle),
             footer_icon: Some(IconName::Tv),
+            title_lines: 2,
             author: None,
             overlay: CardOverlay {
                 leading: (!item.score.is_empty()).then_some((IconName::Star, item.score.as_str())),
@@ -89,8 +88,9 @@ pub(crate) fn live_card(
             id: SharedString::from(format!("search-live-{}", item.room_id)),
             cover: &item.cover,
             title: &item.title,
-            footer: &item.meta,
+            footer: Some(&item.meta),
             footer_icon: Some(IconName::Radio),
+            title_lines: 2,
             author: None,
             overlay: CardOverlay {
                 leading: Some((IconName::Eye, &item.online)),
@@ -248,31 +248,10 @@ pub(crate) fn level_badge(level: u32, style: CardStyle) -> AnyElement {
         .into_any_element()
 }
 
-pub(crate) fn preview_columns(width: Pixels) -> usize {
-    if width <= px(0.) {
-        return 1;
-    }
-    let gap = PREVIEW_GAP.as_f32();
-    (((width.as_f32() + gap) / (PREVIEW_MIN_WIDTH + gap)).floor() as usize)
-        .clamp(1, PREVIEW_MAX_COLUMNS)
-}
-
-pub(crate) fn preview_card_width(width: Pixels, columns: usize) -> Pixels {
-    if width <= px(0.) || columns == 0 {
-        return px(PREVIEW_MIN_WIDTH);
-    }
-    let gaps = PREVIEW_GAP.as_f32() * (columns - 1) as f32;
-    px(((width.as_f32() - gaps) / columns as f32).max(0.))
-}
-
-pub(crate) fn preview_card_height(width: Pixels) -> Pixels {
-    px(width.as_f32() * 9. / 16.) + px(PREVIEW_TEXT_HEIGHT + 8.)
-}
-
 pub(crate) fn user_block_height(width: Pixels) -> Pixels {
-    let columns = preview_columns(width);
-    let card_width = preview_card_width(width, columns);
-    px(USER_BLOCK_CHROME) + preview_card_height(card_width)
+    let columns = VideoCards::columns(width);
+    let card_width = VideoCards::card_width(width, columns, 1.);
+    px(USER_BLOCK_CHROME) + card_height(card_width, px(PREVIEW_TEXT_HEIGHT))
 }
 
 pub(crate) fn preview_card(
@@ -281,53 +260,28 @@ pub(crate) fn preview_card(
     width: Pixels,
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
-    v_flex()
-        .id(SharedString::from(format!("preview-{}", video.bvid())))
-        .w(width)
-        .gap_2()
-        .cursor_pointer()
-        .on_click(on_open)
-        .child(
-            div()
-                .w_full()
-                .aspect_ratio(16. / 9.)
-                .relative()
-                .rounded(style.radius())
-                .overflow_hidden()
-                .bg(style.placeholder())
-                .child(
-                    img(thumbnail(video.cover(), 320))
-                        .size_full()
-                        .object_fit(ObjectFit::Cover),
-                )
-                .child(
-                    h_flex()
-                        .absolute()
-                        .bottom_0()
-                        .left_0()
-                        .right_0()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .pt_3()
-                        .pb_1()
-                        .text_xs()
-                        .text_color(Hsla::white())
-                        .bg(cover_scrim())
-                        .child(Icon::new(IconName::Play))
-                        .child(video.views().to_owned())
-                        .child(div().flex_1())
-                        .child(video.duration().to_owned()),
-                ),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(style.foreground())
-                .line_clamp(1)
-                .child(video.title().to_owned()),
-        )
-        .into_any_element()
+    crate::grid::media_card(
+        CardLayout {
+            id: SharedString::from(format!("preview-{}", video.bvid())),
+            cover: video.cover(),
+            title: video.title(),
+            footer: None,
+            footer_icon: None,
+            title_lines: 1,
+            author: None,
+            overlay: CardOverlay {
+                leading: Some((IconName::Play, video.views())),
+                secondary: None,
+                trailing: Some(video.duration()),
+                badge: None,
+            },
+        },
+        style,
+        width,
+        px(PREVIEW_TEXT_HEIGHT),
+        on_open,
+    )
+    .into_any_element()
 }
 
 fn stat(icon: IconName, text: &str) -> AnyElement {
@@ -341,23 +295,22 @@ fn stat(icon: IconName, text: &str) -> AnyElement {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        PREVIEW_MAX_COLUMNS, preview_card_height, preview_card_width, preview_columns,
-        user_block_height,
-    };
+    use super::{PREVIEW_TEXT_HEIGHT, USER_BLOCK_CHROME, user_block_height};
+    use crate::grid::{CardGrid, VideoCards, card_height};
     use gpui_kit::px;
 
     #[test]
-    fn fits_preview_cards_into_the_available_width() {
-        assert_eq!(preview_columns(px(0.)), 1);
-        assert_eq!(preview_columns(px(300.)), 1);
-        assert_eq!(preview_columns(px(1000.)), PREVIEW_MAX_COLUMNS);
-
+    fn fits_the_preview_grid_inside_the_user_block() {
         let width = px(1_000.);
-        let columns = preview_columns(width);
-        let card_width = preview_card_width(width, columns);
-        assert!(card_width > px(0.));
-        assert!(preview_card_height(card_width) > px(card_width.as_f32() * 9. / 16.));
-        assert!(user_block_height(width) > preview_card_height(card_width));
+        let columns = VideoCards::columns(width);
+        let card_width = VideoCards::card_width(width, columns, 1.);
+        let row = card_width.as_f32() * columns as f32
+            + VideoCards::GAP.as_f32() * columns.saturating_sub(1) as f32;
+
+        assert!(row <= width.as_f32());
+        assert_eq!(
+            user_block_height(width),
+            px(USER_BLOCK_CHROME) + card_height(card_width, px(PREVIEW_TEXT_HEIGHT))
+        );
     }
 }

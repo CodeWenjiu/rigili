@@ -101,7 +101,7 @@ mod tests {
     use super::Nav;
 
     #[test]
-    fn parses_nav_level_vip_and_wallet() {
+    fn parses_nav_and_hides_unset_level_vip_and_wallet() {
         let nav: Nav = serde_json::from_str(
             r#"{
                 "isLogin": true,
@@ -125,10 +125,7 @@ mod tests {
         assert_eq!(nav.vip_label(), Some("年度大会员"));
         assert_eq!(nav.coins(), Some(1.7));
         assert_eq!(nav.bcoins(), None);
-    }
 
-    #[test]
-    fn hides_level_and_vip_when_not_a_member() {
         let nav: Nav =
             serde_json::from_str(r#"{"level_info": {"current_level": 0}, "vip": {"status": 0}}"#)
                 .expect("nav");

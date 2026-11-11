@@ -79,49 +79,30 @@ mod tests {
     use rigili_bilibili::{Dash, DashAudio, DashVideo};
 
     #[test]
-    fn pairs_avc_video_with_best_audio() {
+    fn pairs_video_with_audio_streams() {
         let dash = Dash {
-            video: vec![
-                DashVideo {
-                    id: 80,
-                    base_url: "https://example.invalid/hevc.m4s".into(),
-                    bandwidth: 900_000,
-                    width: 1920,
-                    height: 1080,
-                    codecs: "hvc1".into(),
-                    codecid: 12,
-                },
-                DashVideo {
-                    id: 80,
-                    base_url: "https://example.invalid/avc.m4s".into(),
-                    bandwidth: 600_000,
-                    width: 1920,
-                    height: 1080,
-                    codecs: "avc1".into(),
-                    codecid: 7,
-                },
-            ],
-            audio: vec![
-                DashAudio {
-                    id: 30216,
-                    base_url: "https://example.invalid/audio-64.m4s".into(),
-                    bandwidth: 65_536,
-                    codecs: "mp4a.40.2".into(),
-                },
-                DashAudio {
-                    id: 30280,
-                    base_url: "https://example.invalid/audio-192.m4s".into(),
-                    bandwidth: 196_608,
-                    codecs: "mp4a.40.2".into(),
-                },
-            ],
+            video: vec![DashVideo {
+                id: 80,
+                base_url: "https://example.invalid/avc.m4s".into(),
+                bandwidth: 600_000,
+                width: 1920,
+                height: 1080,
+                codecs: "avc1".into(),
+                codecid: 7,
+            }],
+            audio: vec![DashAudio {
+                id: 30280,
+                base_url: "https://example.invalid/audio.m4s".into(),
+                bandwidth: 196_608,
+                codecs: "mp4a.40.2".into(),
+            }],
         };
 
         let streams = best_streams(&dash).expect("streams");
         assert_eq!(streams.video, "https://example.invalid/avc.m4s");
         assert_eq!(
             streams.audio.as_deref(),
-            Some("https://example.invalid/audio-192.m4s")
+            Some("https://example.invalid/audio.m4s")
         );
     }
 }

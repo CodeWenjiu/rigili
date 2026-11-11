@@ -24,13 +24,16 @@ const CARD_BODY_GAP: f32 = 8.;
 
 pub(crate) trait CardGrid {
     const MIN_CARD_WIDTH: f32;
+    const GAP: Pixels = CARD_GAP;
+    const MAX_COLUMNS: usize = usize::MAX;
 
     fn columns(width: Pixels) -> usize {
         if width <= px(0.) {
             return 1;
         }
-        let gap = CARD_GAP.as_f32();
-        (((width.as_f32() + gap) / (Self::MIN_CARD_WIDTH + gap)).floor() as usize).max(1)
+        let gap = Self::GAP.as_f32();
+        (((width.as_f32() + gap) / (Self::MIN_CARD_WIDTH + gap)).floor() as usize)
+            .clamp(1, Self::MAX_COLUMNS)
     }
 
     fn card_width(width: Pixels, columns: usize, scale_factor: f32) -> Pixels {
@@ -39,7 +42,8 @@ pub(crate) trait CardGrid {
         }
         // GPUI rounds authored lengths to device pixels before Taffy lays out
         // the row; resize by one device pixel so the last column still fits.
-        let gaps_dp = round_to_device_pixel(CARD_GAP.as_f32(), scale_factor) * (columns - 1) as f32;
+        let gaps_dp =
+            round_to_device_pixel(Self::GAP.as_f32(), scale_factor) * (columns - 1) as f32;
         let available_dp = (width.as_f32() * scale_factor - 1.).max(0.);
         let card_dp = ((available_dp - gaps_dp) / columns as f32).floor().max(0.);
         px(card_dp / scale_factor)
@@ -391,8 +395,9 @@ pub(crate) struct MediaCard<'a> {
     pub(crate) id: SharedString,
     pub(crate) cover: &'a str,
     pub(crate) title: &'a str,
-    pub(crate) footer: &'a str,
+    pub(crate) footer: Option<&'a str>,
     pub(crate) footer_icon: Option<IconName>,
+    pub(crate) title_lines: usize,
     pub(crate) overlay: CardOverlay<'a>,
     pub(crate) author: Option<MediaAuthor>,
 }
@@ -423,6 +428,7 @@ pub(crate) fn media_card(
         title,
         footer,
         footer_icon,
+        title_lines,
         overlay,
         author,
     } = card;
@@ -439,7 +445,7 @@ pub(crate) fn media_card(
     let title_id = ElementId::Name(format!("{id}-title").into());
     let meta_id = ElementId::Name(format!("{id}-meta").into());
     let title_tooltip = title.to_owned();
-    let meta_tooltip = footer.to_owned();
+    let meta_tooltip = footer.unwrap_or_default().to_owned();
     let meta_click = match author {
         Some(author) => navigate(author.on_click),
         None => navigate(on_open.clone()),
@@ -569,7 +575,7 @@ pub(crate) fn media_card(
                         .w_full()
                         .min_w_0()
                         .text_sm()
-                        .line_clamp(2)
+                        .line_clamp(title_lines)
                         .text_ellipsis()
                         .text_color(style.foreground)
                         .cursor_pointer()
@@ -580,28 +586,30 @@ pub(crate) fn media_card(
                         })
                         .child(title.to_owned()),
                 )
-                .child(
-                    h_flex()
-                        .id(meta_id)
-                        .items_center()
-                        .gap_1()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .text_xs()
-                        .text_color(style.muted)
-                        .cursor_pointer()
-                        .hover(|this| this.text_color(style.primary))
-                        .on_click(meta_click)
-                        .when(!meta_tooltip.is_empty(), |this| {
-                            this.tooltip(move |window, cx| {
-                                Tooltip::new(meta_tooltip.clone()).build(window, cx)
+                .when_some(footer, |this, footer| {
+                    this.child(
+                        h_flex()
+                            .id(meta_id)
+                            .items_center()
+                            .gap_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_xs()
+                            .text_color(style.muted)
+                            .cursor_pointer()
+                            .hover(|this| this.text_color(style.primary))
+                            .on_click(meta_click)
+                            .when(!meta_tooltip.is_empty(), |this| {
+                                this.tooltip(move |window, cx| {
+                                    Tooltip::new(meta_tooltip.clone()).build(window, cx)
+                                })
                             })
-                        })
-                        .when_some(footer_icon, |this, icon| {
-                            this.child(Icon::new(icon).with_size(px(12.)))
-                        })
-                        .child(div().min_w_0().truncate().child(footer.to_owned())),
-                ),
+                            .when_some(footer_icon, |this, icon| {
+                                this.child(Icon::new(icon).with_size(px(12.)))
+                            })
+                            .child(div().min_w_0().truncate().child(footer.to_owned())),
+                    )
+                }),
         )
 }
 
@@ -621,8 +629,9 @@ pub(crate) fn video_card(
             id: SharedString::from(format!("{id_prefix}-{}", card.bvid())),
             cover: card.cover(),
             title: card.title(),
-            footer: card.meta(),
+            footer: Some(card.meta()),
             footer_icon: None,
+            title_lines: 2,
             author: None,
             overlay: CardOverlay {
                 leading: (!views.is_empty()).then_some((IconName::Play, views)),
@@ -775,20 +784,13 @@ mod tests {
     }
 
     #[test]
-    fn exact_fit_keeps_the_last_column_on_the_same_row() {
+    fn rounding_keeps_the_last_column_on_the_same_row() {
         let width = px(1433.);
         let columns = FolderCards::columns(width);
         let card_width = FolderCards::card_width(width, columns, 1.);
         assert_eq!(columns, 5);
         assert_eq!(card_width, px(273.));
-        assert!(
-            card_width.as_f32() * columns as f32 + CARD_GAP.as_f32() * (columns - 1) as f32
-                <= width.as_f32()
-        );
-    }
 
-    #[test]
-    fn fractional_scale_keeps_the_last_column_on_the_same_row() {
         let gap = CARD_GAP.as_f32();
         for scale in [1., 1.25, 1.5, 1.75, 2.] {
             for width in [900., 1000., 1100., 1261., 1433., 1727.] {
