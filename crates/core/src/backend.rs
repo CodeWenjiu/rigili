@@ -220,6 +220,10 @@ impl Backend {
         api::mine::watch_later_add(&self.client, bvid).await
     }
 
+    pub async fn watch_later_remove(&self, aid: u64) -> Result<(), ApiError> {
+        api::mine::watch_later_remove(&self.client, aid).await
+    }
+
     pub async fn message_sessions(&self) -> Result<MessageSessions, ApiError> {
         api::message::sessions(&self.client).await
     }

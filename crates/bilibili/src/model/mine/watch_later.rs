@@ -19,6 +19,8 @@ impl WatchLater {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct WatchLaterItem {
     #[serde(default)]
+    pub aid: u64,
+    #[serde(default)]
     pub bvid: String,
     #[serde(default)]
     pub cid: u64,
@@ -46,6 +48,7 @@ mod tests {
             r#"{
                 "count": 1,
                 "list": [{
+                    "aid": 99,
                     "bvid": "BV1xx411c7mD",
                     "cid": 123,
                     "pic": "https://example.com/cover.jpg",
@@ -61,6 +64,7 @@ mod tests {
 
         let items = later.into_items();
         assert_eq!(items.len(), 1);
+        assert_eq!(items[0].aid, 99);
         assert_eq!(items[0].cid, 123);
         assert_eq!(items[0].owner.name, "UP 主");
         assert_eq!(items[0].stat.view, 100);

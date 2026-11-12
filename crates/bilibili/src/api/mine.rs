@@ -13,6 +13,7 @@ const BANGUMI_FOLLOW_URL: &str = "https://api.bilibili.com/x/space/bangumi/follo
 const HISTORY_URL: &str = "https://api.bilibili.com/x/web-interface/history/cursor";
 const WATCH_LATER_URL: &str = "https://api.bilibili.com/x/v2/history/toview";
 const WATCH_LATER_ADD_URL: &str = "https://api.bilibili.com/x/v2/history/toview/add";
+const WATCH_LATER_DEL_URL: &str = "https://api.bilibili.com/x/v2/history/toview/del";
 const PAGE_SIZE: u32 = 20;
 const FOLDER_LIMIT: u32 = 100;
 
@@ -75,7 +76,7 @@ pub async fn create_folder(
                 ("title", title.to_owned()),
                 ("intro", String::new()),
                 ("privacy", if private { "1" } else { "0" }.to_owned()),
-                ("csrf", csrf(client)?),
+                ("csrf", client.csrf()?),
             ],
         )
         .await
@@ -92,7 +93,7 @@ pub async fn sort_folders(client: &Client, ids: &[u64]) -> Result<(), ApiError> 
             FOLDER_SORT_URL,
             &[
                 ("sort", sort),
-                ("csrf", csrf(client)?),
+                ("csrf", client.csrf()?),
                 ("platform", "web".into()),
             ],
         )
@@ -141,19 +142,16 @@ pub async fn watch_later_add(client: &Client, bvid: &str) -> Result<(), ApiError
     client
         .post_form_ack(
             WATCH_LATER_ADD_URL,
-            &[("bvid", bvid.to_owned()), ("csrf", csrf(client)?)],
+            &[("bvid", bvid.to_owned()), ("csrf", client.csrf()?)],
         )
         .await
 }
 
-fn csrf(client: &Client) -> Result<String, ApiError> {
+pub async fn watch_later_remove(client: &Client, aid: u64) -> Result<(), ApiError> {
     client
-        .cookie_values()
-        .get("bili_jct")
-        .filter(|value| !value.is_empty())
-        .cloned()
-        .ok_or(ApiError::Bilibili {
-            code: -101,
-            message: "账号未登录".into(),
-        })
+        .post_form_ack(
+            WATCH_LATER_DEL_URL,
+            &[("aid", aid.to_string()), ("csrf", client.csrf()?)],
+        )
+        .await
 }

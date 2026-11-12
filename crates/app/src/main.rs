@@ -8,7 +8,8 @@ rigili_macro::mod_prv!(
     preview,
     search,
     shell,
-    space
+    space,
+    watch_later
 );
 
 use crate::platform::assets::AppAssets;
@@ -20,6 +21,7 @@ fn main() {
         cx.set_global(rigili_core::login::LoginState::default());
         platform::init(cx);
         rigili_core::backend::init(cx);
+        watch_later::init(cx);
         preview::init(cx);
 
         if let Err(error) = shell::open_main(cx) {

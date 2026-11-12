@@ -3,7 +3,6 @@ use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::*;
-use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::{Scrollbar, ScrollbarHandle};
 use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::spinner::Spinner;
@@ -15,14 +14,11 @@ use rigili_bilibili::{
     FavItem, HistoryItem, PopularVideo, RecommendVideo, SearchVideo, SpaceVideo, WatchLaterItem,
     thumbnail,
 };
-use rigili_core::backend;
-use rigili_core::runtime::Tokio;
-use rigili_core::{
-    OpenVideo, api_error_message, format_count, format_date, format_duration, format_ymd, login,
-};
+use rigili_core::{OpenVideo, format_count, format_date, format_duration, format_ymd};
 
 use crate::platform::theme::cover_scrim;
 use crate::preview::{self, PreviewSource};
+use crate::watch_later;
 
 pub(crate) const CARD_GAP: Pixels = px(16.);
 pub(crate) const LIST_FOOTER_HEIGHT: Pixels = px(56.);
@@ -504,6 +500,18 @@ pub(crate) fn media_card(
         video,
     } = card;
 
+    if video.is_some() {
+        watch_later::ensure(window, cx);
+    }
+    let in_watch_later = video
+        .as_ref()
+        .is_some_and(|video| watch_later::contains(cx, &video.bvid));
+    let watch_later_color = if in_watch_later {
+        style.primary
+    } else {
+        Hsla::white()
+    };
+
     let on_open: Rc<OpenHandler> = Rc::new(on_open);
     let navigate = |handler: Rc<OpenHandler>| {
         move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
@@ -676,17 +684,29 @@ pub(crate) fn media_card(
                             .p_0()
                             .rounded(px(6.))
                             .bg(hsla(0., 0., 0., 0.55))
-                            .text_color(Hsla::white())
+                            .text_color(watch_later_color)
                             .opacity(0.)
                             .group_hover("media-cover", |this| this.opacity(1.))
                             .focus_visible(|this| this.opacity(1.))
-                            .icon(IconName::Clock)
-                            .tooltip("稍后再看")
-                            .accessibility_label("稍后再看")
+                            .tooltip(if in_watch_later {
+                                "从稍后再看移除"
+                            } else {
+                                "稍后再看"
+                            })
+                            .accessibility_label(if in_watch_later {
+                                "从稍后再看移除"
+                            } else {
+                                "稍后再看"
+                            })
                             .on_click(move |_event, window, cx| {
                                 cx.stop_propagation();
-                                add_to_watch_later(video.bvid.clone(), window, cx);
-                            }),
+                                watch_later::toggle(video.bvid.clone(), window, cx);
+                            })
+                            .child(
+                                Icon::new(IconName::Clock)
+                                    .with_size(px(18.))
+                                    .text_color(watch_later_color),
+                            ),
                     )
                 }),
         )
@@ -782,31 +802,6 @@ pub(crate) fn video_card(
         on_open,
     )
     .into_any_element()
-}
-
-fn add_to_watch_later(bvid: SharedString, window: &mut Window, cx: &mut App) {
-    let Ok(backend) = backend::get(cx) else {
-        return;
-    };
-    let handle = window.window_handle();
-    let request = Tokio::spawn(cx, async move { backend.watch_later_add(&bvid).await });
-
-    cx.spawn(async move |cx| {
-        let result = request.await;
-        let expired = matches!(&result, Ok(Err(error)) if error.is_login_required());
-        let note = match result {
-            Ok(Ok(())) => Notification::success("已加入稍后再看"),
-            Ok(Err(error)) => Notification::error(api_error_message(&error)),
-            Err(_) => Notification::error("加入稍后再看失败"),
-        };
-        let _ = cx.update_window(handle, |_, window, cx| {
-            if expired {
-                login::expire(cx);
-            }
-            window.push_notification(note, cx);
-        });
-    })
-    .detach();
 }
 
 pub(crate) fn page_gutter(window: &Window) -> Pixels {
