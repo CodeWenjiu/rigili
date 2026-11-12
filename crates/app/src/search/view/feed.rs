@@ -86,6 +86,14 @@ impl SearchView {
                         let users = all.users.into_iter().map(UserItem::from).collect();
                         this.state_mut(SearchTab::All).users = users;
 
+                        let mids = this
+                            .state(SearchTab::All)
+                            .users
+                            .first()
+                            .map(|user| vec![user.mid])
+                            .unwrap_or_default();
+                        this.sync_follows(mids, cx);
+
                         if let Some(mid) = this
                             .state(SearchTab::All)
                             .users

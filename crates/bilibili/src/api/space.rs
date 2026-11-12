@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use crate::{
     ApiError, Client, Dynamics, SpaceCollections, SpaceProfile, SpaceRelation, SpaceRelationStatus,
     SpaceUpStat, SpaceUser, SpaceVideos,
@@ -8,6 +10,7 @@ const DYNAMICS_URL: &str = "https://api.bilibili.com/x/polymer/web-dynamic/v1/fe
 const VIDEOS_URL: &str = "https://api.bilibili.com/x/space/wbi/arc/search";
 const RELATION_URL: &str = "https://api.bilibili.com/x/relation/stat";
 const RELATION_STATUS_URL: &str = "https://api.bilibili.com/x/relation";
+const RELATION_STATUSES_URL: &str = "https://api.bilibili.com/x/relation/relations";
 const RELATION_MODIFY_URL: &str = "https://api.bilibili.com/x/relation/modify";
 const UPSTAT_URL: &str = "https://api.bilibili.com/x/space/upstat";
 const COLLECTIONS_URL: &str = "https://api.bilibili.com/x/polymer/web-space/seasons_series_list";
@@ -53,6 +56,27 @@ pub async fn relation_status(client: &Client, mid: u64) -> Result<SpaceRelationS
     client
         .get_json(RELATION_STATUS_URL, &[("fid", mid.to_string())])
         .await
+}
+
+pub async fn relation_statuses(
+    client: &Client,
+    mids: &[u64],
+) -> Result<BTreeMap<u64, SpaceRelationStatus>, ApiError> {
+    if mids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let fids = mids
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let statuses: BTreeMap<String, SpaceRelationStatus> = client
+        .get_json_or_default(RELATION_STATUSES_URL, &[("fids", fids)])
+        .await?;
+    Ok(statuses
+        .into_iter()
+        .filter_map(|(mid, status)| mid.parse().ok().map(|mid| (mid, status)))
+        .collect())
 }
 
 pub async fn modify_relation(client: &Client, mid: u64, follow: bool) -> Result<(), ApiError> {

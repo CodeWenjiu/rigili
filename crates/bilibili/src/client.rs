@@ -154,6 +154,19 @@ impl Client {
         self.parse(&body)
     }
 
+    pub async fn get_json_or_default<T>(
+        &self,
+        url: &str,
+        params: &[(&str, String)],
+    ) -> Result<T, ApiError>
+    where
+        T: DeserializeOwned + Default,
+    {
+        let response = self.send(|| self.http.get(url).query(params)).await?;
+        let body = response.text().await?;
+        self.parse_or_default(&body)
+    }
+
     pub async fn get_wbi_json<T>(&self, url: &str, params: &[(&str, String)]) -> Result<T, ApiError>
     where
         T: DeserializeOwned,
@@ -238,6 +251,25 @@ impl Client {
                 Err(error)
             }
         }
+    }
+
+    fn parse_or_default<T>(&self, body: &str) -> Result<T, ApiError>
+    where
+        T: DeserializeOwned + Default,
+    {
+        let envelope: Envelope<T> = serde_json::from_str(body)?;
+        if envelope.code == 0 {
+            return Ok(envelope.data.or(envelope.result).unwrap_or_default());
+        }
+
+        let error = ApiError::Bilibili {
+            code: envelope.code,
+            message: envelope.message,
+        };
+        if error.is_login_required() {
+            let _ = self.clear_session();
+        }
+        Err(error)
     }
 
     fn parse_ack(&self, body: &str) -> Result<(), ApiError> {
@@ -404,7 +436,7 @@ fn lock_cookies(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PlayUrl, Popular, Session, VideoInfo};
+    use crate::{PlayUrl, Popular, Session, SpaceRelationStatus, VideoInfo};
     use std::{collections::BTreeMap, fs, path::PathBuf};
 
     const POPULAR_FIXTURE: &str = include_str!("../fixtures/popular.json");
@@ -505,6 +537,27 @@ mod tests {
                 .all(|character| character.is_ascii_hexdigit() || character == '-')
         );
         assert_eq!(client.clone().dev_id(), dev_id);
+    }
+
+    #[test]
+    fn treats_missing_optional_data_as_default() {
+        let client = Client::with_data_dir(None).expect("client");
+        let statuses: BTreeMap<String, SpaceRelationStatus> = client
+            .parse_or_default(r#"{"code":0,"message":"0","ttl":1,"data":null}"#)
+            .expect("empty statuses");
+        assert!(statuses.is_empty());
+
+        let statuses: BTreeMap<String, SpaceRelationStatus> = client
+            .parse_or_default(r#"{"code":0,"data":{"2":{"mid":2,"attribute":6}}}"#)
+            .expect("statuses");
+        assert!(statuses["2"].is_followed());
+
+        let error = client
+            .parse_or_default::<BTreeMap<String, SpaceRelationStatus>>(
+                r#"{"code":-101,"message":"账号未登录"}"#,
+            )
+            .expect_err("login required");
+        assert!(error.is_login_required());
     }
 
     #[test]

@@ -6,8 +6,8 @@ use rigili_bilibili::{
     FavFolders, FavItems, HistoryPage, HotWords, LiveRoom, LiveSearch, MediaSearch, MessageCursor,
     MessageFeed, MessageSessions, MessageUserInfo, Nav, NavStat, PgcIndex, PgcSeason, PlayUrl,
     Popular, QrCode, QrPoll, Recommend, SearchAll, SearchSuggestions, SessionError,
-    SpaceCollections, SpaceProfile, SpaceVideos, UserSearch, VideoInfo, VideoSearch, WatchLater,
-    api,
+    SpaceCollections, SpaceProfile, SpaceRelationStatus, SpaceVideos, UserSearch, VideoInfo,
+    VideoSearch, WatchLater, api,
     api::comment::CommentSort,
     api::message::MessageFeedKind,
     api::search::{SearchOrder, SearchType},
@@ -174,6 +174,13 @@ impl Backend {
 
     pub async fn modify_relation(&self, mid: u64, follow: bool) -> Result<(), ApiError> {
         api::space::modify_relation(&self.client, mid, follow).await
+    }
+
+    pub async fn relation_statuses(
+        &self,
+        mids: &[u64],
+    ) -> Result<BTreeMap<u64, SpaceRelationStatus>, ApiError> {
+        api::space::relation_statuses(&self.client, mids).await
     }
 
     pub async fn comments(

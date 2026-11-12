@@ -3,14 +3,22 @@ rigili_macro::mod_prv!(cards, feed, items, list, toolbar, user);
 use std::collections::{BTreeMap, HashSet};
 
 use gpui_kit::component::alert::Alert;
+use gpui_kit::component::notification::Notification;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+use rigili_bilibili::SpaceRelationStatus;
 use rigili_bilibili::api::search::{SearchOrder, SearchType};
 
 use items::SearchItem;
 use rigili_core::backend::{self, Backend};
-use rigili_core::{OpenLive, OpenSpace, OpenVideo, Refresh, api_error_message};
+use rigili_core::login as login_state;
+use rigili_core::runtime::spawn_api;
+use rigili_core::{
+    OpenLive, OpenSpace, OpenVideo, Refresh, api_error_message, api_task_error_message,
+};
+
+use crate::login;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum SearchTab {
@@ -127,6 +135,13 @@ struct TabState {
     scroll: VirtualListScrollHandle,
 }
 
+#[derive(Clone, Copy, Default)]
+struct FollowState {
+    followed: bool,
+    status_loading: bool,
+    toggling: bool,
+}
+
 impl TabState {
     fn new() -> Self {
         Self {
@@ -153,6 +168,7 @@ pub struct SearchView {
     order: SearchOrder,
     tabs: [TabState; 7],
     counts: BTreeMap<String, u64>,
+    follows: BTreeMap<u64, FollowState>,
     opening: Option<u64>,
     notice: Option<String>,
     list_width: Pixels,
@@ -175,6 +191,7 @@ impl SearchView {
             order: SearchOrder::Default,
             tabs: std::array::from_fn(|_| TabState::new()),
             counts: BTreeMap::new(),
+            follows: BTreeMap::new(),
             opening: None,
             notice: None,
             list_width: px(0.),
@@ -197,6 +214,7 @@ impl SearchView {
         self.keyword = keyword.trim().to_owned();
         self.tab = SearchTab::default();
         self.counts.clear();
+        self.follows.clear();
         self.opening = None;
         self.notice = None;
         self.tabs = std::array::from_fn(|_| TabState::new());
@@ -216,6 +234,7 @@ impl SearchView {
 
         self.order = order;
         self.tabs = std::array::from_fn(|_| TabState::new());
+        self.follows.clear();
         self.notice = None;
 
         if self.keyword.is_empty() {
@@ -255,12 +274,124 @@ impl SearchView {
             return;
         }
         self.notice = None;
+        self.follows.clear();
         let tab = self.tab;
         self.load_tab(tab, cx);
     }
 
     fn user_content_width(&self) -> Pixels {
         px((self.list_width.as_f32() - 32.).max(0.))
+    }
+
+    fn sync_follows(&mut self, mids: Vec<u64>, cx: &mut Context<Self>) {
+        if mids.is_empty() || login_state::user(cx).is_none() {
+            return;
+        }
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let mids = mids
+            .into_iter()
+            .filter(|mid| !self.follows.contains_key(mid))
+            .collect::<Vec<_>>();
+        if mids.is_empty() {
+            return;
+        }
+
+        for &mid in &mids {
+            self.follows.insert(
+                mid,
+                FollowState {
+                    status_loading: true,
+                    ..Default::default()
+                },
+            );
+        }
+        cx.notify();
+
+        let requested = mids.clone();
+        spawn_api(
+            cx,
+            async move { backend.relation_statuses(&mids).await },
+            move |this, result, cx| {
+                match result {
+                    Ok(statuses) => {
+                        for mid in requested {
+                            if let Some(state) = this.follows.get_mut(&mid)
+                                && state.status_loading
+                            {
+                                state.followed = statuses
+                                    .get(&mid)
+                                    .is_some_and(SpaceRelationStatus::is_followed);
+                                state.status_loading = false;
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        for mid in requested {
+                            if let Some(state) = this.follows.get_mut(&mid)
+                                && state.status_loading
+                            {
+                                state.status_loading = false;
+                            }
+                        }
+                    }
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    fn toggle_follow(&mut self, mid: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        if login_state::user(cx).is_none() {
+            login::open(window, cx);
+            return;
+        }
+        let follow = {
+            let state = self.follows.entry(mid).or_default();
+            if state.toggling || state.status_loading {
+                return;
+            }
+            state.toggling = true;
+            !state.followed
+        };
+        let handle = window.window_handle();
+        cx.notify();
+
+        spawn_api(
+            cx,
+            async move { backend.modify_relation(mid, follow).await },
+            move |this, result, cx| match result {
+                Ok(()) => {
+                    if let Some(state) = this.follows.get_mut(&mid) {
+                        state.toggling = false;
+                        state.followed = follow;
+                    }
+                    let note = Notification::success(if follow {
+                        "已关注"
+                    } else {
+                        "已取消关注"
+                    });
+                    let _ = handle.update(cx, |_, window, cx| {
+                        window.push_notification(note, cx);
+                    });
+                    cx.notify();
+                }
+                Err(error) => {
+                    if let Some(state) = this.follows.get_mut(&mid) {
+                        state.toggling = false;
+                    }
+                    let note = Notification::error(api_task_error_message(error, cx));
+                    let _ = handle.update(cx, |_, window, cx| {
+                        window.push_notification(note, cx);
+                    });
+                    cx.notify();
+                }
+            },
+        );
     }
 }
 

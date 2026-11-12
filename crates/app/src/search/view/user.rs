@@ -24,6 +24,7 @@ impl SearchView {
         let card_width = VideoCards::card_width(width, columns, 1.);
         let mid = user.mid;
         let name = user.name.clone();
+        let follow = self.follows.get(&mid).copied().unwrap_or_default();
 
         v_flex()
             .w_full()
@@ -104,12 +105,30 @@ impl SearchView {
                             ),
                     )
                     .child(
-                        Button::new("search-user-follow")
+                        Button::new(("search-user-follow", mid))
                             .small()
-                            .primary()
-                            .icon(IconName::Plus)
-                            .label("关注")
-                            .tooltip("暂不支持关注"),
+                            .min_w(px(84.))
+                            .when(follow.followed, |button| {
+                                button.secondary().icon(IconName::Check)
+                            })
+                            .when(!follow.followed, |button| {
+                                button.primary().icon(IconName::Plus)
+                            })
+                            .label(if follow.followed {
+                                "已关注"
+                            } else {
+                                "关注"
+                            })
+                            .loading(follow.toggling)
+                            .disabled(follow.toggling || follow.status_loading)
+                            .tooltip(if follow.followed {
+                                "取消关注"
+                            } else {
+                                "关注 TA"
+                            })
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.toggle_follow(mid, window, cx)
+                            })),
                     ),
             )
             .child(
