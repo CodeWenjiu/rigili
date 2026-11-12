@@ -4,11 +4,14 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
 use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::text::TextView;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::api::comment::CommentSort;
-use rigili_bilibili::{Comment, CommentPage, DynamicItem};
+use rigili_bilibili::{
+    Comment, CommentContent, CommentEmote, CommentPage, DynamicArchive, DynamicItem, thumbnail,
+};
 use rigili_core::backend::{self, Backend};
 use rigili_core::runtime::spawn_api;
 use rigili_core::{api_error_message, api_task_error_message, format_count, format_date};
@@ -176,6 +179,7 @@ impl CommentsView {
         let author = self.dynamic.author();
         let text = self.dynamic.text();
         let tip = self.dynamic.forward_tip();
+        let archive = self.dynamic.archive();
 
         v_flex()
             .gap_3()
@@ -219,6 +223,9 @@ impl CommentsView {
                         .line_height(relative(1.6))
                         .child(text.to_owned()),
                 )
+            })
+            .when_some(archive, |this, archive| {
+                this.child(archive_summary(archive, cx))
             })
             .when_some(tip, |this, tip| {
                 this.child(
@@ -274,6 +281,7 @@ impl CommentsView {
 
     fn render_comment(&self, comment: &Comment, depth: usize, cx: &App) -> AnyElement {
         let primary = cx.theme().primary;
+        let foreground = cx.theme().foreground;
         let muted = cx.theme().muted_foreground;
         let member = &comment.member;
         let level = member.level_info.current_level;
@@ -289,6 +297,28 @@ impl CommentsView {
             .map(|reply| self.render_comment(reply, depth + 1, cx))
             .collect::<Vec<_>>();
         let avatar_size = if depth == 0 { 32. } else { 24. };
+        let has_emotes = comment
+            .content
+            .emote
+            .as_ref()
+            .is_some_and(|emotes| !emotes.is_empty());
+        let message = if has_emotes {
+            TextView::markdown(
+                ("comment-message", comment.rpid),
+                message_markdown(&comment.content),
+            )
+            .text_sm()
+            .line_height(relative(1.5))
+            .text_color(foreground)
+            .selectable(false)
+            .into_any_element()
+        } else {
+            div()
+                .text_sm()
+                .line_height(relative(1.5))
+                .child(comment.content.message.clone())
+                .into_any_element()
+        };
 
         v_flex()
             .gap_2()
@@ -330,12 +360,7 @@ impl CommentsView {
                                     })
                                     .child(div().text_xs().text_color(muted).child(time)),
                             )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .line_height(relative(1.5))
-                                    .child(comment.content.message.clone()),
-                            )
+                            .child(message)
                             .child(
                                 h_flex()
                                     .items_center()
@@ -450,6 +475,142 @@ impl CommentsView {
     }
 }
 
+fn message_markdown(content: &CommentContent) -> String {
+    let mut markdown = String::with_capacity(content.message.len() + 40);
+    let Some(emotes) = content.emote.as_ref() else {
+        push_message_text(&mut markdown, &content.message);
+        return markdown;
+    };
+
+    let mut rest = content.message.as_str();
+    while !rest.is_empty() {
+        let mut next: Option<(usize, &str, &CommentEmote)> = None;
+        for (token, emote) in emotes {
+            if token.is_empty() || emote.url.is_empty() {
+                continue;
+            }
+            let Some(index) = rest.find(token) else {
+                continue;
+            };
+            if next.is_none_or(|(best, best_token, _)| {
+                index < best || (index == best && token.len() > best_token.len())
+            }) {
+                next = Some((index, token, emote));
+            }
+        }
+
+        let Some((index, token, emote)) = next else {
+            push_message_text(&mut markdown, rest);
+            break;
+        };
+        push_message_text(&mut markdown, &rest[..index]);
+        let url = if emote.url.starts_with("//") {
+            format!("https:{}", emote.url)
+        } else {
+            emote.url.clone()
+        };
+        markdown.push_str("<img src=\"");
+        markdown.push_str(&escape_attr(&url));
+        markdown.push_str("\" width=\"20\" height=\"20\" alt=\"");
+        markdown.push_str(&escape_attr(token));
+        markdown.push_str("\" />");
+        rest = &rest[index + token.len()..];
+    }
+    markdown
+}
+
+fn push_message_text(markdown: &mut String, text: &str) {
+    for ch in text.chars() {
+        match ch {
+            '\n' => markdown.push_str("  \n"),
+            '\r' => {}
+            c if c.is_ascii_punctuation() => {
+                markdown.push('\\');
+                markdown.push(c);
+            }
+            c => markdown.push(c),
+        }
+    }
+}
+
+fn escape_attr(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '"' => escaped.push_str("&quot;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn archive_summary(archive: &DynamicArchive, cx: &App) -> AnyElement {
+    let muted = cx.theme().muted_foreground;
+    let border = cx.theme().border;
+    let radius = cx.theme().radius;
+
+    h_flex()
+        .items_center()
+        .gap_3()
+        .p_2()
+        .rounded(radius)
+        .border_1()
+        .border_color(border)
+        .child(
+            div()
+                .w(px(160.))
+                .aspect_ratio(16. / 9.)
+                .rounded(radius)
+                .overflow_hidden()
+                .child(
+                    img(thumbnail(&archive.cover, 320))
+                        .size_full()
+                        .object_fit(ObjectFit::Cover),
+                ),
+        )
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_1()
+                .child(
+                    div()
+                        .text_sm()
+                        .line_height(relative(1.4))
+                        .line_clamp(2)
+                        .child(archive.title.clone()),
+                )
+                .child(
+                    h_flex()
+                        .items_center()
+                        .gap_3()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(
+                            h_flex()
+                                .items_center()
+                                .gap_1()
+                                .child(Icon::new(IconName::Play).with_size(px(12.)))
+                                .child(archive.stat.play.clone()),
+                        )
+                        .child(
+                            h_flex()
+                                .items_center()
+                                .gap_1()
+                                .child(Icon::new(IconName::MessageCircle).with_size(px(12.)))
+                                .child(archive.stat.danmaku.clone()),
+                        )
+                        .when(!archive.duration_text.is_empty(), |this| {
+                            this.child(archive.duration_text.clone())
+                        }),
+                ),
+        )
+        .into_any_element()
+}
+
 impl Render for CommentsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
@@ -492,5 +653,33 @@ impl Render for CommentsView {
             .child(initial)
             .children(comments)
             .child(footer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use rigili_bilibili::{CommentContent, CommentEmote};
+
+    use super::message_markdown;
+
+    #[test]
+    fn renders_emotes_and_escapes_message() {
+        let content = CommentContent {
+            message: "a [doge] <b>".into(),
+            emote: Some(HashMap::from([(
+                "[doge]".into(),
+                CommentEmote {
+                    text: "[doge]".into(),
+                    url: "//i0.hdslb.com/doge.png".into(),
+                },
+            )])),
+        };
+
+        assert_eq!(
+            message_markdown(&content),
+            "a <img src=\"https://i0.hdslb.com/doge.png\" width=\"20\" height=\"20\" alt=\"[doge]\" /> \\<b\\>"
+        );
     }
 }

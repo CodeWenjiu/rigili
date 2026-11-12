@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -78,6 +80,16 @@ pub struct CommentLevel {
 pub struct CommentContent {
     #[serde(default)]
     pub message: String,
+    #[serde(default)]
+    pub emote: Option<HashMap<String, CommentEmote>>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct CommentEmote {
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub url: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -104,7 +116,7 @@ mod tests {
                         "avatar": "http://i0.hdslb.com/face.jpg",
                         "level_info": {"current_level": 5}
                     },
-                    "content": {"message": "第一条评论"},
+                    "content": {"message": "第一条评论", "emote": {"[doge]": {"text": "[doge]", "url": "https://i0.hdslb.com/bfs/emote/doge.png"}}},
                     "like": 12,
                     "ctime": 1762646400,
                     "rcount": 1,
@@ -130,6 +142,13 @@ mod tests {
             "https://i0.hdslb.com/face.jpg"
         );
         assert_eq!(items[0].content.message, "第一条评论");
+        let emote = items[0]
+            .content
+            .emote
+            .as_ref()
+            .and_then(|emotes| emotes.get("[doge]"))
+            .expect("comment emote");
+        assert_eq!(emote.url, "https://i0.hdslb.com/bfs/emote/doge.png");
         assert_eq!(items[0].reply_control.time_desc, "1天前发布");
         assert_eq!(items[0].replies().len(), 1);
         assert_eq!(items[0].replies()[0].content.message, "回复内容");
