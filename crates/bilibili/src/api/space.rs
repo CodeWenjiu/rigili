@@ -1,12 +1,14 @@
 use crate::{
-    ApiError, Client, Dynamics, SpaceCollections, SpaceProfile, SpaceRelation, SpaceUpStat,
-    SpaceUser, SpaceVideos,
+    ApiError, Client, Dynamics, SpaceCollections, SpaceProfile, SpaceRelation, SpaceRelationStatus,
+    SpaceUpStat, SpaceUser, SpaceVideos,
 };
 
 const INFO_URL: &str = "https://api.bilibili.com/x/space/wbi/acc/info";
 const DYNAMICS_URL: &str = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space";
 const VIDEOS_URL: &str = "https://api.bilibili.com/x/space/wbi/arc/search";
 const RELATION_URL: &str = "https://api.bilibili.com/x/relation/stat";
+const RELATION_STATUS_URL: &str = "https://api.bilibili.com/x/relation";
+const RELATION_MODIFY_URL: &str = "https://api.bilibili.com/x/relation/modify";
 const UPSTAT_URL: &str = "https://api.bilibili.com/x/space/upstat";
 const COLLECTIONS_URL: &str = "https://api.bilibili.com/x/polymer/web-space/seasons_series_list";
 const VIDEO_PAGE_SIZE: u32 = 30;
@@ -47,6 +49,26 @@ pub async fn relation_stat(client: &Client, mid: u64) -> Result<SpaceRelation, A
         .await
 }
 
+pub async fn relation_status(client: &Client, mid: u64) -> Result<SpaceRelationStatus, ApiError> {
+    client
+        .get_json(RELATION_STATUS_URL, &[("fid", mid.to_string())])
+        .await
+}
+
+pub async fn modify_relation(client: &Client, mid: u64, follow: bool) -> Result<(), ApiError> {
+    client
+        .post_form_ack(
+            RELATION_MODIFY_URL,
+            &[
+                ("fid", mid.to_string()),
+                ("act", if follow { "1" } else { "2" }.to_owned()),
+                ("re_src", "11".to_owned()),
+                ("csrf", client.csrf()?),
+            ],
+        )
+        .await
+}
+
 pub async fn up_stat(client: &Client, mid: u64) -> Result<SpaceUpStat, ApiError> {
     client
         .get_json(UPSTAT_URL, &[("mid", mid.to_string())])
@@ -57,7 +79,17 @@ pub async fn profile(client: &Client, mid: u64) -> Result<SpaceProfile, ApiError
     let user = user_info(client, mid).await?;
     let relation = relation_stat(client, mid).await.ok();
     let up = up_stat(client, mid).await.ok();
-    Ok(SpaceProfile { user, relation, up })
+    let viewer = if client.cookie_values().contains_key("SESSDATA") {
+        relation_status(client, mid).await.ok()
+    } else {
+        None
+    };
+    Ok(SpaceProfile {
+        user,
+        relation,
+        up,
+        viewer,
+    })
 }
 
 pub async fn dynamics(client: &Client, host_mid: u64, offset: &str) -> Result<Dynamics, ApiError> {

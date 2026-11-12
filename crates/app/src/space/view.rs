@@ -5,6 +5,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::notification::Notification;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::v_virtual_list;
@@ -16,16 +17,17 @@ use rigili_bilibili::{
     DynamicArchive, DynamicItem, SeasonMeta, SeriesMeta, SpaceProfile, banner, thumbnail,
 };
 use rigili_core::backend::{self, Backend};
-use rigili_core::login;
+use rigili_core::login as login_state;
 use rigili_core::runtime::spawn_api;
 use rigili_core::{OpenVideo, Refresh, api_error_message, api_task_error_message, format_count};
 
-use super::comment;
+use super::{comment, compose};
 use crate::grid::{
     CARD_GAP, CardGrid, CardMetrics, CardStyle, FolderCards, LIST_FOOTER_HEIGHT, VideoCard,
     VideoCards, append_unique_by, card_text_height, list_content_size, list_footer, page_gutter,
     profile_badge, profile_stat, video_card, virtual_list_scrollbar,
 };
+use crate::login;
 
 const DYNAMIC_CARD_MAX_WIDTH: Pixels = px(840.);
 
@@ -68,6 +70,8 @@ pub struct SpaceView {
     profile: Option<SpaceProfile>,
     profile_loading: bool,
     profile_error: Option<String>,
+    followed: bool,
+    follow_pending: bool,
     dynamics: DynamicsState,
     space_videos: SpaceVideosState,
     collections: CollectionsState,
@@ -95,6 +99,8 @@ impl SpaceView {
             profile: None,
             profile_loading: false,
             profile_error: None,
+            followed: false,
+            follow_pending: false,
             dynamics: DynamicsState::new(),
             space_videos: SpaceVideosState::new(),
             collections: CollectionsState::new(),
@@ -117,6 +123,8 @@ impl SpaceView {
         self.profile = None;
         self.profile_loading = false;
         self.profile_error = None;
+        self.followed = false;
+        self.follow_pending = false;
         self.dynamics = DynamicsState::new();
         self.space_videos = SpaceVideosState::new();
         self.collections = CollectionsState::new();
@@ -172,6 +180,7 @@ impl SpaceView {
                 this.profile_loading = false;
                 match result {
                     Ok(profile) => {
+                        this.followed = profile.followed();
                         this.profile = Some(profile);
                         this.profile_error = None;
                     }
@@ -180,6 +189,96 @@ impl SpaceView {
                 cx.notify();
             },
         );
+    }
+
+    fn toggle_follow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(mid) = self.mid else {
+            return;
+        };
+        if self.follow_pending || self.profile.is_none() {
+            return;
+        }
+        let Some(user) = login_state::user(cx) else {
+            login::open(window, cx);
+            return;
+        };
+        if Some(user.mid) == self.mid {
+            return;
+        }
+        let backend = match self.backend(cx) {
+            Ok(backend) => backend,
+            Err(error) => {
+                window.push_notification(Notification::error(error), cx);
+                return;
+            }
+        };
+
+        let follow = !self.followed;
+        let handle = window.window_handle();
+        self.follow_pending = true;
+        cx.notify();
+
+        spawn_api(
+            cx,
+            async move { backend.modify_relation(mid, follow).await },
+            move |this, result, cx| {
+                this.follow_pending = false;
+                match result {
+                    Ok(()) => {
+                        if this.mid == Some(mid) {
+                            this.apply_follow(follow);
+                        }
+                        let note = Notification::success(if follow {
+                            "已关注"
+                        } else {
+                            "已取消关注"
+                        });
+                        let _ = handle.update(cx, |_, window, cx| {
+                            window.push_notification(note, cx);
+                        });
+                    }
+                    Err(error) => {
+                        let note = Notification::error(api_task_error_message(error, cx));
+                        let _ = handle.update(cx, |_, window, cx| {
+                            window.push_notification(note, cx);
+                        });
+                    }
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    fn apply_follow(&mut self, follow: bool) {
+        self.followed = follow;
+        if let Some(relation) = self
+            .profile
+            .as_mut()
+            .and_then(|profile| profile.relation.as_mut())
+        {
+            relation.follower = if follow {
+                relation.follower.saturating_add(1)
+            } else {
+                relation.follower.saturating_sub(1)
+            };
+        }
+    }
+
+    fn open_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(mid) = self.mid else {
+            return;
+        };
+        if login_state::user(cx).is_none() {
+            login::open(window, cx);
+            return;
+        }
+        let name = self
+            .profile
+            .as_ref()
+            .map(|profile| profile.user.name.clone())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| self.name.clone());
+        compose::open(window, cx, mid, name);
     }
 
     fn load_if_needed(&mut self, cx: &mut Context<Self>) {
@@ -610,7 +709,8 @@ impl SpaceView {
         let radius = theme.radius_lg;
 
         let profile = self.profile.as_ref();
-        let seed = login::user(cx).filter(|user| Some(user.mid) == self.mid);
+        let viewer = login_state::user(cx);
+        let seed = viewer.as_ref().filter(|user| Some(user.mid) == self.mid);
         let name = profile
             .map(|profile| profile.user.name.as_str())
             .filter(|name| !name.is_empty())
@@ -650,6 +750,12 @@ impl SpaceView {
         let likes = stat_value(profile.and_then(|profile| profile.likes()));
         let loading_sign = self.profile.is_none() && self.profile_loading;
         let error = self.profile_error.clone();
+        let is_self = viewer
+            .as_ref()
+            .is_some_and(|user| Some(user.mid) == self.mid);
+        let followed = self.followed;
+        let follow_pending = self.follow_pending;
+        let actions_ready = self.profile.is_some();
 
         v_flex()
             .w_full()
@@ -769,11 +875,60 @@ impl SpaceView {
                     .child(
                         h_flex()
                             .flex_shrink_0()
-                            .gap_8()
+                            .items_center()
+                            .gap_6()
                             .pt_3()
-                            .child(profile_stat("关注数", following, cx))
-                            .child(profile_stat("粉丝数", follower, cx))
-                            .child(profile_stat("获赞数", likes, cx)),
+                            .child(
+                                h_flex()
+                                    .gap_8()
+                                    .child(profile_stat("关注数", following, cx))
+                                    .child(profile_stat("粉丝数", follower, cx))
+                                    .child(profile_stat("获赞数", likes, cx)),
+                            )
+                            .when(!is_self, |this| {
+                                this.child(
+                                    h_flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            Button::new("space-follow")
+                                                .small()
+                                                .min_w(px(84.))
+                                                .when(followed, |button| {
+                                                    button.secondary().icon(IconName::Check)
+                                                })
+                                                .when(!followed, |button| {
+                                                    button.primary().icon(IconName::Plus)
+                                                })
+                                                .label(if followed {
+                                                    "已关注"
+                                                } else {
+                                                    "关注"
+                                                })
+                                                .loading(follow_pending)
+                                                .disabled(follow_pending || !actions_ready)
+                                                .tooltip(if followed {
+                                                    "取消关注"
+                                                } else {
+                                                    "关注 UP 主"
+                                                })
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.toggle_follow(window, cx)
+                                                })),
+                                        )
+                                        .child(
+                                            Button::new("space-message")
+                                                .small()
+                                                .primary()
+                                                .outline()
+                                                .label("发消息")
+                                                .tooltip("发送私信")
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.open_message(window, cx)
+                                                })),
+                                        ),
+                                )
+                            }),
                     ),
             )
             .when_some(error, |this, error| {

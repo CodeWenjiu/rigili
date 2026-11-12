@@ -172,6 +172,10 @@ impl Backend {
         api::space::profile(&self.client, mid).await
     }
 
+    pub async fn modify_relation(&self, mid: u64, follow: bool) -> Result<(), ApiError> {
+        api::space::modify_relation(&self.client, mid, follow).await
+    }
+
     pub async fn comments(
         &self,
         kind: u32,

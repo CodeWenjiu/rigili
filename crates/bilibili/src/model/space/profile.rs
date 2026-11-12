@@ -53,6 +53,20 @@ pub struct SpaceRelation {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct SpaceRelationStatus {
+    #[serde(default)]
+    pub mid: u64,
+    #[serde(default)]
+    pub attribute: u64,
+}
+
+impl SpaceRelationStatus {
+    pub fn is_followed(&self) -> bool {
+        self.attribute & 2 != 0
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct SpaceUpStat {
     #[serde(default)]
     pub archive: SpaceArchiveStat,
@@ -71,6 +85,7 @@ pub struct SpaceProfile {
     pub user: SpaceUser,
     pub relation: Option<SpaceRelation>,
     pub up: Option<SpaceUpStat>,
+    pub viewer: Option<SpaceRelationStatus>,
 }
 
 impl SpaceProfile {
@@ -86,6 +101,12 @@ impl SpaceProfile {
         self.up.as_ref().map(|up| up.likes)
     }
 
+    pub fn followed(&self) -> bool {
+        self.viewer
+            .as_ref()
+            .is_some_and(SpaceRelationStatus::is_followed)
+    }
+
     pub fn official_title(&self) -> Option<&str> {
         let title = self.user.official.title.as_str();
         (!title.is_empty()).then_some(title)
@@ -99,7 +120,9 @@ impl SpaceProfile {
 
 #[cfg(test)]
 mod tests {
-    use super::{SpaceRelation, SpaceUpStat, SpaceUser};
+    use std::collections::BTreeMap;
+
+    use super::{SpaceRelation, SpaceRelationStatus, SpaceUpStat, SpaceUser};
 
     #[test]
     fn parses_space_user_info_and_tolerates_missing_fields() {
@@ -137,6 +160,21 @@ mod tests {
                 .expect("relation fixture");
         assert_eq!(relation.following, 42);
         assert_eq!(relation.follower, 25_000);
+
+        let followed: SpaceRelationStatus =
+            serde_json::from_str(r#"{"mid": 2, "attribute": 6}"#).expect("relation status");
+        assert!(followed.is_followed());
+
+        let none: SpaceRelationStatus =
+            serde_json::from_str(r#"{"mid": 2, "attribute": 0}"#).expect("relation status");
+        assert!(!none.is_followed());
+
+        let batch: BTreeMap<String, SpaceRelationStatus> = serde_json::from_str(
+            r#"{"11": {"mid": 11, "attribute": 2}, "12": {"mid": 12, "attribute": 0}}"#,
+        )
+        .expect("batch relation statuses");
+        assert!(batch["11"].is_followed());
+        assert!(!batch["12"].is_followed());
 
         let up: SpaceUpStat = serde_json::from_str(
             r#"{"archive": {"view": 57381, "danmaku": 10}, "article": {"view": 0}, "likes": 59000}"#,
