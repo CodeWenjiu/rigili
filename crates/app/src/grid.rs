@@ -14,7 +14,7 @@ use rigili_bilibili::{
     FavItem, HistoryItem, PopularVideo, RecommendVideo, SearchVideo, SpaceVideo, WatchLaterItem,
     thumbnail,
 };
-use rigili_core::{OpenVideo, format_count, format_date, format_duration, format_ymd};
+use rigili_core::{OpenSpace, OpenVideo, format_count, format_date, format_duration, format_ymd};
 
 use crate::platform::theme::cover_scrim;
 use crate::preview::{self, PreviewSource};
@@ -267,7 +267,7 @@ impl From<SpaceVideo> for VideoCard {
             cover: video.pic,
             title: video.title,
             author: video.author.clone(),
-            author_mid: None,
+            author_mid: (video.mid != 0).then_some(video.mid),
             meta: format!("{} · {}", video.author, format_ymd(video.created)),
             duration: video.length,
             views: format_count(video.play),
@@ -288,7 +288,7 @@ impl From<FavItem> for VideoCard {
             cover: item.cover,
             title: item.title,
             author: item.upper.name.clone(),
-            author_mid: None,
+            author_mid: (item.upper.mid != 0).then_some(item.upper.mid),
             meta: format!("{} · {}", item.upper.name, format_date(item.pubtime)),
             duration: format_duration(item.duration),
             views: format_count(item.cnt_info.play),
@@ -309,7 +309,7 @@ impl From<HistoryItem> for VideoCard {
             cover: item.cover,
             title: item.title,
             author: item.author_name.clone(),
-            author_mid: None,
+            author_mid: (item.author_mid != 0).then_some(item.author_mid),
             meta: format!("{} · {}", item.author_name, format_date(item.view_at)),
             duration: format_duration(item.duration),
             views: String::new(),
@@ -760,17 +760,49 @@ pub(crate) fn media_card(
         )
 }
 
-pub(crate) fn video_card(
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum VideoCardKind {
+    #[default]
+    Default,
+    Search,
+}
+
+pub(crate) fn video_card<V>(
     card: &VideoCard,
+    kind: VideoCardKind,
     style: CardStyle,
     metrics: CardMetrics,
     window: &mut Window,
-    cx: &mut App,
+    cx: &mut Context<V>,
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> AnyElement {
+) -> AnyElement
+where
+    V: EventEmitter<OpenSpace> + 'static,
+{
     let views = card.views();
     let danmaku = card.danmaku();
     let duration = card.duration();
+    let author = card.author_mid().map(|mid| {
+        let name = card.author().to_owned();
+        MediaAuthor {
+            on_click: Rc::new(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                cx.emit(OpenSpace {
+                    mid,
+                    name: name.clone(),
+                });
+            })),
+        }
+    });
+    let (footer_icon, secondary) = match kind {
+        VideoCardKind::Default => (
+            None,
+            (!danmaku.is_empty()).then_some((Some(IconName::MessageCircle), danmaku)),
+        ),
+        VideoCardKind::Search => (
+            Some(IconName::MonitorPlay),
+            Some((Some(IconName::ThumbsUp), card.like())),
+        ),
+    };
 
     media_card(
         MediaCard {
@@ -778,18 +810,17 @@ pub(crate) fn video_card(
             cover: card.cover(),
             title: card.title(),
             footer: Some(card.meta()),
-            footer_icon: None,
+            footer_icon,
             title_lines: 2,
             thumb_width: metrics.thumb_width,
-            author: None,
+            author,
             video: Some(MediaVideo {
                 bvid: card.id().clone(),
                 cid: card.cid(),
             }),
             overlay: CardOverlay {
                 leading: (!views.is_empty()).then_some((IconName::Play, views)),
-                secondary: (!danmaku.is_empty())
-                    .then_some((Some(IconName::MessageCircle), danmaku)),
+                secondary,
                 trailing: (!duration.is_empty()).then_some(duration),
                 badge: None,
             },
@@ -925,7 +956,9 @@ mod tests {
         round_to_device_pixel,
     };
     use gpui_kit::px;
-    use rigili_bilibili::SearchVideo;
+    use rigili_bilibili::{
+        FavCounts, FavItem, FavUpper, HistoryItem, HistoryRef, SearchVideo, SpaceVideo,
+    };
 
     #[test]
     fn fits_and_stretches_cards_into_the_available_width() {
@@ -989,6 +1022,42 @@ mod tests {
                 assert!(total_dp <= width.as_f32() * scale, "{width:?} @ {scale}x");
             }
         }
+    }
+
+    #[test]
+    fn keeps_author_mids_for_profile_links() {
+        let card = VideoCard::from(FavItem {
+            bvid: "BV1".into(),
+            title: String::new(),
+            cover: String::new(),
+            duration: 0,
+            pubtime: 0,
+            upper: FavUpper {
+                mid: 42,
+                name: "UP".into(),
+            },
+            cnt_info: FavCounts::default(),
+        });
+        assert_eq!(card.author_mid(), Some(42));
+
+        let card = VideoCard::from(HistoryItem {
+            title: String::new(),
+            cover: String::new(),
+            author_name: "UP".into(),
+            author_mid: 43,
+            duration: 0,
+            view_at: 0,
+            history: HistoryRef::default(),
+        });
+        assert_eq!(card.author_mid(), Some(43));
+
+        let card = VideoCard::from(SpaceVideo {
+            bvid: "BV3".into(),
+            author: "UP".into(),
+            mid: 44,
+            ..Default::default()
+        });
+        assert_eq!(card.author_mid(), Some(44));
     }
 
     #[test]

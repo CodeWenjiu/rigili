@@ -155,20 +155,6 @@ impl HomeItem {
         }
     }
 
-    fn author(&self) -> &str {
-        match self {
-            Self::Video(video) => video.author(),
-            Self::Live(_) | Self::Pgc(_) => "",
-        }
-    }
-
-    fn author_mid(&self) -> Option<u64> {
-        match self {
-            Self::Video(video) => video.author_mid(),
-            Self::Live(_) | Self::Pgc(_) => None,
-        }
-    }
-
     fn leading(&self) -> Option<(IconName, &str)> {
         match self {
             Self::Video(video) => Some((IconName::Play, video.views())),

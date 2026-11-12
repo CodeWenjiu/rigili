@@ -35,6 +35,8 @@ pub struct FavItem {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct FavUpper {
     #[serde(default)]
+    pub mid: u64,
+    #[serde(default)]
     pub name: String,
 }
 
@@ -61,7 +63,7 @@ mod tests {
                     "cover": "https://example.com/cover.jpg",
                     "duration": 125,
                     "pubtime": 1762646400,
-                    "upper": {"name": "UP 主"},
+                    "upper": {"mid": 42, "name": "UP 主"},
                     "cnt_info": {"play": 12345, "danmaku": 67}
                 }]
             }"#,
@@ -72,6 +74,7 @@ mod tests {
         let items = items.into_items();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].bvid, "BV1xx411c7mD");
+        assert_eq!(items[0].upper.mid, 42);
         assert_eq!(items[0].upper.name, "UP 主");
         assert_eq!(items[0].cnt_info.play, 12345);
         assert_eq!(items[0].cnt_info.danmaku, 67);

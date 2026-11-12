@@ -7,54 +7,14 @@ use rigili_bilibili::thumbnail;
 
 use super::items::{ArticleItem, LiveItem, MediaItem, UserItem};
 use crate::grid::{
-    CardGrid, CardMetrics, CardOverlay, CardStyle, MediaAuthor, MediaCard as CardLayout,
-    MediaVideo, VideoCard, VideoCards, card_height,
+    CardGrid, CardMetrics, CardOverlay, CardStyle, MediaCard as CardLayout, MediaVideo, VideoCard,
+    VideoCards, card_height,
 };
 
 pub(crate) const ROW_HEIGHT: Pixels = px(96.);
 
 const PREVIEW_TEXT_HEIGHT: f32 = 22.;
 const USER_BLOCK_CHROME: f32 = 156.;
-
-pub(crate) fn video_card(
-    video: &VideoCard,
-    style: CardStyle,
-    metrics: CardMetrics,
-    window: &mut Window,
-    cx: &mut App,
-    on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_author: Option<MediaAuthor>,
-) -> AnyElement {
-    crate::grid::media_card(
-        CardLayout {
-            id: video.id().clone(),
-            cover: video.cover(),
-            title: video.title(),
-            footer: Some(video.meta()),
-            footer_icon: Some(IconName::MonitorPlay),
-            title_lines: 2,
-            thumb_width: metrics.thumb_width,
-            author: on_author,
-            video: Some(MediaVideo {
-                bvid: video.id().clone(),
-                cid: video.cid(),
-            }),
-            overlay: CardOverlay {
-                leading: Some((IconName::Play, video.views())),
-                secondary: Some((Some(IconName::ThumbsUp), video.like())),
-                trailing: Some(video.duration()),
-                badge: None,
-            },
-        },
-        style,
-        metrics.width,
-        metrics.text_height,
-        window,
-        cx,
-        on_open,
-    )
-    .into_any_element()
-}
 
 pub(crate) fn media_item_card(
     item: &MediaItem,

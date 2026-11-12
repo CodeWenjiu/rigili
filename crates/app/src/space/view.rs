@@ -19,13 +19,15 @@ use rigili_bilibili::{
 use rigili_core::backend::{self, Backend};
 use rigili_core::login as login_state;
 use rigili_core::runtime::spawn_api;
-use rigili_core::{OpenVideo, Refresh, api_error_message, api_task_error_message, format_count};
+use rigili_core::{
+    OpenSpace, OpenVideo, Refresh, api_error_message, api_task_error_message, format_count,
+};
 
 use super::{comment, compose};
 use crate::grid::{
     CARD_GAP, CardGrid, CardMetrics, CardStyle, FolderCards, LIST_FOOTER_HEIGHT, VideoCard,
-    VideoCards, append_unique_by, card_text_height, list_content_size, list_footer, page_gutter,
-    profile_badge, profile_stat, video_card, virtual_list_scrollbar,
+    VideoCardKind, VideoCards, append_unique_by, card_text_height, list_content_size, list_footer,
+    page_gutter, profile_badge, profile_stat, video_card, virtual_list_scrollbar,
 };
 use crate::login;
 
@@ -81,6 +83,7 @@ pub struct SpaceView {
 }
 
 impl EventEmitter<OpenVideo> for SpaceView {}
+impl EventEmitter<OpenSpace> for SpaceView {}
 impl EventEmitter<CloseSpace> for SpaceView {}
 
 impl SpaceView {
@@ -1475,7 +1478,15 @@ impl SpaceView {
                 let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| {
                     cx.emit(open.clone());
                 });
-                video_card(card, style, metrics, window, cx, on_open)
+                video_card(
+                    card,
+                    VideoCardKind::Default,
+                    style,
+                    metrics,
+                    window,
+                    cx,
+                    on_open,
+                )
             }))
             .into_any_element()
     }

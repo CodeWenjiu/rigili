@@ -35,6 +35,8 @@ pub struct SpaceVideo {
     #[serde(default)]
     pub author: String,
     #[serde(default)]
+    pub mid: u64,
+    #[serde(default)]
     pub created: i64,
     #[serde(default)]
     pub length: String,
@@ -59,6 +61,7 @@ mod tests {
                         "title": "投稿视频",
                         "pic": "cover.jpg",
                         "author": "UP",
+                        "mid": 42,
                         "created": 1712426819,
                         "length": "01:03",
                         "play": 703,
@@ -73,6 +76,7 @@ mod tests {
         assert_eq!(page.page.pn, 1);
         assert_eq!(page.list.vlist.len(), 1);
         assert_eq!(page.list.vlist[0].bvid, "BV1HJ4m1V7F4");
+        assert_eq!(page.list.vlist[0].mid, 42);
         assert_eq!(page.list.vlist[0].play, 703);
     }
 }

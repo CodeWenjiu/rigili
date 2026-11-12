@@ -9,14 +9,14 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::cards::{
-    ROW_HEIGHT, article_row, live_card, media_item_card, user_block_height, user_row, video_card,
+    ROW_HEIGHT, article_row, live_card, media_item_card, user_block_height, user_row,
 };
 use super::items::SearchItem;
 use super::{SearchLayout, SearchTab, SearchView};
 use crate::grid::{
-    CARD_GAP, CardFrame, CardGrid, CardMetrics, CardStyle, LIST_FOOTER_HEIGHT, MediaAuthor,
-    OpenHandler, VideoCards, card_text_height, list_content_size, list_footer, page_gutter,
-    skeleton_card, virtual_list_scrollbar,
+    CARD_GAP, CardFrame, CardGrid, CardMetrics, CardStyle, LIST_FOOTER_HEIGHT, VideoCardKind,
+    VideoCards, card_text_height, list_content_size, list_footer, page_gutter, skeleton_card,
+    video_card, virtual_list_scrollbar,
 };
 use rigili_core::{OpenLive, OpenSpace};
 
@@ -55,18 +55,15 @@ impl SearchView {
                     let open = video.open();
                     let on_open =
                         cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(open.clone()));
-                    let on_author = video.author_mid().map(|mid| {
-                        let name = video.author().to_owned();
-                        let handler: Rc<OpenHandler> =
-                            Rc::new(cx.listener(move |_, _: &ClickEvent, _, cx| {
-                                cx.emit(OpenSpace {
-                                    mid,
-                                    name: name.clone(),
-                                });
-                            }));
-                        MediaAuthor { on_click: handler }
-                    });
-                    video_card(video, style, metrics, window, cx, on_open, on_author)
+                    video_card(
+                        video,
+                        VideoCardKind::Search,
+                        style,
+                        metrics,
+                        window,
+                        cx,
+                        on_open,
+                    )
                 }
                 SearchItem::Media(media) => {
                     let season_id = media.season_id;

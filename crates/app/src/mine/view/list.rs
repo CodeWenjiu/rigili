@@ -10,8 +10,8 @@ use super::{FavoriteView, FolderSource, MineTab, MineView};
 
 use crate::grid::{
     BangumiCards, CARD_GAP, CardFrame, CardGrid, CardMetrics, CardOverlay, CardStyle, FolderCards,
-    LIST_FOOTER_HEIGHT, MediaCard, VideoCards, card_text_height, list_content_size, list_footer,
-    media_card, page_gutter, skeleton_card, virtual_list_scrollbar,
+    LIST_FOOTER_HEIGHT, MediaCard, VideoCardKind, VideoCards, card_text_height, list_content_size,
+    list_footer, media_card, page_gutter, skeleton_card, virtual_list_scrollbar,
 };
 use crate::platform::theme::cover_scrim;
 use gpui_kit::component::spinner::Spinner;
@@ -455,7 +455,15 @@ impl MineView {
                 let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| {
                     cx.emit(open.clone());
                 });
-                crate::grid::video_card(card, style, metrics, window, cx, on_open)
+                crate::grid::video_card(
+                    card,
+                    VideoCardKind::Default,
+                    style,
+                    metrics,
+                    window,
+                    cx,
+                    on_open,
+                )
             }))
             .into_any_element()
     }

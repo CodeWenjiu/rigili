@@ -25,6 +25,8 @@ pub struct HistoryItem {
     #[serde(default)]
     pub author_name: String,
     #[serde(default)]
+    pub author_mid: u64,
+    #[serde(default)]
     pub duration: u64,
     #[serde(default)]
     pub view_at: i64,
@@ -53,6 +55,7 @@ mod tests {
                     "title": "看过的视频",
                     "cover": "https://example.com/cover.jpg",
                     "author_name": "UP 主",
+                    "author_mid": 42,
                     "duration": 90,
                     "view_at": 1762646400,
                     "history": {"bvid": "BV1xx411c7mD", "business": "archive"}
@@ -66,5 +69,6 @@ mod tests {
         assert_eq!(page.list.len(), 1);
         assert_eq!(page.list[0].history.bvid, "BV1xx411c7mD");
         assert_eq!(page.list[0].author_name, "UP 主");
+        assert_eq!(page.list[0].author_mid, 42);
     }
 }

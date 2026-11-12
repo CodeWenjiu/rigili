@@ -9,11 +9,10 @@ use gpui_kit::*;
 
 use super::{HomeItem, HomeTab, HomeView};
 use crate::grid::{
-    CARD_GAP, CardFrame, CardGrid, CardOverlay, CardStyle, LIST_FOOTER_HEIGHT, MediaAuthor,
-    MediaCard, MediaVideo, OpenHandler, VideoCards, card_text_height, list_content_size,
-    list_footer, media_card, page_gutter, skeleton_card, virtual_list_scrollbar,
+    CARD_GAP, CardFrame, CardGrid, CardOverlay, CardStyle, LIST_FOOTER_HEIGHT, MediaCard,
+    VideoCardKind, VideoCards, card_text_height, list_content_size, list_footer, media_card,
+    page_gutter, skeleton_card, video_card, virtual_list_scrollbar,
 };
-use rigili_core::OpenSpace;
 
 impl HomeView {
     fn render_row(
@@ -42,18 +41,19 @@ impl HomeView {
                 let on_open = cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.open_target(target.clone(), cx);
                 });
-                let on_author = item.author_mid().map(|mid| {
-                    let name = item.author().to_owned();
-                    let handler: Rc<OpenHandler> =
-                        Rc::new(cx.listener(move |_, _: &ClickEvent, _, cx| {
-                            cx.emit(OpenSpace {
-                                mid,
-                                name: name.clone(),
-                            });
-                        }));
-                    MediaAuthor { on_click: handler }
-                });
-                home_card(item, is_opening, frame, window, cx, on_open, on_author)
+                if let HomeItem::Video(video) = item {
+                    video_card(
+                        video,
+                        VideoCardKind::Default,
+                        frame.style,
+                        frame.metrics,
+                        window,
+                        cx,
+                        on_open,
+                    )
+                } else {
+                    home_card(item, is_opening, frame, window, cx, on_open)
+                }
             }))
             .into_any_element()
     }
@@ -224,16 +224,8 @@ fn home_card(
     window: &mut Window,
     cx: &mut App,
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_author: Option<MediaAuthor>,
 ) -> AnyElement {
     let CardFrame { style, metrics } = frame;
-    let video = match item {
-        HomeItem::Video(video) => Some(MediaVideo {
-            bvid: video.id().clone(),
-            cid: video.cid(),
-        }),
-        HomeItem::Live(_) | HomeItem::Pgc(_) => None,
-    };
     let card = media_card(
         MediaCard {
             id: item.id().clone(),
@@ -249,8 +241,8 @@ fn home_card(
                 trailing: item.trailing(),
                 badge: item.badge(),
             },
-            author: on_author,
-            video,
+            author: None,
+            video: None,
         },
         style,
         metrics.width,

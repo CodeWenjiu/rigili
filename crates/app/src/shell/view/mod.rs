@@ -153,6 +153,7 @@ impl MainView {
         Self::forward_video_events(cx, &mine, window);
         Self::forward_space_events(cx, &mine, window);
         Self::forward_video_events(cx, &space, window);
+        Self::forward_space_events(cx, &space, window);
         Self::forward_close_space_events(cx, &space, window);
 
         cx.on_window_closed({
