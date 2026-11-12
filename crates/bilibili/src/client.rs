@@ -34,6 +34,7 @@ pub struct Client {
     next_request: Arc<Mutex<Option<Instant>>>,
     requests: Arc<Semaphore>,
     wbi: Arc<OnceCell<WbiSigner>>,
+    dev_id: String,
 }
 
 impl Client {
@@ -78,6 +79,7 @@ impl Client {
             next_request: Arc::new(Mutex::new(None)),
             requests: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
             wbi: Arc::new(OnceCell::new()),
+            dev_id: generate_dev_id(),
         })
     }
 
@@ -91,6 +93,25 @@ impl Client {
 
     pub fn cookie_values(&self) -> BTreeMap<String, String> {
         lock_cookies(&self.cookies).clone()
+    }
+
+    pub fn csrf(&self) -> Result<String, ApiError> {
+        self.cookie_values()
+            .get("bili_jct")
+            .filter(|value| !value.is_empty())
+            .cloned()
+            .ok_or_else(login_required)
+    }
+
+    pub fn account_uid(&self) -> Result<u64, ApiError> {
+        self.cookie_values()
+            .get("DedeUserID")
+            .and_then(|value| value.parse().ok())
+            .ok_or_else(login_required)
+    }
+
+    pub(crate) fn dev_id(&self) -> &str {
+        &self.dev_id
     }
 
     pub fn jar_cookies(&self) -> BTreeMap<String, String> {
@@ -151,6 +172,27 @@ impl Client {
         T: DeserializeOwned,
     {
         let response = self.send(|| self.http.post(url).form(params)).await?;
+        let body = response.text().await?;
+        self.parse(&body)
+    }
+
+    pub async fn post_wbi_form<T>(
+        &self,
+        url: &str,
+        params: &[(&str, String)],
+        form: &[(&str, String)],
+    ) -> Result<T, ApiError>
+    where
+        T: DeserializeOwned,
+    {
+        let signer = self.wbi.get_or_try_init(|| WbiSigner::fetch(self)).await?;
+        let params = params
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), value.clone()))
+            .collect::<Vec<_>>();
+        let query = signer.sign(&params, unix_timestamp());
+        let target = format!("{url}?{query}");
+        let response = self.send(|| self.http.post(&target).form(form)).await?;
         let body = response.text().await?;
         self.parse(&body)
     }
@@ -292,11 +334,57 @@ fn retryable_error(error: &reqwest::Error) -> bool {
     error.is_timeout() || error.is_connect()
 }
 
-fn unix_timestamp() -> u64 {
+pub(crate) fn unix_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0)
+}
+
+fn login_required() -> ApiError {
+    ApiError::Bilibili {
+        code: -101,
+        message: "账号未登录".into(),
+    }
+}
+
+fn generate_dev_id() -> String {
+    use std::{
+        collections::hash_map::DefaultHasher,
+        hash::{Hash, Hasher},
+    };
+
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let seed = nanos.wrapping_add(u128::from(counter) << 64);
+
+    let mut hasher = DefaultHasher::new();
+    seed.hash(&mut hasher);
+    let high = hasher.finish();
+    let mut hasher = DefaultHasher::new();
+    (high, seed).hash(&mut hasher);
+    let low = hasher.finish();
+
+    let mut bytes = ((u128::from(high) << 64) | u128::from(low)).to_be_bytes();
+    bytes[6] = (bytes[6] & 0x0F) | 0x40;
+    bytes[8] = (bytes[8] & 0x3F) | 0x80;
+    let hex = bytes
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<String>();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
 }
 
 fn add_cookie(jar: &Jar, name: &str, value: &str) {
@@ -386,6 +474,37 @@ mod tests {
         assert!(Session::load(&dir).expect("load").is_none());
 
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn exposes_account_cookies_and_a_stable_device_id() {
+        let client = Client::with_data_dir(None).expect("client");
+        assert!(matches!(
+            client.csrf(),
+            Err(ApiError::Bilibili { code: -101, .. })
+        ));
+        assert!(matches!(
+            client.account_uid(),
+            Err(ApiError::Bilibili { code: -101, .. })
+        ));
+
+        client.set_cookies([
+            ("bili_jct".to_string(), "csrf".to_string()),
+            ("DedeUserID".to_string(), "42".to_string()),
+        ]);
+        assert_eq!(client.csrf().expect("csrf"), "csrf");
+        assert_eq!(client.account_uid().expect("uid"), 42);
+
+        let dev_id = client.dev_id();
+        assert_eq!(dev_id.len(), 36);
+        let groups = dev_id.split('-').map(str::len).collect::<Vec<_>>();
+        assert_eq!(groups, [8, 4, 4, 4, 12]);
+        assert!(
+            dev_id
+                .chars()
+                .all(|character| character.is_ascii_hexdigit() || character == '-')
+        );
+        assert_eq!(client.clone().dev_id(), dev_id);
     }
 
     #[test]

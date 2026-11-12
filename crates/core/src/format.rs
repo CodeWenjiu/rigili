@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rigili_bilibili::ApiError;
 
@@ -53,6 +53,37 @@ pub fn format_datetime(unix: i64) -> String {
     )
 }
 
+pub fn format_message_time(unix: i64) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+    format_message_time_at(unix, now)
+}
+
+fn format_message_time_at(unix: i64, now: i64) -> String {
+    if unix <= 0 {
+        return String::new();
+    }
+
+    let day = beijing_day(unix);
+    let today = beijing_day(now);
+    let (year, month, date) = civil_from_days(day);
+    if day == today {
+        let seconds = (unix + BEIJING_OFFSET).rem_euclid(86_400);
+        format!("{:02}:{:02}", seconds / 3600, seconds % 3600 / 60)
+    } else if day + 1 == today {
+        "昨天".into()
+    } else {
+        let (current_year, _, _) = civil_from_days(today);
+        if year == current_year {
+            format!("{month}月{date}日")
+        } else {
+            format!("{year}年{month}月{date}日")
+        }
+    }
+}
+
 const BEIJING_OFFSET: i64 = 8 * 3600;
 
 fn beijing_day(unix: i64) -> i64 {
@@ -94,7 +125,7 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 mod tests {
     use super::{
         api_error_message, format_clock, format_count, format_date, format_datetime,
-        format_duration, format_ymd,
+        format_duration, format_message_time_at, format_ymd,
     };
     use rigili_bilibili::ApiError;
 
@@ -153,5 +184,18 @@ mod tests {
             format_datetime(1_762_646_400 + 13 * 3600 + 16 * 60),
             "2025-11-09 21:16"
         );
+    }
+
+    #[test]
+    fn formats_message_times() {
+        let now = 1_762_646_400;
+        assert_eq!(format_message_time_at(now, now), "08:00");
+        assert_eq!(format_message_time_at(now - 86_400, now), "昨天");
+        assert_eq!(format_message_time_at(now - 39 * 86_400, now), "10月1日");
+        assert_eq!(
+            format_message_time_at(now - 365 * 86_400, now),
+            "2024年11月9日"
+        );
+        assert_eq!(format_message_time_at(0, now), "");
     }
 }

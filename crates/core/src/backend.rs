@@ -3,11 +3,13 @@ use std::{collections::BTreeMap, sync::Arc};
 use gpui_kit::*;
 use rigili_bilibili::{
     ApiError, ArticleSearch, BangumiFollows, Client, CommentPage, CreatedFolder, Dynamics,
-    FavFolders, FavItems, HistoryPage, HotWords, LiveRoom, LiveSearch, MediaSearch, Nav, NavStat,
-    PgcIndex, PgcSeason, PlayUrl, Popular, QrCode, QrPoll, Recommend, SearchAll, SearchSuggestions,
-    SessionError, SpaceCollections, SpaceProfile, SpaceVideos, UserSearch, VideoInfo, VideoSearch,
-    WatchLater, api,
+    FavFolders, FavItems, HistoryPage, HotWords, LiveRoom, LiveSearch, MediaSearch, MessageCursor,
+    MessageFeed, MessageSessions, MessageUserInfo, Nav, NavStat, PgcIndex, PgcSeason, PlayUrl,
+    Popular, QrCode, QrPoll, Recommend, SearchAll, SearchSuggestions, SessionError,
+    SpaceCollections, SpaceProfile, SpaceVideos, UserSearch, VideoInfo, VideoSearch, WatchLater,
+    api,
     api::comment::CommentSort,
+    api::message::MessageFeedKind,
     api::search::{SearchOrder, SearchType},
     api::space::SpaceVideoOrder,
 };
@@ -216,6 +218,29 @@ impl Backend {
 
     pub async fn watch_later_add(&self, bvid: &str) -> Result<(), ApiError> {
         api::mine::watch_later_add(&self.client, bvid).await
+    }
+
+    pub async fn message_sessions(&self) -> Result<MessageSessions, ApiError> {
+        api::message::sessions(&self.client).await
+    }
+
+    pub async fn message_user_infos(
+        &self,
+        uids: Vec<u64>,
+    ) -> Result<Vec<MessageUserInfo>, ApiError> {
+        api::message::user_infos(&self.client, &uids).await
+    }
+
+    pub async fn message_feed(
+        &self,
+        kind: MessageFeedKind,
+        cursor: Option<MessageCursor>,
+    ) -> Result<MessageFeed, ApiError> {
+        api::message::feed(&self.client, kind, cursor).await
+    }
+
+    pub async fn send_message(&self, receiver: u64, content: &str) -> Result<(), ApiError> {
+        api::message::send_message(&self.client, receiver, content).await
     }
 
     pub async fn view(&self, bvid: &str) -> Result<VideoInfo, ApiError> {

@@ -1,3 +1,3 @@
 rigili_macro::mod_pub!(
-    comment, live, login, mine, pgc, playurl, popular, recommend, search, space, view
+    comment, live, login, message, mine, pgc, playurl, popular, recommend, search, space, view
 );

@@ -16,6 +16,7 @@ use rigili_core::{OpenLive, OpenSpace, OpenVideo, Refresh};
 use super::playback::Playback;
 use crate::home::{HomeTab, HomeView};
 use crate::login;
+use crate::message::MessagesView;
 use crate::mine::MineView;
 use crate::platform::image_cache;
 use crate::preview;
@@ -27,6 +28,8 @@ use search_box::SearchBox;
 pub struct MainView {
     home: Entity<HomeView>,
     search: Entity<SearchView>,
+    messages: Entity<MessagesView>,
+    messages_open: bool,
     mine: Entity<MineView>,
     space: Entity<SpaceView>,
     search_box: SearchBox,
@@ -50,6 +53,9 @@ struct SpaceRoute {
 }
 
 type NavHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+
+const SIDEBAR_WIDTH: Pixels = px(55.);
+const TOP_BAR_HEIGHT: Pixels = px(64.);
 
 #[derive(Clone)]
 struct NavItem {
@@ -126,10 +132,16 @@ fn search_width(window: &Window) -> Pixels {
     (window.viewport_size().width - px(24.)).clamp(px(240.), px(420.))
 }
 
+fn messages_panel_width(window: &Window) -> Pixels {
+    let insets = px(16.);
+    (window.viewport_size().width - SIDEBAR_WIDTH - insets).min(px(600.))
+}
+
 impl MainView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let home = cx.new(HomeView::new);
         let search = cx.new(SearchView::new);
+        let messages = cx.new(|_| MessagesView::new());
         let mine = cx.new(|cx| MineView::new(window, cx));
         let space = cx.new(|cx| SpaceView::new(window, cx));
         let search_box = SearchBox::new(window, cx);
@@ -137,6 +149,7 @@ impl MainView {
 
         Self::forward_page_events(cx, &home, window);
         Self::forward_page_events(cx, &search, window);
+        Self::forward_space_events(cx, &messages, window);
         Self::forward_video_events(cx, &mine, window);
         Self::forward_space_events(cx, &mine, window);
         Self::forward_video_events(cx, &space, window);
@@ -162,6 +175,8 @@ impl MainView {
         Self {
             home,
             search,
+            messages,
+            messages_open: false,
             mine,
             space,
             search_box,
@@ -222,6 +237,7 @@ impl MainView {
 
     fn submit_search(&mut self, cx: &mut Context<Self>) {
         preview::stop_all(cx);
+        self.messages_open = false;
         let keyword = self.search_box.value(cx).trim().to_owned();
         self.search_box.close();
         self.spaces.clear();
@@ -240,6 +256,7 @@ impl MainView {
 
     fn open_space(&mut self, request: OpenSpace, window: &mut Window, cx: &mut Context<Self>) {
         preview::stop_all(cx);
+        self.messages_open = false;
         if self
             .spaces
             .last()
@@ -316,6 +333,22 @@ impl MainView {
             .into_any_element()
     }
 
+    fn render_messages_panel(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .absolute()
+            .left(SIDEBAR_WIDTH + px(8.))
+            .top(TOP_BAR_HEIGHT + px(8.))
+            .bottom(px(8.))
+            .w(messages_panel_width(window))
+            .occlude()
+            .rounded(cx.theme().radius_lg)
+            .border_1()
+            .border_color(cx.theme().border)
+            .shadow_xl()
+            .child(self.messages.clone())
+            .into_any_element()
+    }
+
     fn render_logo(&self, cx: &mut Context<Self>) -> AnyElement {
         div()
             .h(px(40.))
@@ -337,7 +370,7 @@ impl MainView {
         let weak = cx.entity().downgrade();
 
         v_flex()
-            .w(px(55.))
+            .w(SIDEBAR_WIDTH)
             .h_full()
             .flex_shrink_0()
             .bg(cx.theme().sidebar)
@@ -358,6 +391,7 @@ impl MainView {
                                 move |_, _, cx| {
                                     let _ = weak.update(cx, |this, cx| {
                                         preview::stop_all(cx);
+                                        this.messages_open = false;
                                         if this.page != Page::Home || !this.spaces.is_empty() {
                                             this.page = Page::Home;
                                             this.spaces.clear();
@@ -376,6 +410,7 @@ impl MainView {
                                 move |_, _, cx| {
                                     let _ = weak.update(cx, |this, cx| {
                                         preview::stop_all(cx);
+                                        this.messages_open = false;
                                         if this.page == Page::Mine && this.spaces.is_empty() {
                                             return;
                                         }
@@ -390,12 +425,26 @@ impl MainView {
             )
             .child(div().flex_1())
             .child(
-                div()
+                v_flex()
                     .w_full()
                     .pb_3()
-                    .flex()
-                    .justify_center()
-                    .child(self.account(cx)),
+                    .items_center()
+                    .gap_1()
+                    .child(self.account(cx))
+                    .child(
+                        NavItem::new("消息", IconName::Mail)
+                            .active(self.messages_open)
+                            .on_click({
+                                let weak = weak.clone();
+                                move |_, _, cx| {
+                                    let _ = weak.update(cx, |this, cx| {
+                                        this.messages_open = !this.messages_open;
+                                        cx.notify();
+                                    });
+                                }
+                            })
+                            .render("nav-messages", cx),
+                    ),
             )
             .into_any_element()
     }
@@ -427,6 +476,7 @@ impl MainView {
                             .py_1()
                             .accessibility_label(tab.label())
                             .on_click(cx.listener(move |this, _, _, cx| {
+                                this.messages_open = false;
                                 this.page = Page::Home;
                                 this.spaces.clear();
                                 this.home.update(cx, |home, cx| home.show_tab(tab, cx));
@@ -457,7 +507,7 @@ impl MainView {
         let home_tab = self.home.read(cx).current_tab();
 
         h_flex()
-            .h_16()
+            .h(TOP_BAR_HEIGHT)
             .w_full()
             .flex_shrink_0()
             .items_center()
@@ -619,6 +669,7 @@ impl Render for MainView {
         let foreground = cx.theme().foreground;
 
         h_flex()
+            .relative()
             .size_full()
             .bg(background)
             .text_color(foreground)
@@ -664,5 +715,21 @@ impl Render for MainView {
                             }),
                     ),
             )
+            .when(self.messages_open, |this| {
+                this.child(
+                    div()
+                        .id("messages-backdrop")
+                        .absolute()
+                        .inset_0()
+                        .occlude()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.messages_open = false;
+                            cx.notify();
+                        })),
+                )
+            })
+            .when(self.messages_open, |this| {
+                this.child(self.render_messages_panel(window, cx))
+            })
     }
 }

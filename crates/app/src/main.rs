@@ -1,5 +1,14 @@
 rigili_macro::mod_prv!(
-    grid, home, login, mine, platform, preview, search, shell, space
+    grid,
+    home,
+    login,
+    message,
+    mine,
+    platform,
+    preview,
+    search,
+    shell,
+    space
 );
 
 use crate::platform::assets::AppAssets;
