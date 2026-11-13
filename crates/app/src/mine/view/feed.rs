@@ -145,6 +145,8 @@ impl MineView {
         if self.folders.current != Some(id) {
             self.folders.current = Some(id);
             self.load_favorite_items(cx);
+        } else if self.favorites_keyword != self.search.keyword() {
+            self.load_favorite_items(cx);
         }
         cx.notify();
     }
@@ -161,6 +163,8 @@ impl MineView {
                 return;
             }
         };
+        let keyword = self.search.keyword().to_owned();
+        self.favorites_keyword = keyword.clone();
 
         spawn_first(
             self,
@@ -168,7 +172,7 @@ impl MineView {
             |this| &mut this.favorites.list,
             |card: &VideoCard| card.bvid().to_owned(),
             async move {
-                let page = backend.fav_items(media_id, 1).await?;
+                let page = backend.fav_items(media_id, 1, &keyword).await?;
                 let has_more = page.has_more;
                 Ok(Page::new(
                     favorite_cards(page.into_items()),
@@ -197,6 +201,7 @@ impl MineView {
                 return;
             }
         };
+        let keyword = self.search.keyword().to_owned();
 
         spawn_more(
             self,
@@ -206,7 +211,7 @@ impl MineView {
             move |meta| {
                 let page = meta.page + 1;
                 async move {
-                    let result = backend.fav_items(media_id, page).await?;
+                    let result = backend.fav_items(media_id, page, &keyword).await?;
                     let has_more = result.has_more;
                     Ok(Page::new(
                         favorite_cards(result.into_items()),

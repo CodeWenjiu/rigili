@@ -228,8 +228,13 @@ impl Backend {
         api::space::collections(&self.client, mid, page).await
     }
 
-    pub async fn fav_items(&self, media_id: u64, page: u32) -> Result<FavItems, ApiError> {
-        api::mine::fav_items(&self.client, media_id, page).await
+    pub async fn fav_items(
+        &self,
+        media_id: u64,
+        page: u32,
+        keyword: &str,
+    ) -> Result<FavItems, ApiError> {
+        api::mine::fav_items(&self.client, media_id, page, keyword).await
     }
 
     pub async fn history(&self, max: u64, view_at: i64) -> Result<HistoryPage, ApiError> {

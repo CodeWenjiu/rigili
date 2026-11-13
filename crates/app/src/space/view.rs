@@ -4,7 +4,6 @@ use std::ops::{Deref, DerefMut};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tooltip::Tooltip;
@@ -21,6 +20,7 @@ use rigili_core::runtime::spawn_api;
 use rigili_core::{OpenSpace, OpenVideo, Refresh, api_task_error_message, format_count};
 
 use super::{comment, compose};
+use crate::filter::{self, text_matches};
 use crate::grid::{
     CARD_GAP, CardFrame, CardGrid, CardStyle, FolderCards, VideoCard, VideoCards, card_text_height,
 };
@@ -80,9 +80,7 @@ pub struct SpaceView {
     dynamics_scroll: scroll::ScrollArea,
     collections_scroll: scroll::ScrollArea,
     list_width: Pixels,
-    keyword: String,
-    space_search: Entity<InputState>,
-    _space_search_sub: Subscription,
+    search: filter::Search,
 }
 
 impl EventEmitter<OpenVideo> for SpaceView {}
@@ -101,18 +99,9 @@ impl crate::list::ListWidth for SpaceView {
 
 impl SpaceView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let space_search =
-            cx.new(|cx| InputState::new(window, cx).placeholder("搜索动态、投稿、合集"));
-        let space_search_sub =
-            cx.subscribe_in(&space_search, window, |this, _, event, _, cx| match event {
-                InputEvent::PressEnter { .. } => this.submit_search(cx),
-                InputEvent::Change
-                    if this.space_search.read(cx).value().is_empty()
-                        && !this.keyword.is_empty() =>
-                {
-                    this.submit_search(cx);
-                }
-                _ => {}
+        let search =
+            filter::Search::new(window, cx, "搜索动态、投稿、合集", |this, cx| {
+                this.submit_search(cx)
             });
         let comments_focus = cx.focus_handle();
         let comment_trigger_focus = cx.focus_handle();
@@ -137,9 +126,7 @@ impl SpaceView {
             dynamics_scroll: scroll::ScrollArea::new(),
             collections_scroll: scroll::ScrollArea::new(),
             list_width: px(0.),
-            keyword: String::new(),
-            space_search,
-            _space_search_sub: space_search_sub,
+            search,
         }
     }
 
@@ -165,9 +152,7 @@ impl SpaceView {
         self.space_videos = SpaceVideosState::new();
         self.collections = CollectionsState::new();
         self.list_width = px(0.);
-        self.keyword.clear();
-        self.space_search
-            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.search.clear(window, cx);
         self.load_profile(cx);
         self.load_if_needed(cx);
         cx.notify();
@@ -393,11 +378,9 @@ impl SpaceView {
     }
 
     fn submit_search(&mut self, cx: &mut Context<Self>) {
-        let keyword = self.space_search.read(cx).value().trim().to_owned();
-        if keyword == self.keyword {
+        if !self.search.submit(cx) {
             return;
         }
-        self.keyword = keyword;
         self.expanded_comments = None;
         self.comment_trigger_key = None;
         if self.tab == SpaceTab::Videos {
@@ -554,7 +537,7 @@ impl SpaceView {
             }
         };
         let order = self.space_videos.order;
-        let keyword = self.keyword.clone();
+        let keyword = self.search.keyword().to_owned();
 
         spawn_first(
             self,
@@ -579,7 +562,7 @@ impl SpaceView {
             }
         };
         let order = self.space_videos.order;
-        let keyword = self.keyword.clone();
+        let keyword = self.search.keyword().to_owned();
 
         spawn_more(
             self,
@@ -912,19 +895,22 @@ impl SpaceView {
             return empty_state(Layout::Centered, muted, "暂无动态");
         }
 
-        let needle = (!self.keyword.is_empty()).then(|| self.keyword.to_lowercase());
-        let cards = self
-            .dynamics
-            .items
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| {
-                needle
-                    .as_deref()
-                    .is_none_or(|needle| dynamic_matches(item, needle))
-            })
-            .map(|(index, item)| self.render_dynamic_card(item, index, cx))
-            .collect::<Vec<_>>();
+        let needle = self.search.needle();
+        let filtered =
+            filter::filter_indices(&self.dynamics.items, needle.as_deref(), dynamic_matches);
+        let cards = match &filtered {
+            Some(indices) => indices
+                .iter()
+                .map(|&index| self.render_dynamic_card(&self.dynamics.items[index], index, cx))
+                .collect::<Vec<_>>(),
+            None => self
+                .dynamics
+                .items
+                .iter()
+                .enumerate()
+                .map(|(index, item)| self.render_dynamic_card(item, index, cx))
+                .collect::<Vec<_>>(),
+        };
         if cards.is_empty() {
             return v_flex()
                 .flex_1()
@@ -1357,14 +1343,7 @@ impl SpaceView {
                 })
             })
             .child(div().flex_1())
-            .child(
-                div().w(px(240.)).child(
-                    Input::new(&self.space_search)
-                        .small()
-                        .cleanable(true)
-                        .prefix(IconName::Search),
-                ),
-            )
+            .child(self.search.field())
             .into_any_element()
     }
 
@@ -1392,7 +1371,7 @@ impl SpaceView {
             return empty_state(
                 Layout::Centered,
                 muted,
-                if self.keyword.is_empty() {
+                if self.search.is_empty() {
                     "暂无投稿"
                 } else {
                     "未找到匹配投稿"
@@ -1486,9 +1465,17 @@ impl SpaceView {
                 cx.listener(|this, _, _, cx| this.reload_tab(cx)),
             );
         }
-        let needle = (!self.keyword.is_empty()).then(|| self.keyword.to_lowercase());
-        let seasons = season_cards(&self.collections.seasons, needle.as_deref());
-        let series = series_cards(&self.collections.series, needle.as_deref());
+        let needle = self.search.needle();
+        let seasons = filter::matching(
+            season_cards(&self.collections.seasons),
+            needle.as_deref(),
+            CollectionCard::matches,
+        );
+        let series = filter::matching(
+            series_cards(&self.collections.series),
+            needle.as_deref(),
+            CollectionCard::matches,
+        );
         if seasons.is_empty() && series.is_empty() {
             return collection_empty_state(
                 muted,
@@ -1560,10 +1547,6 @@ fn dynamic_matches(item: &DynamicItem, lowercase_needle: &str) -> bool {
             .is_some_and(|forward| dynamic_matches(forward, lowercase_needle))
 }
 
-fn text_matches(text: &str, lowercase_needle: &str) -> bool {
-    text.to_lowercase().contains(lowercase_needle)
-}
-
 fn comment_key(item: &DynamicItem) -> String {
     let (kind, oid) = item.comment_target();
     format!("{kind}:{oid}")
@@ -1613,10 +1596,15 @@ struct CollectionCard {
     kind: &'static str,
 }
 
-fn season_cards(seasons: &[SeasonMeta], needle: Option<&str>) -> Vec<CollectionCard> {
+impl CollectionCard {
+    fn matches(&self, needle: &str) -> bool {
+        text_matches(&self.name, needle)
+    }
+}
+
+fn season_cards(seasons: &[SeasonMeta]) -> Vec<CollectionCard> {
     seasons
         .iter()
-        .filter(|season| needle.is_none_or(|needle| text_matches(&season.name, needle)))
         .map(|season| CollectionCard {
             name: season.name.clone(),
             cover: season.cover.clone(),
@@ -1626,10 +1614,9 @@ fn season_cards(seasons: &[SeasonMeta], needle: Option<&str>) -> Vec<CollectionC
         .collect()
 }
 
-fn series_cards(series: &[SeriesMeta], needle: Option<&str>) -> Vec<CollectionCard> {
+fn series_cards(series: &[SeriesMeta]) -> Vec<CollectionCard> {
     series
         .iter()
-        .filter(|series| needle.is_none_or(|needle| text_matches(&series.name, needle)))
         .map(|series| CollectionCard {
             name: series.name.clone(),
             cover: series.cover.clone(),
@@ -1800,6 +1787,7 @@ mod tests {
     };
 
     use super::{dynamic_matches, season_cards};
+    use crate::filter;
 
     fn dynamic(text: &str, author: &str, archive: Option<&str>) -> DynamicItem {
         DynamicItem {
@@ -1854,10 +1842,11 @@ mod tests {
                 ..Default::default()
             },
         ];
+        let cards = season_cards(&seasons);
+        assert_eq!(cards.len(), 2);
 
-        let cards = season_cards(&seasons, Some("rust"));
+        let cards = filter::matching(cards, Some("rust"), super::CollectionCard::matches);
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].name, "Rust 教程");
-        assert_eq!(season_cards(&seasons, None).len(), 2);
     }
 }

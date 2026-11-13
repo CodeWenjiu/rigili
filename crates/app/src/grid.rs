@@ -946,20 +946,59 @@ where
     h_flex()
         .h(metrics.height())
         .gap(CARD_GAP)
-        .children((start..end).map(|index| {
-            let open = cards[index].open();
-            let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(open.clone()));
-            video_card(
-                &cards[index],
-                VideoCardKind::Default,
-                style,
-                metrics,
-                window,
-                cx,
-                on_open,
-            )
-        }))
+        .children(
+            (start..end).map(|index| video_card_cell(&cards[index], style, metrics, window, cx)),
+        )
         .into_any_element()
+}
+
+pub(crate) fn video_card_row_indexed<V>(
+    cards: &[VideoCard],
+    indices: &[usize],
+    row: usize,
+    columns: usize,
+    frame: CardFrame,
+    window: &mut Window,
+    cx: &mut Context<V>,
+) -> AnyElement
+where
+    V: EventEmitter<OpenSpace> + EventEmitter<OpenVideo> + 'static,
+{
+    let CardFrame { style, metrics } = frame;
+    let start = row * columns;
+    let end = (start + columns).min(indices.len());
+
+    h_flex()
+        .h(metrics.height())
+        .gap(CARD_GAP)
+        .children(
+            (start..end)
+                .map(|index| video_card_cell(&cards[indices[index]], style, metrics, window, cx)),
+        )
+        .into_any_element()
+}
+
+fn video_card_cell<V>(
+    card: &VideoCard,
+    style: CardStyle,
+    metrics: CardMetrics,
+    window: &mut Window,
+    cx: &mut Context<V>,
+) -> AnyElement
+where
+    V: EventEmitter<OpenSpace> + EventEmitter<OpenVideo> + 'static,
+{
+    let open = card.open();
+    let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(open.clone()));
+    video_card(
+        card,
+        VideoCardKind::Default,
+        style,
+        metrics,
+        window,
+        cx,
+        on_open,
+    )
 }
 
 pub(crate) fn live_card(

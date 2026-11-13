@@ -5,9 +5,11 @@ use gpui_kit::*;
 
 use super::{FavoriteView, FolderSource, MineTab, MineView};
 
+use crate::filter;
 use crate::grid::{
     BangumiCards, CARD_GAP, CardFrame, CardGrid, CardMetrics, CardOverlay, CardStyle, FolderCards,
     MediaCard, VideoCards, card_grid_loading, card_text_height, media_card, skeleton_card,
+    video_card_row, video_card_row_indexed,
 };
 use crate::list::{
     LIST_FOOTER_HEIGHT, Rows, list_footer, track_element_width, virtual_rows_tracked,
@@ -17,6 +19,14 @@ use crate::state_view::{Layout, empty_state, error_state};
 use gpui_kit::component::spinner::Spinner;
 use rigili_bilibili::{BangumiFollow, FavFolder, thumbnail};
 use rigili_core::format_ymd;
+
+#[derive(Clone, Copy)]
+struct CardRow<'a> {
+    filtered: Option<&'a [usize]>,
+    row: usize,
+    columns: usize,
+    frame: CardFrame,
+}
 
 impl MineView {
     pub(super) fn render_content(
@@ -68,7 +78,12 @@ impl MineView {
         }
 
         if empty {
-            return empty_state(Layout::Top, muted, "暂无内容");
+            let message = if self.search.is_empty() {
+                "暂无内容"
+            } else {
+                "未找到匹配内容"
+            };
+            return empty_state(Layout::Top, muted, message);
         }
 
         self.render_list(tab, window, cx)
@@ -128,17 +143,30 @@ impl MineView {
             );
         }
 
-        let visible = folders
-            .iter()
-            .filter(|folder| match source {
+        let needle = self.search.needle();
+        let visible = filter::matching(
+            folders.iter().filter(|folder| match source {
                 FolderSource::Created => !folder.is_default(),
                 FolderSource::Collected => folder.is_valid(),
-            })
-            .collect::<Vec<_>>();
+            }),
+            needle.as_deref(),
+            |folder, needle| {
+                filter::text_matches(&folder.title, needle)
+                    || (source == FolderSource::Collected
+                        && filter::text_matches(folder.owner(), needle))
+            },
+        );
         if visible.is_empty() {
-            let empty = match source {
-                FolderSource::Created => "暂无收藏夹",
-                FolderSource::Collected => "暂无订阅内容",
+            let empty = if needle.is_some() {
+                match source {
+                    FolderSource::Created => "未找到匹配收藏夹",
+                    FolderSource::Collected => "未找到匹配订阅",
+                }
+            } else {
+                match source {
+                    FolderSource::Created => "暂无收藏夹",
+                    FolderSource::Collected => "暂无订阅内容",
+                }
             };
             return empty_state(Layout::Top, muted, empty);
         }
@@ -196,6 +224,11 @@ impl MineView {
         let loading = state.loading && state.items.is_empty();
         let error = state.error.clone();
         let empty = state.items.is_empty() && !state.loading;
+        let needle = self.search.needle();
+        let matched = filter::filter_indices(&state.items, needle.as_deref(), |item, needle| {
+            filter::text_matches(&item.title, needle)
+        })
+        .map_or(state.items.len(), |indices| indices.len());
         let danger = cx.theme().danger;
         let muted = cx.theme().muted_foreground;
         let radius = cx.theme().radius;
@@ -224,29 +257,41 @@ impl MineView {
             return empty_state(Layout::Top, muted, "暂无内容");
         }
 
+        if matched == 0 && !state.loading {
+            return empty_state(Layout::Top, muted, "未找到匹配内容");
+        }
+
         self.render_bangumi_list(cinema, window, cx)
     }
 
     fn render_bangumi_row(
         &self,
         cinema: bool,
-        row: usize,
-        columns: usize,
-        frame: CardFrame,
+        line: CardRow<'_>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let CardRow {
+            filtered,
+            row,
+            columns,
+            frame,
+        } = line;
         let CardFrame { style, metrics } = frame;
         let state = self.bangumi_state(cinema);
+        let count = filtered.map_or(state.items.len(), |indices| indices.len());
         let start = row * columns;
-        let end = (start + columns).min(state.items.len());
+        let end = (start + columns).min(count);
         let opening = self.opening;
 
         h_flex()
             .h(metrics.height())
             .gap(CARD_GAP)
             .children((start..end).map(|index| {
-                let item = &state.items[index];
+                let item = match filtered {
+                    Some(indices) => &state.items[indices[index]],
+                    None => &state.items[index],
+                };
                 let season_id = item.season_id;
                 let is_opening = opening == Some(season_id);
                 let on_open = cx.listener(move |this, _, _, cx| {
@@ -283,6 +328,12 @@ impl MineView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let style = CardStyle::new(cx);
+        let needle = self.search.needle();
+        let state = self.bangumi_state(cinema);
+        let filtered = filter::filter_indices(&state.items, needle.as_deref(), |item, needle| {
+            filter::text_matches(&item.title, needle)
+        });
+        let count = filtered.as_ref().map_or(state.items.len(), Vec::len);
         let columns = BangumiCards::columns(self.list_width);
         let metrics = BangumiCards::metrics(
             self.list_width,
@@ -290,7 +341,7 @@ impl MineView {
             window.scale_factor(),
         );
         let frame = CardFrame { style, metrics };
-        let rows = self.bangumi_state(cinema).items.len().div_ceil(columns);
+        let rows = count.div_ceil(columns);
         let footer = {
             let state = self.bangumi_state(cinema);
             state.loading_more || state.more_error.is_some()
@@ -316,7 +367,17 @@ impl MineView {
                         if footer && row == rows {
                             this.render_bangumi_footer(cinema, cx)
                         } else {
-                            this.render_bangumi_row(cinema, row, columns, frame, window, cx)
+                            this.render_bangumi_row(
+                                cinema,
+                                CardRow {
+                                    filtered: filtered.as_deref(),
+                                    row,
+                                    columns,
+                                    frame,
+                                },
+                                window,
+                                cx,
+                            )
                         }
                     })
                     .collect()
@@ -327,13 +388,23 @@ impl MineView {
     fn render_row(
         &self,
         tab: MineTab,
-        row: usize,
-        columns: usize,
-        frame: CardFrame,
+        line: CardRow<'_>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        crate::grid::video_card_row(&self.state(tab).items, row, columns, frame, window, cx)
+        let CardRow {
+            filtered,
+            row,
+            columns,
+            frame,
+        } = line;
+        let state = self.state(tab);
+        match filtered {
+            Some(indices) => {
+                video_card_row_indexed(&state.items, indices, row, columns, frame, window, cx)
+            }
+            None => video_card_row(&state.items, row, columns, frame, window, cx),
+        }
     }
 
     fn render_footer(&self, tab: MineTab, cx: &mut Context<Self>) -> AnyElement {
@@ -357,7 +428,20 @@ impl MineView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let style = CardStyle::new(cx);
+        let needle = if tab == MineTab::Favorites {
+            None
+        } else {
+            self.search.needle()
+        };
         let state = self.state(tab);
+        let filtered = filter::filter_indices(&state.items, needle.as_deref(), |card, needle| {
+            filter::text_matches(card.title(), needle)
+                || filter::text_matches(card.author(), needle)
+        });
+        if filtered.as_ref().is_some_and(Vec::is_empty) {
+            return empty_state(Layout::Top, cx.theme().muted_foreground, "未找到匹配内容");
+        }
+        let count = filtered.as_ref().map_or(state.items.len(), Vec::len);
         let columns = VideoCards::columns(self.list_width);
         let metrics = VideoCards::metrics(
             self.list_width,
@@ -365,7 +449,7 @@ impl MineView {
             window.scale_factor(),
         );
         let frame = CardFrame { style, metrics };
-        let rows = state.items.len().div_ceil(columns);
+        let rows = count.div_ceil(columns);
         let footer = state.loading_more || state.more_error.is_some();
         let sizes = Rows::new(rows, metrics.height()).footer_if(footer, LIST_FOOTER_HEIGHT);
 
@@ -383,7 +467,17 @@ impl MineView {
                         if footer && row == rows {
                             this.render_footer(tab, cx)
                         } else {
-                            this.render_row(tab, row, columns, frame, window, cx)
+                            this.render_row(
+                                tab,
+                                CardRow {
+                                    filtered: filtered.as_deref(),
+                                    row,
+                                    columns,
+                                    frame,
+                                },
+                                window,
+                                cx,
+                            )
                         }
                     })
                     .collect()

@@ -14,6 +14,7 @@ use rigili_bilibili::{BangumiFollow, FavFolder, NavStat};
 use rigili_core::backend::{self, Backend};
 use rigili_core::{OpenSpace, OpenVideo, Refresh, format_count};
 
+use crate::filter;
 use crate::grid::VideoCard;
 use crate::paging::Paged;
 use crate::profile::{profile_stat, profile_title};
@@ -218,6 +219,8 @@ pub struct MineView {
     user_mid: Option<u64>,
     list_width: Pixels,
     folder_scroll: scroll::ScrollArea,
+    favorites_keyword: String,
+    search: filter::Search,
 }
 
 impl EventEmitter<OpenVideo> for MineView {}
@@ -248,8 +251,12 @@ impl crate::season::SeasonOpener for MineView {
 }
 
 impl MineView {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let backend = backend::get(cx).ok();
+        let search =
+            filter::Search::new(window, cx, "搜索收藏、历史与追番", |this, cx| {
+                this.submit_search(cx)
+            });
         Self {
             backend,
             tab: MineTab::default(),
@@ -270,7 +277,21 @@ impl MineView {
             user_mid: None,
             list_width: px(0.),
             folder_scroll: scroll::ScrollArea::new(),
+            favorites_keyword: String::new(),
+            search,
         }
+    }
+
+    fn submit_search(&mut self, cx: &mut Context<Self>) {
+        if !self.search.submit(cx) {
+            return;
+        }
+        let folder_contents = self.tab == MineTab::Favorites
+            && (self.favorites_view == FavoriteView::Folder || self.browsing_folder.is_some());
+        if folder_contents {
+            self.load_favorite_items(cx);
+        }
+        cx.notify();
     }
 
     fn bangumi_state(&self, cinema: bool) -> &BangumiState {
@@ -323,10 +344,12 @@ impl MineView {
         self.cinema = BangumiState::new();
         self.opening = None;
         self.notice = None;
+        self.favorites_keyword.clear();
 
         let weak = cx.entity().downgrade();
-        window.defer(cx, move |_, cx| {
+        window.defer(cx, move |window, cx| {
             let _ = weak.update(cx, |this, cx| {
+                this.search.clear(window, cx);
                 this.load_stat(cx);
                 this.load_if_needed(cx);
             });
@@ -415,17 +438,26 @@ impl MineView {
     }
 
     fn render_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
-        TabStrip::new("mine-tab")
-            .gap(px(16.))
-            .padding_x(px(8.))
-            .render(
-                cx,
-                &MineTab::ALL,
-                self.tab,
-                MineTab::label,
-                |_| None,
-                |this, tab, cx| this.show_tab(tab, cx),
+        h_flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap_2()
+            .child(
+                TabStrip::new("mine-tab")
+                    .gap(px(16.))
+                    .padding_x(px(8.))
+                    .render(
+                        cx,
+                        &MineTab::ALL,
+                        self.tab,
+                        MineTab::label,
+                        |_| None,
+                        |this, tab, cx| this.show_tab(tab, cx),
+                    ),
             )
+            .child(div().flex_1())
+            .child(self.search.field())
+            .into_any_element()
     }
 
     pub(super) fn open_season(&mut self, season_id: u64, cx: &mut Context<Self>) {
@@ -453,6 +485,9 @@ impl MineView {
         self.browsing_folder = None;
         if view == FavoriteView::Folder {
             self.ensure_default_folder(cx);
+            if self.favorites_keyword != self.search.keyword() {
+                self.load_favorite_items(cx);
+            }
         } else {
             self.load_favorite_view(cx);
         }
@@ -487,7 +522,14 @@ impl MineView {
     }
 
     fn load_favorite_view(&mut self, cx: &mut Context<Self>) {
+        if self.browsing_folder.is_some() && self.favorites_keyword != self.search.keyword() {
+            self.load_favorite_items(cx);
+            return;
+        }
         match self.favorites_view {
+            FavoriteView::Folder if self.favorites_keyword != self.search.keyword() => {
+                self.load_favorite_items(cx);
+            }
             FavoriteView::Subscribed
                 if !self.collected.loaded
                     && !self.collected.loading

@@ -48,7 +48,12 @@ pub async fn collected_folders(client: &Client, mid: u64) -> Result<FavFolders, 
         .await
 }
 
-pub async fn fav_items(client: &Client, media_id: u64, page: u32) -> Result<FavItems, ApiError> {
+pub async fn fav_items(
+    client: &Client,
+    media_id: u64,
+    page: u32,
+    keyword: &str,
+) -> Result<FavItems, ApiError> {
     let page = page.max(1);
 
     client
@@ -58,6 +63,7 @@ pub async fn fav_items(client: &Client, media_id: u64, page: u32) -> Result<FavI
                 ("media_id", media_id.to_string()),
                 ("pn", page.to_string()),
                 ("ps", PAGE_SIZE.to_string()),
+                ("keyword", keyword.to_owned()),
                 ("platform", "web".into()),
             ],
         )
