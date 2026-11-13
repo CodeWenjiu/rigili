@@ -1,7 +1,4 @@
-use std::rc::Rc;
-
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -10,10 +7,14 @@ use super::{FavoriteView, FolderSource, MineTab, MineView};
 
 use crate::grid::{
     BangumiCards, CARD_GAP, CardFrame, CardGrid, CardMetrics, CardOverlay, CardStyle, FolderCards,
-    LIST_FOOTER_HEIGHT, MediaCard, VideoCardKind, VideoCards, card_text_height, list_content_size,
-    list_footer, media_card, page_gutter, skeleton_card, virtual_list_scrollbar,
+    MediaCard, VideoCards, card_grid_loading, card_text_height, media_card,
+    skeleton_card,
+};
+use crate::list::{
+    LIST_FOOTER_HEIGHT, Rows, list_footer, track_element_width, virtual_rows_tracked,
 };
 use crate::platform::theme::cover_scrim;
+use crate::state_view::{Layout, empty_state, error_state};
 use gpui_kit::component::spinner::Spinner;
 use rigili_bilibili::{BangumiFollow, FavFolder, thumbnail};
 use rigili_core::format_ymd;
@@ -48,50 +49,27 @@ impl MineView {
         let radius = cx.theme().radius;
 
         if loading {
-            let columns = VideoCards::columns(self.list_width);
-            let metrics = VideoCards::metrics(
+            return card_grid_loading::<VideoCards>(
+                ("mine-loading", tab.index()),
                 self.list_width,
                 card_text_height(window),
                 window.scale_factor(),
+                radius,
             );
-            return div()
-                .id(("mine-loading", tab.index()))
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .child(
-                    h_flex()
-                        .flex_wrap()
-                        .gap_x(CARD_GAP)
-                        .gap_y_6()
-                        .children((0..columns * 2).map(|_| skeleton_card(metrics.width, radius))),
-                )
-                .into_any_element();
         }
 
         if let Some(error) = error {
-            return v_flex()
-                .flex_1()
-                .min_h_0()
-                .gap_3()
-                .child(div().text_sm().text_color(danger).child(error))
-                .child(
-                    Button::new(("mine-retry", tab.index()))
-                        .primary()
-                        .label("重试")
-                        .on_click(cx.listener(move |this, _, _, cx| this.reload_tab(tab, cx))),
-                )
-                .into_any_element();
+            return error_state(
+                Layout::Top,
+                error,
+                ("mine-retry", tab.index()),
+                danger,
+                cx.listener(move |this, _, _, cx| this.reload_tab(tab, cx)),
+            );
         }
 
         if empty {
-            return div()
-                .flex_1()
-                .min_h_0()
-                .text_sm()
-                .text_color(muted)
-                .child("暂无内容")
-                .into_any_element();
+            return empty_state(Layout::Top, muted, "暂无内容");
         }
 
         self.render_list(tab, window, cx)
@@ -140,20 +118,15 @@ impl MineView {
         }
 
         if let Some(error) = error {
-            return v_flex()
-                .flex_1()
-                .min_h_0()
-                .gap_3()
-                .child(div().text_sm().text_color(danger).child(error))
-                .child(
-                    Button::new("mine-folders-retry")
-                        .primary()
-                        .label("重试")
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.retry_folder_source(source, cx);
-                        })),
-                )
-                .into_any_element();
+            return error_state(
+                Layout::Top,
+                error,
+                "mine-folders-retry",
+                danger,
+                cx.listener(move |this, _, _, cx| {
+                    this.retry_folder_source(source, cx);
+                }),
+            );
         }
 
         let visible = folders
@@ -168,13 +141,7 @@ impl MineView {
                 FolderSource::Created => "暂无收藏夹",
                 FolderSource::Collected => "暂无订阅内容",
             };
-            return div()
-                .flex_1()
-                .min_h_0()
-                .text_sm()
-                .text_color(muted)
-                .child(empty)
-                .into_any_element();
+            return empty_state(Layout::Top, muted, empty);
         }
 
         let columns = FolderCards::columns(self.list_width);
@@ -204,21 +171,7 @@ impl MineView {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
-            .on_prepaint(move |bounds, window, cx| {
-                let width = bounds.size.width;
-                if width == known_width {
-                    return;
-                }
-                let weak = weak.clone();
-                window.defer(cx, move |_, cx| {
-                    let _ = weak.update(cx, |this, cx| {
-                        if this.list_width != width {
-                            this.list_width = width;
-                            cx.notify();
-                        }
-                    });
-                });
-            })
+            .on_prepaint(track_element_width(known_width, weak))
             .child(v_flex().gap_y_6().children(rows))
             .into_any_element()
     }
@@ -245,50 +198,27 @@ impl MineView {
         let radius = cx.theme().radius;
 
         if loading {
-            let columns = BangumiCards::columns(self.list_width);
-            let metrics = BangumiCards::metrics(
+            return card_grid_loading::<BangumiCards>(
+                "mine-bangumi-loading",
                 self.list_width,
                 card_text_height(window),
                 window.scale_factor(),
+                radius,
             );
-            return div()
-                .id("mine-bangumi-loading")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .child(
-                    h_flex()
-                        .flex_wrap()
-                        .gap_x(CARD_GAP)
-                        .gap_y_6()
-                        .children((0..columns * 2).map(|_| skeleton_card(metrics.width, radius))),
-                )
-                .into_any_element();
         }
 
         if let Some(error) = error {
-            return v_flex()
-                .flex_1()
-                .min_h_0()
-                .gap_3()
-                .child(div().text_sm().text_color(danger).child(error))
-                .child(
-                    Button::new("mine-bangumi-retry")
-                        .primary()
-                        .label("重试")
-                        .on_click(cx.listener(move |this, _, _, cx| this.load_bangumi(cinema, cx))),
-                )
-                .into_any_element();
+            return error_state(
+                Layout::Top,
+                error,
+                "mine-bangumi-retry",
+                danger,
+                cx.listener(move |this, _, _, cx| this.load_bangumi(cinema, cx)),
+            );
         }
 
         if empty {
-            return div()
-                .flex_1()
-                .min_h_0()
-                .text_sm()
-                .text_color(muted)
-                .child("暂无内容")
-                .into_any_element();
+            return empty_state(Layout::Top, muted, "暂无内容");
         }
 
         self.render_bangumi_list(cinema, window, cx)
@@ -350,8 +280,6 @@ impl MineView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let style = CardStyle::new(cx);
-        let gutter = page_gutter(window);
-        let state = self.bangumi_state(cinema);
         let columns = BangumiCards::columns(self.list_width);
         let metrics = BangumiCards::metrics(
             self.list_width,
@@ -359,77 +287,38 @@ impl MineView {
             window.scale_factor(),
         );
         let frame = CardFrame { style, metrics };
-        let row_height = metrics.height();
-        let rows = state.items.len().div_ceil(columns);
-        let known_width = self.list_width;
-        let footer = state.loading_more || state.more_error.is_some();
-        let footer_index = rows;
-
-        let mut sizes = vec![size(px(0.), row_height); rows];
-        if footer {
-            sizes.push(size(px(0.), LIST_FOOTER_HEIGHT));
-        }
-        let content_size = list_content_size(&sizes, rems(1.5).to_pixels(window.rem_size()));
-        let sizes = Rc::new(sizes);
-
-        let view = cx.entity();
-        let weak = view.downgrade();
+        let rows = self.bangumi_state(cinema).items.len().div_ceil(columns);
+        let footer = {
+            let state = self.bangumi_state(cinema);
+            state.loading_more || state.more_error.is_some()
+        };
         let list_id = if cinema {
             "mine-cinema-list"
         } else {
             "mine-bangumi-list"
         };
-        let list = v_virtual_list(
-            view,
+        let sizes = Rows::new(rows, metrics.height()).footer_if(footer, LIST_FOOTER_HEIGHT);
+
+        virtual_rows_tracked(
+            cx,
+            window,
             list_id,
             sizes,
-            move |this, visible_range, window, cx| {
-                this.maybe_load_more_bangumi(cinema, visible_range.end.saturating_sub(1), rows, cx);
-                visible_range
+            self.list_width,
+            &self.bangumi_state(cinema).scroll,
+            move |this, range, window, cx| {
+                this.maybe_load_more_bangumi(cinema, range.end.saturating_sub(1), rows, cx);
+                range
                     .map(|row| {
-                        if footer && row == footer_index {
+                        if footer && row == rows {
                             this.render_bangumi_footer(cinema, cx)
                         } else {
                             this.render_bangumi_row(cinema, row, columns, frame, window, cx)
                         }
                     })
-                    .collect::<Vec<_>>()
+                    .collect()
             },
         )
-        .gap_y_6()
-        .track_scroll(&self.bangumi_state(cinema).scroll);
-
-        div()
-            .relative()
-            .flex_1()
-            .min_h_0()
-            .mr(px(-gutter.as_f32()))
-            .pr(gutter)
-            .overflow_hidden()
-            .on_children_prepainted(move |bounds, window, cx| {
-                let Some(width) = bounds.first().map(|bounds| bounds.size.width) else {
-                    return;
-                };
-                if width == known_width {
-                    return;
-                }
-                let weak = weak.clone();
-                // Notifying during prepaint does not schedule another frame.
-                window.defer(cx, move |_, cx| {
-                    let _ = weak.update(cx, |this, cx| {
-                        if this.list_width != width {
-                            this.list_width = width;
-                            cx.notify();
-                        }
-                    });
-                });
-            })
-            .child(list)
-            .child(virtual_list_scrollbar(
-                &self.bangumi_state(cinema).scroll,
-                content_size,
-            ))
-            .into_any_element()
     }
 
     fn render_row(
@@ -441,31 +330,7 @@ impl MineView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let CardFrame { style, metrics } = frame;
-        let state = self.state(tab);
-        let start = row * columns;
-        let end = (start + columns).min(state.items.len());
-
-        h_flex()
-            .h(metrics.height())
-            .gap(CARD_GAP)
-            .children((start..end).map(|index| {
-                let card = &state.items[index];
-                let open = card.open();
-                let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| {
-                    cx.emit(open.clone());
-                });
-                crate::grid::video_card(
-                    card,
-                    VideoCardKind::Default,
-                    style,
-                    metrics,
-                    window,
-                    cx,
-                    on_open,
-                )
-            }))
-            .into_any_element()
+        crate::grid::video_card_row(&self.state(tab).items, row, columns, frame, window, cx)
     }
 
     fn render_footer(&self, tab: MineTab, cx: &mut Context<Self>) -> AnyElement {
@@ -489,7 +354,6 @@ impl MineView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let style = CardStyle::new(cx);
-        let gutter = page_gutter(window);
         let state = self.state(tab);
         let columns = VideoCards::columns(self.list_width);
         let metrics = VideoCards::metrics(
@@ -498,72 +362,30 @@ impl MineView {
             window.scale_factor(),
         );
         let frame = CardFrame { style, metrics };
-        let row_height = metrics.height();
         let rows = state.items.len().div_ceil(columns);
-        let known_width = self.list_width;
         let footer = state.loading_more || state.more_error.is_some();
-        let footer_index = rows;
+        let sizes = Rows::new(rows, metrics.height()).footer_if(footer, LIST_FOOTER_HEIGHT);
 
-        let mut sizes = vec![size(px(0.), row_height); rows];
-        if footer {
-            sizes.push(size(px(0.), LIST_FOOTER_HEIGHT));
-        }
-        let content_size = list_content_size(&sizes, rems(1.5).to_pixels(window.rem_size()));
-        let sizes = Rc::new(sizes);
-
-        let view = cx.entity();
-        let weak = view.downgrade();
-        let list = v_virtual_list(
-            view,
+        virtual_rows_tracked(
+            cx,
+            window,
             tab.list_id(),
             sizes,
-            move |this, visible_range, window, cx| {
-                this.maybe_load_more(tab, visible_range.end.saturating_sub(1), rows, cx);
-                visible_range
+            self.list_width,
+            &self.state(tab).scroll,
+            move |this, range, window, cx| {
+                this.maybe_load_more(tab, range.end.saturating_sub(1), rows, cx);
+                range
                     .map(|row| {
-                        if footer && row == footer_index {
+                        if footer && row == rows {
                             this.render_footer(tab, cx)
                         } else {
                             this.render_row(tab, row, columns, frame, window, cx)
                         }
                     })
-                    .collect::<Vec<_>>()
+                    .collect()
             },
         )
-        .gap_y_6()
-        .track_scroll(&self.state(tab).scroll);
-
-        div()
-            .relative()
-            .flex_1()
-            .min_h_0()
-            .mr(px(-gutter.as_f32()))
-            .pr(gutter)
-            .overflow_hidden()
-            .on_children_prepainted(move |bounds, window, cx| {
-                let Some(width) = bounds.first().map(|bounds| bounds.size.width) else {
-                    return;
-                };
-                if width == known_width {
-                    return;
-                }
-                let weak = weak.clone();
-                // Notifying during prepaint does not schedule another frame.
-                window.defer(cx, move |_, cx| {
-                    let _ = weak.update(cx, |this, cx| {
-                        if this.list_width != width {
-                            this.list_width = width;
-                            cx.notify();
-                        }
-                    });
-                });
-            })
-            .child(list)
-            .child(virtual_list_scrollbar(
-                &self.state(tab).scroll,
-                content_size,
-            ))
-            .into_any_element()
     }
 }
 

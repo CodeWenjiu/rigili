@@ -1,12 +1,10 @@
-use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
+use std::collections::HashMap;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::v_virtual_list;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -16,13 +14,12 @@ use rigili_bilibili::{
 };
 use rigili_core::backend;
 use rigili_core::login as login_state;
-use rigili_core::runtime::{ApiTaskError, spawn_api};
-use rigili_core::{
-    OpenSpace, Refresh, api_error_message, api_task_error_message, format_message_time,
-};
+use rigili_core::{OpenSpace, Refresh, api_error_message, format_message_time};
 
-use crate::grid::{LIST_FOOTER_HEIGHT, list_content_size, page_gutter, virtual_list_scrollbar};
-use crate::login;
+use crate::list::{LIST_FOOTER_HEIGHT, Rows, virtual_rows};
+use crate::paging::{Page, Paged, spawn_first, spawn_more};
+use crate::state_view::{Layout, centered_small_spinner, empty_state, error_state};
+use crate::tabs::TabStrip;
 
 const ROW_HEIGHT: Pixels = px(88.);
 
@@ -85,50 +82,7 @@ struct MessageRow {
     mid: Option<u64>,
 }
 
-struct MessagePage {
-    rows: Vec<MessageRow>,
-    next_cursor: Option<MessageCursor>,
-}
-
-struct MessageState {
-    rows: Vec<MessageRow>,
-    next_cursor: Option<MessageCursor>,
-    loading: bool,
-    loading_more: bool,
-    loaded: bool,
-    error: Option<String>,
-    more_error: Option<String>,
-    generation: u64,
-    scroll: VirtualListScrollHandle,
-}
-
-impl MessageState {
-    fn new() -> Self {
-        Self {
-            rows: Vec::new(),
-            next_cursor: None,
-            loading: false,
-            loading_more: false,
-            loaded: false,
-            error: None,
-            more_error: None,
-            generation: 0,
-            scroll: VirtualListScrollHandle::new(),
-        }
-    }
-
-    fn reset(&mut self) -> u64 {
-        self.generation += 1;
-        self.rows.clear();
-        self.next_cursor = None;
-        self.loading = true;
-        self.loading_more = false;
-        self.loaded = false;
-        self.error = None;
-        self.more_error = None;
-        self.generation
-    }
-}
+type MessageState = Paged<MessageRow, Option<MessageCursor>>;
 
 pub(crate) struct MessagesView {
     tab: MessageTab,
@@ -197,21 +151,19 @@ impl MessagesView {
         let backend = match backend::get(cx) {
             Ok(backend) => backend,
             Err(error) => {
-                let state = self.state_mut(tab);
-                state.loading = false;
-                state.error = Some(api_error_message(error));
+                self.state_mut(tab)
+                    .fail_first_reset(api_error_message(error));
                 cx.notify();
                 return;
             }
         };
 
-        let generation = self.state_mut(tab).reset();
         let future = async move {
             match tab.feed_kind() {
-                Some(kind) => backend
-                    .message_feed(kind, None)
-                    .await
-                    .map(|feed| feed_page(tab, feed)),
+                Some(kind) => {
+                    let feed = backend.message_feed(kind, None).await?;
+                    Ok(feed_page(tab, feed))
+                }
                 None => {
                     let sessions = backend.message_sessions().await?;
                     let missing = sessions
@@ -228,95 +180,58 @@ impl MessagesView {
                             .await
                             .unwrap_or_default()
                     };
-                    Ok(MessagePage {
-                        rows: session_rows(sessions, infos),
-                        next_cursor: None,
-                    })
+                    Ok(Page::new(session_rows(sessions, infos), false, None))
                 }
             }
         };
-        spawn_api(cx, future, move |this, result, cx| {
-            this.finish(tab, generation, result, cx);
-        });
-        cx.notify();
+
+        spawn_first(
+            self,
+            cx,
+            move |this| this.state_mut(tab),
+            |row: &MessageRow| row.key.clone(),
+            future,
+            move |this| {
+                this.state_mut(tab)
+                    .scroll
+                    .scroll_to_item(0, ScrollStrategy::Top);
+            },
+        );
     }
 
     fn load_more(&mut self, tab: MessageTab, cx: &mut Context<Self>) {
-        let (cursor, generation) = {
-            let state = self.state(tab);
-            if state.loading
-                || state.loading_more
-                || state.more_error.is_some()
-                || state.rows.is_empty()
-            {
-                return;
-            }
-            let Some(cursor) = state.next_cursor else {
-                return;
-            };
-            (cursor, state.generation)
-        };
         let Some(kind) = tab.feed_kind() else {
             return;
         };
         let backend = match backend::get(cx) {
             Ok(backend) => backend,
             Err(error) => {
-                self.state_mut(tab).more_error = Some(api_error_message(error));
+                self.state_mut(tab).fail_more(api_error_message(error));
                 cx.notify();
                 return;
             }
         };
 
-        self.state_mut(tab).loading_more = true;
-        cx.notify();
-
-        let future = async move {
-            backend
-                .message_feed(kind, Some(cursor))
-                .await
-                .map(|feed| feed_page(tab, feed))
-        };
-        spawn_api(cx, future, move |this, result, cx| {
-            this.finish_more(tab, generation, cursor, result, cx);
-        });
-    }
-
-    fn finish_more(
-        &mut self,
-        tab: MessageTab,
-        generation: u64,
-        cursor: MessageCursor,
-        result: Result<MessagePage, ApiTaskError>,
-        cx: &mut Context<Self>,
-    ) {
-        let state = self.state_mut(tab);
-        if state.generation != generation {
-            return;
-        }
-
-        state.loading_more = false;
-        match result {
-            Ok(page) => {
-                let known = state
-                    .rows
-                    .iter()
-                    .map(|row| row.key.clone())
-                    .collect::<HashSet<_>>();
-                state.rows.extend(
-                    page.rows
-                        .into_iter()
-                        .filter(|row| !known.contains(&row.key)),
-                );
-                state.next_cursor = page.next_cursor.filter(|next| *next != cursor);
-            }
-            Err(error) => state.more_error = Some(api_task_error_message(error, cx)),
-        }
-        cx.notify();
+        spawn_more(
+            self,
+            cx,
+            move |this| this.state_mut(tab),
+            |row: &MessageRow| row.key.clone(),
+            move |cursor| {
+                let cursor = cursor.unwrap_or_default();
+                async move {
+                    let feed = backend.message_feed(kind, Some(cursor)).await?;
+                    let page = feed_page(tab, feed);
+                    let next = page.meta.filter(|next| *next != cursor);
+                    Ok(Page::new(page.items, next.is_some(), next))
+                }
+            },
+            |_| {},
+        );
     }
 
     fn retry_more(&mut self, tab: MessageTab, cx: &mut Context<Self>) {
-        self.state_mut(tab).more_error = None;
+        self.state_mut(tab).retry_more();
         self.load_more(tab, cx);
     }
 
@@ -330,34 +245,6 @@ impl MessagesView {
         if rows > 0 && last_visible + 1 >= rows {
             self.load_more(tab, cx);
         }
-    }
-
-    fn finish(
-        &mut self,
-        tab: MessageTab,
-        generation: u64,
-        result: Result<MessagePage, ApiTaskError>,
-        cx: &mut Context<Self>,
-    ) {
-        let state = self.state_mut(tab);
-        if state.generation != generation {
-            return;
-        }
-
-        state.loading = false;
-        match result {
-            Ok(page) => {
-                state.rows = page.rows;
-                state.next_cursor = page.next_cursor;
-                state.loaded = true;
-                state.error = None;
-                state.scroll.scroll_to_item(0, ScrollStrategy::Top);
-            }
-            Err(error) => {
-                state.error = Some(api_task_error_message(error, cx));
-            }
-        }
-        cx.notify();
     }
 
     fn render_header(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -389,50 +276,18 @@ impl MessagesView {
     }
 
     fn render_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
-        let primary = cx.theme().primary;
-        let muted = cx.theme().muted_foreground;
-        let border = cx.theme().border;
-        let hover_bg = cx.theme().accent.opacity(0.5);
-        let radius = cx.theme().radius;
-
-        h_flex()
-            .flex_shrink_0()
-            .items_end()
-            .gap_5()
-            .border_b_1()
-            .border_color(border)
-            .children(MessageTab::ALL.map(|tab| {
-                let active = tab == self.tab;
-                let group = SharedString::from(format!("message-tab-{}", tab.index()));
-
-                v_flex()
-                    .group(group.clone())
-                    .items_center()
-                    .gap_1()
-                    .rounded(radius)
-                    .when(!active, |this| this.hover(move |this| this.bg(hover_bg)))
-                    .child(
-                        Button::new(("message-tab", tab.index()))
-                            .text()
-                            .px_2()
-                            .py_1()
-                            .accessibility_label(tab.label())
-                            .on_click(cx.listener(move |this, _, _, cx| this.show_tab(tab, cx)))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(if active { primary } else { muted })
-                                    .group_hover(group, move |this| this.text_color(primary))
-                                    .child(tab.label()),
-                            ),
-                    )
-                    .child(div().h(px(2.)).w(px(32.)).rounded(px(1.)).bg(if active {
-                        primary
-                    } else {
-                        hsla(0., 0., 0., 0.)
-                    }))
-            }))
-            .into_any_element()
+        TabStrip::new("message-tab")
+            .gap(px(20.))
+            .padding_x(px(8.))
+            .underline_width(px(32.))
+            .render(
+                cx,
+                &MessageTab::ALL,
+                self.tab,
+                MessageTab::label,
+                |_| None,
+                |this, tab, cx| this.show_tab(tab, cx),
+            )
     }
 
     fn render_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -444,44 +299,26 @@ impl MessagesView {
         let state = self.state(tab);
         let error = state.error.clone();
         let loaded = state.loaded;
-        let empty = state.rows.is_empty();
+        let empty = state.items.is_empty();
         let muted = cx.theme().muted_foreground;
         let danger = cx.theme().danger;
 
         if let Some(error) = error {
-            return v_flex()
-                .flex_1()
-                .min_h_0()
-                .gap_3()
-                .child(div().text_sm().text_color(danger).child(error))
-                .child(
-                    Button::new("messages-retry")
-                        .primary()
-                        .label("重试")
-                        .on_click(cx.listener(|this, _, _, cx| this.retry(cx))),
-                )
-                .into_any_element();
+            return error_state(
+                Layout::Top,
+                error,
+                "messages-retry",
+                danger,
+                cx.listener(|this, _, _, cx| this.retry(cx)),
+            );
         }
 
         if !loaded && empty {
-            return div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(Spinner::new().small())
-                .into_any_element();
+            return centered_small_spinner();
         }
 
         if empty {
-            return div()
-                .flex_1()
-                .min_h_0()
-                .text_sm()
-                .text_color(muted)
-                .child("暂无消息")
-                .into_any_element();
+            return empty_state(Layout::Top, muted, "暂无消息");
         }
 
         self.render_list(window, cx)
@@ -490,44 +327,31 @@ impl MessagesView {
     fn render_list(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let tab = self.tab;
         let state = self.state(tab);
-        let rows = state.rows.len();
+        let rows = state.items.len();
         let footer = state.loading_more || state.more_error.is_some();
-        let footer_index = rows;
-        let mut item_sizes = vec![size(px(0.), ROW_HEIGHT); rows];
-        if footer {
-            item_sizes.push(size(px(0.), LIST_FOOTER_HEIGHT));
-        }
-        let sizes = Rc::new(item_sizes);
-        let content_size = list_content_size(&sizes, px(0.));
-        let gutter = page_gutter(window);
-        let view = cx.entity();
-        let list = v_virtual_list(view, tab.list_id(), sizes, move |this, range, _, cx| {
-            this.maybe_load_more(tab, range.end.saturating_sub(1), rows, cx);
-            range
-                .map(|index| {
-                    if footer && index == footer_index {
-                        this.render_footer(tab, cx)
-                    } else {
-                        this.render_row(tab, index, cx)
-                    }
-                })
-                .collect::<Vec<_>>()
-        })
-        .track_scroll(&self.state(tab).scroll);
+        let sizes = Rows::new(rows, ROW_HEIGHT)
+            .gap(rems(0.))
+            .footer_if(footer, LIST_FOOTER_HEIGHT);
 
-        div()
-            .relative()
-            .flex_1()
-            .min_h_0()
-            .mr(px(-gutter.as_f32()))
-            .pr(gutter)
-            .overflow_hidden()
-            .child(list)
-            .child(virtual_list_scrollbar(
-                &self.state(tab).scroll,
-                content_size,
-            ))
-            .into_any_element()
+        virtual_rows(
+            cx,
+            window,
+            tab.list_id(),
+            sizes,
+            &self.state(tab).scroll,
+            move |this, range, _, cx| {
+                this.maybe_load_more(tab, range.end.saturating_sub(1), rows, cx);
+                range
+                    .map(|index| {
+                        if footer && index == rows {
+                            this.render_footer(tab, cx)
+                        } else {
+                            this.render_row(tab, index, cx)
+                        }
+                    })
+                    .collect()
+            },
+        )
     }
 
     fn render_footer(&self, tab: MessageTab, cx: &mut Context<Self>) -> AnyElement {
@@ -558,7 +382,7 @@ impl MessagesView {
     }
 
     fn render_row(&self, tab: MessageTab, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let row = &self.state(tab).rows[index];
+        let row = &self.state(tab).items[index];
         let key = SharedString::from(row.key.clone());
         let name = row.name.clone();
         let avatar = row.avatar.clone();
@@ -665,29 +489,9 @@ impl MessagesView {
     }
 
     fn render_login_prompt(&self, cx: &mut Context<Self>) -> AnyElement {
-        let muted = cx.theme().muted_foreground;
-
-        v_flex()
-            .flex_1()
-            .min_h_0()
-            .items_center()
-            .justify_center()
-            .gap_3()
-            .child(
-                Icon::new(IconName::Mail)
-                    .with_size(px(48.))
-                    .text_color(muted),
-            )
-            .child(div().text_sm().text_color(muted).child("登录后查看消息"))
-            .child(
-                Button::new("messages-sign-in")
-                    .primary()
-                    .label("登录")
-                    .on_click(cx.listener(|_, _, window, cx| {
-                        login::open(window, cx);
-                    })),
-            )
-            .into_any_element()
+        crate::login::Prompt::new("messages", IconName::Mail, "登录后查看消息")
+            .centered()
+            .render(cx)
     }
 }
 
@@ -772,9 +576,9 @@ fn session_rows(sessions: MessageSessions, infos: Vec<MessageUserInfo>) -> Vec<M
         .collect()
 }
 
-fn feed_page(tab: MessageTab, feed: MessageFeed) -> MessagePage {
+fn feed_page(tab: MessageTab, feed: MessageFeed) -> Page<MessageRow, Option<MessageCursor>> {
     let next_cursor = (!feed.cursor.is_end && feed.cursor.id > 0).then_some(feed.cursor);
-    let rows = feed
+    let rows: Vec<MessageRow> = feed
         .items
         .into_iter()
         .map(|item| {
@@ -831,5 +635,5 @@ fn feed_page(tab: MessageTab, feed: MessageFeed) -> MessagePage {
         })
         .collect();
 
-    MessagePage { rows, next_cursor }
+    Page::new(rows, next_cursor.is_some(), next_cursor)
 }

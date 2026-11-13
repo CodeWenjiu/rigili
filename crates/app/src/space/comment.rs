@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::ops::{Deref, DerefMut};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::avatar::Avatar;
@@ -9,157 +9,111 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::api::comment::CommentSort;
-use rigili_bilibili::{
-    Comment, CommentContent, CommentEmote, CommentPage, DynamicArchive, DynamicItem, thumbnail,
-};
+use rigili_bilibili::{Comment, CommentContent, CommentEmote, CommentPage, DynamicItem};
 use rigili_core::backend::{self, Backend};
-use rigili_core::runtime::spawn_api;
-use rigili_core::{api_error_message, api_task_error_message, format_count, format_date};
+use rigili_core::{format_count, format_date};
 
-use crate::grid::append_unique_by;
-use crate::platform::image_cache;
+use crate::paging::{Page, Paged, spawn_first, spawn_more};
 
-pub(super) fn open(dynamic: DynamicItem, window: &mut Window, cx: &mut App) {
-    let view = cx.new(|_| CommentsView::new(dynamic));
-    view.update(cx, |view, cx| view.load(true, cx));
-    window.open_sheet(cx, move |sheet, _, cx| {
-        sheet.title("评论").size(px(480.)).resizable(false).child(
-            div()
-                .size_full()
-                .image_cache(image_cache::get(cx))
-                .child(view.clone()),
-        )
-    });
-}
-
-struct CommentsView {
+pub(super) struct CommentsView {
     backend: Option<Backend>,
     dynamic: DynamicItem,
     sort: CommentSort,
-    items: Vec<Comment>,
-    seen: HashSet<String>,
-    page: u32,
-    total: u64,
-    has_more: bool,
-    loading: bool,
-    loading_more: bool,
-    loaded: bool,
-    error: Option<String>,
-    more_error: Option<String>,
-    generation: u64,
+    state: CommentsState,
+}
+
+struct CommentsState {
+    list: Paged<Comment, CommentMeta>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CommentMeta {
+    pub(crate) page: u32,
+    pub(crate) total: u64,
+}
+
+impl Deref for CommentsState {
+    type Target = Paged<Comment, CommentMeta>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.list
+    }
+}
+
+impl DerefMut for CommentsState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.list
+    }
 }
 
 impl CommentsView {
-    fn new(dynamic: DynamicItem) -> Self {
+    pub(super) fn new(dynamic: DynamicItem) -> Self {
         Self {
             backend: None,
             dynamic,
             sort: CommentSort::default(),
-            items: Vec::new(),
-            seen: HashSet::new(),
-            page: 0,
-            total: 0,
-            has_more: true,
-            loading: false,
-            loading_more: false,
-            loaded: false,
-            error: None,
-            more_error: None,
-            generation: 0,
+            state: CommentsState { list: Paged::new() },
         }
     }
 
     fn backend(&mut self, cx: &mut Context<Self>) -> Result<Backend, String> {
-        if let Some(backend) = &self.backend {
-            return Ok(backend.clone());
-        }
-        match backend::get(cx) {
-            Ok(backend) => {
-                self.backend = Some(backend.clone());
-                Ok(backend)
-            }
-            Err(error) => Err(api_error_message(error)),
+        backend::cached(&mut self.backend, cx)
+    }
+
+    pub(super) fn load(&mut self, reset: bool, cx: &mut Context<Self>) {
+        if reset {
+            self.load_first(cx);
+        } else {
+            self.load_more(cx);
         }
     }
 
-    fn load(&mut self, reset: bool, cx: &mut Context<Self>) {
-        if !reset && (self.loading || self.loading_more || !self.has_more) {
-            return;
-        }
+    fn load_first(&mut self, cx: &mut Context<Self>) {
         let (kind, oid) = self.dynamic.comment_target();
         let oid = oid.to_owned();
-        let page = if reset { 1 } else { self.page + 1 };
         let sort = self.sort;
         let backend = match self.backend(cx) {
             Ok(backend) => backend,
             Err(error) => {
-                if reset {
-                    self.error = Some(error);
-                } else {
-                    self.more_error = Some(error);
-                }
+                self.state.fail_first_reset(error);
                 cx.notify();
                 return;
             }
         };
-        let generation = if reset {
-            self.generation += 1;
-            self.items.clear();
-            self.seen.clear();
-            self.page = 0;
-            self.total = 0;
-            self.has_more = true;
-            self.loading = true;
-            self.loading_more = false;
-            self.loaded = false;
-            self.error = None;
-            self.more_error = None;
-            self.generation
-        } else {
-            self.loading_more = true;
-            self.more_error = None;
-            self.generation
-        };
-        cx.notify();
 
-        spawn_api(
+        spawn_first(
+            self,
             cx,
-            async move { backend.comments(kind, &oid, page, sort).await },
-            move |this, result, cx| {
-                if this.generation != generation {
-                    return;
-                }
-                this.loading = false;
-                this.loading_more = false;
-                match result {
-                    Ok(page_data) => {
-                        let CommentPage {
-                            page: info,
-                            replies,
-                        } = page_data;
-                        let incoming = replies.unwrap_or_default();
-                        let incoming_empty = incoming.is_empty();
-                        append_unique_by(&mut this.items, &mut this.seen, incoming, |comment| {
-                            comment.rpid.to_string()
-                        });
-                        this.page = if info.num == 0 { page } else { info.num };
-                        this.total = info.count.max(info.acount);
-                        this.has_more = !incoming_empty && (this.items.len() as u64) < this.total;
-                        this.loaded = true;
-                        this.error = None;
-                        this.more_error = None;
-                    }
-                    Err(error) => {
-                        let message = api_task_error_message(error, cx);
-                        if reset {
-                            this.error = Some(message);
-                        } else {
-                            this.more_error = Some(message);
-                        }
-                    }
-                }
+            |this| &mut this.state.list,
+            |comment: &Comment| comment.rpid.to_string(),
+            async move { comment_page(backend.comments(kind, &oid, 1, sort).await?, 1) },
+            comments_applied,
+        );
+    }
+
+    fn load_more(&mut self, cx: &mut Context<Self>) {
+        let (kind, oid) = self.dynamic.comment_target();
+        let oid = oid.to_owned();
+        let sort = self.sort;
+        let backend = match self.backend(cx) {
+            Ok(backend) => backend,
+            Err(error) => {
+                self.state.fail_more(error);
                 cx.notify();
+                return;
+            }
+        };
+
+        spawn_more(
+            self,
+            cx,
+            |this| &mut this.state.list,
+            |comment: &Comment| comment.rpid.to_string(),
+            move |meta| {
+                let page = meta.page + 1;
+                async move { comment_page(backend.comments(kind, &oid, page, sort).await?, page) }
             },
+            comments_applied,
         );
     }
 
@@ -171,78 +125,9 @@ impl CommentsView {
         self.load(true, cx);
     }
 
-    fn render_summary(&self, cx: &App) -> AnyElement {
-        let primary = cx.theme().primary;
-        let muted = cx.theme().muted_foreground;
-        let border = cx.theme().border;
-        let radius = cx.theme().radius;
-        let author = self.dynamic.author();
-        let text = self.dynamic.text();
-        let tip = self.dynamic.forward_tip();
-        let archive = self.dynamic.archive();
-
-        v_flex()
-            .gap_3()
-            .p_3()
-            .rounded(radius)
-            .bg(cx.theme().muted.opacity(0.25))
-            .child(
-                h_flex()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        Avatar::new()
-                            .src(author.face.clone())
-                            .name(author.name.clone())
-                            .size(px(36.)),
-                    )
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(primary)
-                                    .child(author.name.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(muted)
-                                    .child(author.pub_time.clone()),
-                            ),
-                    ),
-            )
-            .when(!text.is_empty(), |this| {
-                this.child(
-                    div()
-                        .text_sm()
-                        .line_height(relative(1.6))
-                        .child(text.to_owned()),
-                )
-            })
-            .when_some(archive, |this, archive| {
-                this.child(archive_summary(archive, cx))
-            })
-            .when_some(tip, |this, tip| {
-                this.child(
-                    h_flex()
-                        .items_center()
-                        .gap_2()
-                        .p_2()
-                        .rounded(radius)
-                        .border_1()
-                        .border_color(border)
-                        .text_xs()
-                        .text_color(muted)
-                        .child(Icon::new(IconName::CircleAlert).with_size(px(14.)))
-                        .child(tip.to_owned()),
-                )
-            })
-            .into_any_element()
+    fn retry_more(&mut self, cx: &mut Context<Self>) {
+        self.state.retry_more();
+        self.load(false, cx);
     }
 
     fn render_sort_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -393,14 +278,14 @@ impl CommentsView {
         let muted = cx.theme().muted_foreground;
         let danger = cx.theme().danger;
 
-        if self.loading && self.items.is_empty() {
+        if self.state.loading && self.state.items.is_empty() {
             return h_flex()
                 .py_6()
                 .justify_center()
                 .child(Spinner::new())
                 .into_any_element();
         }
-        if let Some(error) = self.error.clone() {
+        if let Some(error) = self.state.error.clone() {
             return h_flex()
                 .items_center()
                 .gap_3()
@@ -413,7 +298,7 @@ impl CommentsView {
                 )
                 .into_any_element();
         }
-        if self.loaded && self.items.is_empty() {
+        if self.state.loaded && self.state.items.is_empty() {
             return h_flex()
                 .py_6()
                 .justify_center()
@@ -429,14 +314,14 @@ impl CommentsView {
         let muted = cx.theme().muted_foreground;
         let danger = cx.theme().danger;
 
-        if self.loading_more {
+        if self.state.loading_more {
             return h_flex()
                 .py_2()
                 .justify_center()
                 .child(Spinner::new().small())
                 .into_any_element();
         }
-        if let Some(error) = self.more_error.clone() {
+        if let Some(error) = self.state.more_error.clone() {
             return h_flex()
                 .items_center()
                 .justify_center()
@@ -446,11 +331,11 @@ impl CommentsView {
                     Button::new("comment-more-retry")
                         .small()
                         .label("重试")
-                        .on_click(cx.listener(|this, _, _, cx| this.load(false, cx))),
+                        .on_click(cx.listener(|this, _, _, cx| this.retry_more(cx))),
                 )
                 .into_any_element();
         }
-        if self.has_more {
+        if self.state.has_more {
             return h_flex()
                 .justify_center()
                 .child(
@@ -462,7 +347,7 @@ impl CommentsView {
                 )
                 .into_any_element();
         }
-        if self.loaded {
+        if self.state.loaded {
             return h_flex()
                 .py_2()
                 .justify_center()
@@ -473,6 +358,32 @@ impl CommentsView {
         }
         div().into_any_element()
     }
+}
+
+fn comment_page(
+    page: CommentPage,
+    requested: u32,
+) -> Result<Page<Comment, CommentMeta>, rigili_bilibili::ApiError> {
+    let CommentPage {
+        page: info,
+        replies,
+    } = page;
+    let incoming = replies.unwrap_or_default();
+    let has_more = !incoming.is_empty();
+    let number = if info.num == 0 { requested } else { info.num };
+    Ok(Page::new(
+        incoming,
+        has_more,
+        CommentMeta {
+            page: number,
+            total: info.count.max(info.acount),
+        },
+    ))
+}
+
+fn comments_applied(this: &mut CommentsView) {
+    let state = &mut this.state;
+    state.has_more = state.has_more && (state.items.len() as u64) < state.meta.total;
 }
 
 fn message_markdown(content: &CommentContent) -> String {
@@ -547,84 +458,20 @@ fn escape_attr(value: &str) -> String {
     escaped
 }
 
-fn archive_summary(archive: &DynamicArchive, cx: &App) -> AnyElement {
-    let muted = cx.theme().muted_foreground;
-    let border = cx.theme().border;
-    let radius = cx.theme().radius;
-
-    h_flex()
-        .items_center()
-        .gap_3()
-        .p_2()
-        .rounded(radius)
-        .border_1()
-        .border_color(border)
-        .child(
-            div()
-                .w(px(160.))
-                .aspect_ratio(16. / 9.)
-                .rounded(radius)
-                .overflow_hidden()
-                .child(
-                    img(thumbnail(&archive.cover, 320))
-                        .size_full()
-                        .object_fit(ObjectFit::Cover),
-                ),
-        )
-        .child(
-            v_flex()
-                .flex_1()
-                .min_w_0()
-                .gap_1()
-                .child(
-                    div()
-                        .text_sm()
-                        .line_height(relative(1.4))
-                        .line_clamp(2)
-                        .child(archive.title.clone()),
-                )
-                .child(
-                    h_flex()
-                        .items_center()
-                        .gap_3()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(
-                            h_flex()
-                                .items_center()
-                                .gap_1()
-                                .child(Icon::new(IconName::Play).with_size(px(12.)))
-                                .child(archive.stat.play.clone()),
-                        )
-                        .child(
-                            h_flex()
-                                .items_center()
-                                .gap_1()
-                                .child(Icon::new(IconName::MessageCircle).with_size(px(12.)))
-                                .child(archive.stat.danmaku.clone()),
-                        )
-                        .when(!archive.duration_text.is_empty(), |this| {
-                            this.child(archive.duration_text.clone())
-                        }),
-                ),
-        )
-        .into_any_element()
-}
-
 impl Render for CommentsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
         let border = cx.theme().border;
-        let summary = self.render_summary(cx);
         let sort_tabs = self.render_sort_tabs(cx);
         let initial = self.render_initial_state(cx);
         let footer = self.render_footer(cx);
-        let total = if self.loaded {
-            Some(format!("共 {} 条评论", format_count(self.total)))
+        let total = if self.state.loaded {
+            Some(format!("共 {} 条评论", format_count(self.state.meta.total)))
         } else {
             None
         };
         let comments = self
+            .state
             .items
             .iter()
             .map(|comment| {
@@ -637,9 +484,9 @@ impl Render for CommentsView {
             .collect::<Vec<_>>();
 
         v_flex()
+            .w_full()
             .gap_4()
             .pb_4()
-            .child(summary)
             .child(
                 h_flex()
                     .items_center()

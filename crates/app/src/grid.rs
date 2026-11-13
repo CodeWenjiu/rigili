@@ -1,18 +1,15 @@
-use std::collections::HashSet;
 use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::*;
-use gpui_kit::component::scroll::{Scrollbar, ScrollbarHandle};
 use gpui_kit::component::skeleton::Skeleton;
-use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::{
-    FavItem, HistoryItem, PopularVideo, RecommendVideo, SearchVideo, SpaceVideo, WatchLaterItem,
-    thumbnail,
+    FavItem, HistoryItem, LiveRoom, PgcItem, PopularVideo, RecommendVideo, SearchLiveRoom,
+    SearchMedia, SearchVideo, SpaceVideo, WatchLaterItem, normalize_url, thumbnail,
 };
 use rigili_core::{OpenSpace, OpenVideo, format_count, format_date, format_duration, format_ymd};
 
@@ -21,8 +18,6 @@ use crate::preview::{self, PreviewSource};
 use crate::watch_later;
 
 pub(crate) const CARD_GAP: Pixels = px(16.);
-pub(crate) const LIST_FOOTER_HEIGHT: Pixels = px(56.);
-pub(crate) const PAGE_GUTTER_REMS: f32 = 1.5;
 const CARD_TEXT_HEIGHT_REMS: f32 = 4.25;
 const CARD_BODY_GAP: f32 = 8.;
 
@@ -103,6 +98,10 @@ pub(crate) struct VideoCard {
 }
 
 impl VideoCard {
+    pub(crate) fn key(&self) -> String {
+        format!("video:{}", self.bvid)
+    }
+
     pub(crate) fn id(&self) -> &SharedString {
         &self.id
     }
@@ -340,25 +339,119 @@ impl From<WatchLaterItem> for VideoCard {
     }
 }
 
+#[derive(Clone)]
+pub(crate) struct LiveCard {
+    pub(crate) id: SharedString,
+    pub(crate) room_id: u64,
+    pub(crate) cover: String,
+    pub(crate) title: String,
+    pub(crate) meta: String,
+    pub(crate) online: String,
+}
+
+impl LiveCard {
+    pub(crate) fn key(&self) -> String {
+        format!("live:{}", self.room_id)
+    }
+}
+
+impl From<LiveRoom> for LiveCard {
+    fn from(room: LiveRoom) -> Self {
+        let cover = if room.cover.is_empty() {
+            room.system_cover
+        } else {
+            room.cover
+        };
+        let meta = if room.area_name.is_empty() {
+            room.uname
+        } else {
+            format!("{} · {}", room.uname, room.area_name)
+        };
+
+        Self {
+            id: SharedString::from(format!("live:{}", room.roomid)),
+            room_id: room.roomid,
+            cover: normalize_url(&cover),
+            title: room.title,
+            meta,
+            online: format_count(room.online),
+        }
+    }
+}
+
+impl From<SearchLiveRoom> for LiveCard {
+    fn from(room: SearchLiveRoom) -> Self {
+        let meta = if room.area.is_empty() {
+            room.name
+        } else {
+            format!("{} · {}", room.name, room.area)
+        };
+
+        Self {
+            id: SharedString::from(format!("live:{}", room.room_id)),
+            room_id: room.room_id,
+            cover: room.cover,
+            title: room.title,
+            meta,
+            online: format_count(room.online),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct PgcCard {
+    pub(crate) id: SharedString,
+    pub(crate) season_id: u64,
+    pub(crate) cover: String,
+    pub(crate) title: String,
+    pub(crate) subtitle: String,
+    pub(crate) score: String,
+    pub(crate) index_show: String,
+    pub(crate) badge: Option<String>,
+}
+
+impl PgcCard {
+    pub(crate) fn key(&self) -> String {
+        format!("pgc:{}", self.season_id)
+    }
+}
+
+impl From<PgcItem> for PgcCard {
+    fn from(item: PgcItem) -> Self {
+        Self {
+            id: SharedString::from(format!("pgc:{}", item.season_id)),
+            season_id: item.season_id,
+            cover: item.cover,
+            title: item.title,
+            subtitle: item.subtitle,
+            score: item.score,
+            index_show: item.index_show,
+            badge: (!item.badge.is_empty()).then_some(item.badge),
+        }
+    }
+}
+
+impl From<SearchMedia> for PgcCard {
+    fn from(item: SearchMedia) -> Self {
+        Self {
+            id: SharedString::from(format!("pgc:{}", item.season_id)),
+            season_id: item.season_id,
+            cover: item.cover,
+            title: item.title,
+            subtitle: item.subtitle,
+            score: item.score,
+            index_show: item.index_show,
+            badge: item.badge,
+        }
+    }
+}
+
 pub(crate) fn card_text_height(window: &Window) -> Pixels {
     rems(CARD_TEXT_HEIGHT_REMS).to_pixels(window.rem_size())
 }
 
 pub(crate) fn card_height(width: Pixels, text_height: Pixels) -> Pixels {
     px(width.as_f32() * 9. / 16.) + px(CARD_BODY_GAP) + text_height
-}
-
-pub(crate) fn append_unique_by<T>(
-    items: &mut Vec<T>,
-    seen: &mut HashSet<String>,
-    incoming: Vec<T>,
-    key: impl Fn(&T) -> String,
-) {
-    items.extend(incoming.into_iter().filter(|item| seen.insert(key(item))));
-}
-
-pub(crate) fn index_by<T>(items: &[T], key: impl Fn(&T) -> String) -> HashSet<String> {
-    items.iter().map(key).collect()
 }
 
 #[derive(Clone, Copy)]
@@ -835,103 +928,112 @@ where
     .into_any_element()
 }
 
-pub(crate) fn page_gutter(window: &Window) -> Pixels {
-    rems(PAGE_GUTTER_REMS).to_pixels(window.rem_size())
-}
-
-pub(crate) fn virtual_list_scrollbar<H: ScrollbarHandle + Clone>(
-    handle: &H,
-    content_size: gpui_kit::Size<Pixels>,
-) -> AnyElement {
-    scrollbar_overlay(
-        Scrollbar::vertical(handle)
-            .scroll_size(content_size)
-            .viewport_from_layout(),
-    )
-}
-
-fn scrollbar_overlay(scrollbar: Scrollbar) -> AnyElement {
-    div()
-        .absolute()
-        .inset_0()
-        .child(scrollbar)
-        .into_any_element()
-}
-
-pub(crate) fn list_content_size(
-    sizes: &[gpui_kit::Size<Pixels>],
-    gap: Pixels,
-) -> gpui_kit::Size<Pixels> {
-    let height = sizes.iter().map(|size| size.height.as_f32()).sum::<f32>()
-        + gap.as_f32() * sizes.len().saturating_sub(1) as f32;
-    size(px(0.), px(height))
-}
-
-pub(crate) fn profile_badge(
-    label: impl Into<SharedString>,
-    background: Hsla,
-    foreground: Hsla,
-) -> AnyElement {
-    div()
-        .flex_shrink_0()
-        .px_2()
-        .py_1()
-        .rounded(px(4.))
-        .bg(background)
-        .text_color(foreground)
-        .text_xs()
-        .child(label.into())
-        .into_any_element()
-}
-
-pub(crate) fn profile_stat(label: &'static str, value: String, cx: &App) -> AnyElement {
-    v_flex()
-        .items_center()
-        .gap_1()
-        .child(div().text_lg().child(value))
-        .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(label),
-        )
-        .into_any_element()
-}
-
-pub(crate) fn list_footer(
-    retry_id: impl Into<ElementId>,
-    more_error: Option<String>,
-    muted: Hsla,
-    danger: Hsla,
-    on_retry: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> AnyElement {
-    let content = if let Some(error) = more_error {
-        h_flex()
-            .items_center()
-            .gap_3()
-            .child(div().text_sm().text_color(danger).child(error))
-            .child(
-                Button::new(retry_id)
-                    .small()
-                    .label("重试")
-                    .on_click(on_retry),
-            )
-            .into_any_element()
-    } else {
-        h_flex()
-            .items_center()
-            .gap_2()
-            .child(Spinner::new().small())
-            .child(div().text_sm().text_color(muted).child("正在加载…"))
-            .into_any_element()
-    };
+pub(crate) fn video_card_row<V>(
+    cards: &[VideoCard],
+    row: usize,
+    columns: usize,
+    frame: CardFrame,
+    window: &mut Window,
+    cx: &mut Context<V>,
+) -> AnyElement
+where
+    V: EventEmitter<OpenSpace> + EventEmitter<OpenVideo> + 'static,
+{
+    let CardFrame { style, metrics } = frame;
+    let start = row * columns;
+    let end = (start + columns).min(cards.len());
 
     h_flex()
-        .h(LIST_FOOTER_HEIGHT)
-        .items_center()
-        .justify_center()
-        .child(content)
+        .h(metrics.height())
+        .gap(CARD_GAP)
+        .children((start..end).map(|index| {
+            let open = cards[index].open();
+            let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(open.clone()));
+            video_card(
+                &cards[index],
+                VideoCardKind::Default,
+                style,
+                metrics,
+                window,
+                cx,
+                on_open,
+            )
+        }))
         .into_any_element()
+}
+
+pub(crate) fn live_card(
+    card: &LiveCard,
+    style: CardStyle,
+    metrics: CardMetrics,
+    footer_icon: Option<IconName>,
+    window: &mut Window,
+    cx: &mut App,
+    on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    media_card(
+        MediaCard {
+            id: card.id.clone(),
+            cover: &card.cover,
+            title: &card.title,
+            footer: Some(&card.meta),
+            footer_icon,
+            title_lines: 2,
+            thumb_width: metrics.thumb_width,
+            overlay: CardOverlay {
+                leading: Some((IconName::Eye, &card.online)),
+                secondary: None,
+                trailing: Some("直播中"),
+                badge: None,
+            },
+            author: None,
+            video: None,
+        },
+        style,
+        metrics.width,
+        metrics.text_height,
+        window,
+        cx,
+        on_open,
+    )
+    .into_any_element()
+}
+
+pub(crate) fn pgc_card(
+    card: &PgcCard,
+    style: CardStyle,
+    metrics: CardMetrics,
+    footer_icon: Option<IconName>,
+    window: &mut Window,
+    cx: &mut App,
+    on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    media_card(
+        MediaCard {
+            id: card.id.clone(),
+            cover: &card.cover,
+            title: &card.title,
+            footer: Some(&card.subtitle),
+            footer_icon,
+            title_lines: 2,
+            thumb_width: metrics.thumb_width,
+            overlay: CardOverlay {
+                leading: (!card.score.is_empty()).then_some((IconName::Star, card.score.as_str())),
+                secondary: None,
+                trailing: (!card.index_show.is_empty()).then_some(card.index_show.as_str()),
+                badge: card.badge.as_deref(),
+            },
+            author: None,
+            video: None,
+        },
+        style,
+        metrics.width,
+        metrics.text_height,
+        window,
+        cx,
+        on_open,
+    )
+    .into_any_element()
 }
 
 pub(crate) fn skeleton_card(width: Pixels, radius: Pixels) -> impl IntoElement {
@@ -949,15 +1051,40 @@ pub(crate) fn skeleton_card(width: Pixels, radius: Pixels) -> impl IntoElement {
         .child(Skeleton::new().h_3().w_1_3())
 }
 
+pub(crate) fn card_grid_loading<G: CardGrid>(
+    id: impl Into<ElementId>,
+    width: Pixels,
+    text_height: Pixels,
+    scale_factor: f32,
+    radius: Pixels,
+) -> AnyElement {
+    let columns = G::columns(width);
+    let metrics = G::metrics(width, text_height, scale_factor);
+
+    div()
+        .id(id)
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .child(
+            h_flex()
+                .flex_wrap()
+                .gap_x(CARD_GAP)
+                .gap_y_6()
+                .children((0..columns * 2).map(|_| skeleton_card(metrics.width, radius))),
+        )
+        .into_any_element()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        CARD_GAP, CardGrid, FolderCards, VideoCard, VideoCards, append_unique_by, index_by,
-        round_to_device_pixel,
+        CARD_GAP, CardGrid, FolderCards, LiveCard, VideoCard, VideoCards, round_to_device_pixel,
     };
+    use crate::paging::{append_unique_by, index_by};
     use gpui_kit::px;
     use rigili_bilibili::{
-        FavCounts, FavItem, FavUpper, HistoryItem, HistoryRef, SearchVideo, SpaceVideo,
+        FavCounts, FavItem, FavUpper, HistoryItem, HistoryRef, LiveRoom, SearchVideo, SpaceVideo,
     };
 
     #[test]
@@ -1071,6 +1198,25 @@ mod tests {
             |item| item.clone(),
         );
         assert_eq!(items, ["BV1", "BV2"]);
+    }
+
+    #[test]
+    fn normalizes_live_room_cards() {
+        let card = LiveCard::from(LiveRoom {
+            roomid: 7,
+            title: "直播".into(),
+            uname: "UP主".into(),
+            online: 12_345,
+            cover: "//i0.hdslb.com/cover.jpg".into(),
+            system_cover: String::new(),
+            area_name: "游戏".into(),
+            face: String::new(),
+        });
+
+        assert_eq!(card.id.as_ref(), "live:7");
+        assert_eq!(card.cover, "https://i0.hdslb.com/cover.jpg");
+        assert_eq!(card.meta, "UP主 · 游戏");
+        assert_eq!(card.online, "1.2万");
     }
 
     #[test]

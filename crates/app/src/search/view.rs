@@ -1,6 +1,7 @@
 rigili_macro::mod_prv!(cards, feed, items, list, toolbar, user);
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
+use std::ops::{Deref, DerefMut};
 
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::notification::Notification;
@@ -19,6 +20,7 @@ use rigili_core::{
 };
 
 use crate::login;
+use crate::paging::Paged;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum SearchTab {
@@ -121,18 +123,8 @@ enum SearchLayout {
 }
 
 struct TabState {
-    items: Vec<SearchItem>,
-    seen: HashSet<String>,
+    list: Paged<SearchItem, u32>,
     users: Vec<items::UserItem>,
-    page: u32,
-    num_pages: u32,
-    generation: u64,
-    loading: bool,
-    loading_more: bool,
-    error: Option<String>,
-    more_error: Option<String>,
-    loaded: bool,
-    scroll: VirtualListScrollHandle,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -145,19 +137,23 @@ struct FollowState {
 impl TabState {
     fn new() -> Self {
         Self {
-            items: Vec::new(),
-            seen: HashSet::new(),
+            list: Paged::new(),
             users: Vec::new(),
-            page: 0,
-            num_pages: 0,
-            generation: 0,
-            loading: false,
-            loading_more: false,
-            error: None,
-            more_error: None,
-            loaded: false,
-            scroll: VirtualListScrollHandle::new(),
         }
+    }
+}
+
+impl Deref for TabState {
+    type Target = Paged<SearchItem, u32>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.list
+    }
+}
+
+impl DerefMut for TabState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.list
     }
 }
 
@@ -177,6 +173,30 @@ pub struct SearchView {
 impl EventEmitter<OpenVideo> for SearchView {}
 impl EventEmitter<OpenLive> for SearchView {}
 impl EventEmitter<OpenSpace> for SearchView {}
+
+impl crate::list::ListWidth for SearchView {
+    fn list_width(&self) -> Pixels {
+        self.list_width
+    }
+
+    fn set_list_width(&mut self, width: Pixels) {
+        self.list_width = width;
+    }
+}
+
+impl crate::season::SeasonOpener for SearchView {
+    fn opening(&mut self) -> &mut Option<u64> {
+        &mut self.opening
+    }
+
+    fn notice(&mut self) -> &mut Option<String> {
+        &mut self.notice
+    }
+
+    fn season_backend(&self) -> Option<Backend> {
+        self.backend.clone()
+    }
+}
 
 impl SearchView {
     pub fn new(cx: &mut Context<Self>) -> Self {

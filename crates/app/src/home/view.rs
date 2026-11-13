@@ -1,17 +1,16 @@
 rigili_macro::mod_prv!(feed, list);
 
-use std::collections::HashSet;
+use crate::paging::Paged;
 
-use gpui_kit::assets::IconName;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::{LiveRoom, PgcItem};
 
-use crate::grid::VideoCard;
+use crate::grid::{LiveCard, PgcCard, VideoCard};
 use rigili_core::backend::{self, Backend};
-use rigili_core::{OpenLive, OpenSpace, OpenVideo, Refresh, api_error_message, format_count};
+use rigili_core::{OpenLive, OpenSpace, OpenVideo, Refresh, api_error_message};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum HomeTab {
@@ -69,26 +68,6 @@ pub(crate) enum HomeItem {
     Pgc(PgcCard),
 }
 
-pub(crate) struct LiveCard {
-    id: SharedString,
-    room_id: u64,
-    cover: String,
-    title: String,
-    meta: String,
-    online: String,
-}
-
-pub(crate) struct PgcCard {
-    id: SharedString,
-    season_id: u64,
-    cover: String,
-    title: String,
-    subtitle: String,
-    score: String,
-    index_show: String,
-    badge: Option<String>,
-}
-
 #[derive(Clone)]
 pub(crate) enum OpenTarget {
     Video(OpenVideo),
@@ -97,19 +76,11 @@ pub(crate) enum OpenTarget {
 }
 
 impl HomeItem {
-    pub(crate) fn id(&self) -> &SharedString {
-        match self {
-            Self::Video(video) => video.id(),
-            Self::Live(live) => &live.id,
-            Self::Pgc(pgc) => &pgc.id,
-        }
-    }
-
     pub(crate) fn key(&self) -> String {
         match self {
-            Self::Video(video) => format!("video:{}", video.bvid()),
-            Self::Live(live) => format!("live:{}", live.room_id),
-            Self::Pgc(pgc) => format!("pgc:{}", pgc.season_id),
+            Self::Video(video) => video.key(),
+            Self::Live(live) => live.key(),
+            Self::Pgc(pgc) => pgc.key(),
         }
     }
 
@@ -130,137 +101,21 @@ impl HomeItem {
             _ => None,
         }
     }
-
-    fn cover(&self) -> &str {
-        match self {
-            Self::Video(video) => video.cover(),
-            Self::Live(live) => &live.cover,
-            Self::Pgc(pgc) => &pgc.cover,
-        }
-    }
-
-    fn title(&self) -> &str {
-        match self {
-            Self::Video(video) => video.title(),
-            Self::Live(live) => &live.title,
-            Self::Pgc(pgc) => &pgc.title,
-        }
-    }
-
-    fn footer(&self) -> &str {
-        match self {
-            Self::Video(video) => video.meta(),
-            Self::Live(live) => &live.meta,
-            Self::Pgc(pgc) => &pgc.subtitle,
-        }
-    }
-
-    fn leading(&self) -> Option<(IconName, &str)> {
-        match self {
-            Self::Video(video) => Some((IconName::Play, video.views())),
-            Self::Live(live) => Some((IconName::Eye, &live.online)),
-            Self::Pgc(pgc) => {
-                (!pgc.score.is_empty()).then_some((IconName::Star, pgc.score.as_str()))
-            }
-        }
-    }
-
-    fn secondary(&self) -> Option<(Option<IconName>, &str)> {
-        match self {
-            Self::Video(video) => Some((Some(IconName::MessageCircle), video.danmaku())),
-            Self::Live(_) => None,
-            Self::Pgc(_) => None,
-        }
-    }
-
-    fn trailing(&self) -> Option<&str> {
-        match self {
-            Self::Video(video) => (!video.duration().is_empty()).then_some(video.duration()),
-            Self::Live(_) => Some("直播中"),
-            Self::Pgc(pgc) => (!pgc.index_show.is_empty()).then_some(pgc.index_show.as_str()),
-        }
-    }
-
-    fn badge(&self) -> Option<&str> {
-        match self {
-            Self::Video(_) | Self::Live(_) => None,
-            Self::Pgc(pgc) => pgc.badge.as_deref(),
-        }
-    }
 }
 
 impl From<LiveRoom> for HomeItem {
     fn from(room: LiveRoom) -> Self {
-        let cover = if room.cover.is_empty() {
-            room.system_cover
-        } else {
-            room.cover
-        };
-        let cover = match cover.strip_prefix("//") {
-            Some(rest) => format!("https://{rest}"),
-            None => cover,
-        };
-        let meta = if room.area_name.is_empty() {
-            room.uname
-        } else {
-            format!("{} · {}", room.uname, room.area_name)
-        };
-
-        Self::Live(LiveCard {
-            id: SharedString::from(format!("live:{}", room.roomid)),
-            room_id: room.roomid,
-            cover,
-            title: room.title,
-            meta,
-            online: format_count(room.online),
-        })
+        Self::Live(LiveCard::from(room))
     }
 }
 
 impl From<PgcItem> for HomeItem {
     fn from(item: PgcItem) -> Self {
-        Self::Pgc(PgcCard {
-            id: SharedString::from(format!("pgc:{}", item.season_id)),
-            season_id: item.season_id,
-            cover: item.cover,
-            title: item.title,
-            subtitle: item.subtitle,
-            score: item.score,
-            index_show: item.index_show,
-            badge: (!item.badge.is_empty()).then_some(item.badge),
-        })
+        Self::Pgc(PgcCard::from(item))
     }
 }
 
-pub(crate) struct TabState {
-    items: Vec<HomeItem>,
-    seen: HashSet<String>,
-    page: u32,
-    has_more: bool,
-    loading: bool,
-    loading_more: bool,
-    error: Option<String>,
-    more_error: Option<String>,
-    generation: u64,
-    scroll: VirtualListScrollHandle,
-}
-
-impl TabState {
-    fn new() -> Self {
-        Self {
-            items: Vec::new(),
-            seen: HashSet::new(),
-            page: 0,
-            has_more: false,
-            loading: false,
-            loading_more: false,
-            error: None,
-            more_error: None,
-            generation: 0,
-            scroll: VirtualListScrollHandle::new(),
-        }
-    }
-}
+pub(crate) type TabState = Paged<HomeItem, u32>;
 
 pub struct HomeView {
     backend: Option<Backend>,
@@ -274,6 +129,16 @@ pub struct HomeView {
 impl EventEmitter<OpenVideo> for HomeView {}
 impl EventEmitter<OpenLive> for HomeView {}
 impl EventEmitter<OpenSpace> for HomeView {}
+
+impl crate::list::ListWidth for HomeView {
+    fn list_width(&self) -> Pixels {
+        self.list_width
+    }
+
+    fn set_list_width(&mut self, width: Pixels) {
+        self.list_width = width;
+    }
+}
 
 impl HomeView {
     pub fn new(cx: &mut Context<Self>) -> Self {
@@ -373,9 +238,8 @@ impl Render for HomeView {
 
 #[cfg(test)]
 mod tests {
-    use super::{HomeItem, HomeTab, OpenTarget, PgcCard};
-    use gpui_kit::SharedString;
-    use gpui_kit::assets::IconName;
+    use super::{HomeItem, HomeTab, OpenTarget};
+    use crate::grid::PgcCard;
     use rigili_bilibili::PgcItem;
 
     #[test]
@@ -407,31 +271,24 @@ mod tests {
             _ => panic!("expected pgc card"),
         };
         assert_eq!(card.season_id, 47836);
-        assert_eq!(item.trailing(), Some("全8话"));
-        assert_eq!(item.badge(), Some("大会员"));
+        assert_eq!(card.index_show, "全8话");
+        assert_eq!(card.badge.as_deref(), Some("大会员"));
+        assert_eq!(card.score, "9.7");
         assert!(matches!(item.target(), OpenTarget::Season(47836)));
-        assert_eq!(
-            item.leading().map(|(icon, text)| (icon, text.to_owned())),
-            Some((IconName::Star, "9.7".to_owned()))
-        );
     }
 
     #[test]
     fn leaves_empty_subtitles_and_badges_out_of_cards() {
-        let card = PgcCard {
-            id: SharedString::from("pgc:1"),
+        let card = PgcCard::from(PgcItem {
             season_id: 1,
-            cover: String::new(),
             title: "作品".into(),
             subtitle: String::new(),
             score: String::new(),
             index_show: String::new(),
-            badge: None,
-        };
-        let item = HomeItem::Pgc(card);
-        assert_eq!(item.footer(), "");
-        assert_eq!(item.leading(), None);
-        assert_eq!(item.trailing(), None);
-        assert_eq!(item.badge(), None);
+            badge: String::new(),
+            ..Default::default()
+        });
+        assert!(card.subtitle.is_empty());
+        assert_eq!(card.badge, None);
     }
 }

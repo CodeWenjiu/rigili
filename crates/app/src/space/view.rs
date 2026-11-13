@@ -1,5 +1,5 @@
-use std::collections::HashSet;
-use std::rc::Rc;
+use std::collections::HashMap;
+use std::ops::{Deref, DerefMut};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::avatar::Avatar;
@@ -8,7 +8,6 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::v_virtual_list;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -19,17 +18,20 @@ use rigili_bilibili::{
 use rigili_core::backend::{self, Backend};
 use rigili_core::login as login_state;
 use rigili_core::runtime::spawn_api;
-use rigili_core::{
-    OpenSpace, OpenVideo, Refresh, api_error_message, api_task_error_message, format_count,
-};
+use rigili_core::{OpenSpace, OpenVideo, Refresh, api_task_error_message, format_count};
 
 use super::{comment, compose};
 use crate::grid::{
-    CARD_GAP, CardGrid, CardMetrics, CardStyle, FolderCards, LIST_FOOTER_HEIGHT, VideoCard,
-    VideoCardKind, VideoCards, append_unique_by, card_text_height, list_content_size, list_footer,
-    page_gutter, profile_badge, profile_stat, video_card, virtual_list_scrollbar,
+    CARD_GAP, CardFrame, CardGrid, CardStyle, FolderCards, VideoCard, VideoCards, card_text_height,
+};
+use crate::list::{
+    LIST_FOOTER_HEIGHT, Rows, list_footer, track_element_width, virtual_rows_tracked,
 };
 use crate::login;
+use crate::paging::{Page, Paged, spawn_first, spawn_more};
+use crate::profile::{profile_stat, profile_title};
+use crate::state_view::{Layout, centered_spinner, empty_state, error_state};
+use crate::tabs::TabStrip;
 
 const DYNAMIC_CARD_MAX_WIDTH: Pixels = px(840.);
 
@@ -54,14 +56,6 @@ impl SpaceTab {
             Self::Collections => "合集和系列",
         }
     }
-
-    fn index(self) -> usize {
-        match self {
-            Self::Dynamics => 0,
-            Self::Videos => 1,
-            Self::Collections => 2,
-        }
-    }
 }
 
 pub struct SpaceView {
@@ -74,10 +68,16 @@ pub struct SpaceView {
     profile_error: Option<String>,
     followed: bool,
     follow_pending: bool,
-    dynamics: DynamicsState,
+    expanded_comments: Option<String>,
+    comment_views: HashMap<String, Entity<comment::CommentsView>>,
+    comment_trigger_key: Option<String>,
+    comments_focus: FocusHandle,
+    comment_trigger_focus: FocusHandle,
+    dynamics: Paged<DynamicItem, String>,
     space_videos: SpaceVideosState,
     collections: CollectionsState,
     list_width: Pixels,
+    keyword: String,
     space_search: Entity<InputState>,
     _space_search_sub: Subscription,
 }
@@ -86,14 +86,33 @@ impl EventEmitter<OpenVideo> for SpaceView {}
 impl EventEmitter<OpenSpace> for SpaceView {}
 impl EventEmitter<CloseSpace> for SpaceView {}
 
+impl crate::list::ListWidth for SpaceView {
+    fn list_width(&self) -> Pixels {
+        self.list_width
+    }
+
+    fn set_list_width(&mut self, width: Pixels) {
+        self.list_width = width;
+    }
+}
+
 impl SpaceView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let space_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索投稿视频"));
-        let space_search_sub = cx.subscribe_in(&space_search, window, |this, _, event, _, cx| {
-            if let InputEvent::PressEnter { .. } = event {
-                this.submit_search(cx);
-            }
-        });
+        let space_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("搜索动态、投稿、合集"));
+        let space_search_sub =
+            cx.subscribe_in(&space_search, window, |this, _, event, _, cx| match event {
+                InputEvent::PressEnter { .. } => this.submit_search(cx),
+                InputEvent::Change
+                    if this.space_search.read(cx).value().is_empty()
+                        && !this.keyword.is_empty() =>
+                {
+                    this.submit_search(cx);
+                }
+                _ => {}
+            });
+        let comments_focus = cx.focus_handle();
+        let comment_trigger_focus = cx.focus_handle();
         Self {
             backend: None,
             mid: None,
@@ -104,10 +123,16 @@ impl SpaceView {
             profile_error: None,
             followed: false,
             follow_pending: false,
-            dynamics: DynamicsState::new(),
+            expanded_comments: None,
+            comment_views: HashMap::new(),
+            comment_trigger_key: None,
+            comments_focus,
+            comment_trigger_focus,
+            dynamics: Paged::new(),
             space_videos: SpaceVideosState::new(),
             collections: CollectionsState::new(),
             list_width: px(0.),
+            keyword: String::new(),
             space_search,
             _space_search_sub: space_search_sub,
         }
@@ -128,10 +153,14 @@ impl SpaceView {
         self.profile_error = None;
         self.followed = false;
         self.follow_pending = false;
-        self.dynamics = DynamicsState::new();
+        self.expanded_comments = None;
+        self.comment_views.clear();
+        self.comment_trigger_key = None;
+        self.dynamics = Paged::new();
         self.space_videos = SpaceVideosState::new();
         self.collections = CollectionsState::new();
         self.list_width = px(0.);
+        self.keyword.clear();
         self.space_search
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.load_profile(cx);
@@ -140,16 +169,7 @@ impl SpaceView {
     }
 
     fn backend(&mut self, cx: &mut Context<Self>) -> Result<Backend, String> {
-        if let Some(backend) = &self.backend {
-            return Ok(backend.clone());
-        }
-        match backend::get(cx) {
-            Ok(backend) => {
-                self.backend = Some(backend.clone());
-                Ok(backend)
-            }
-            Err(error) => Err(api_error_message(error)),
-        }
+        backend::cached(&mut self.backend, cx)
     }
 
     fn load_profile(&mut self, cx: &mut Context<Self>) {
@@ -284,6 +304,42 @@ impl SpaceView {
         compose::open(window, cx, mid, name);
     }
 
+    fn toggle_comments(
+        &mut self,
+        key: String,
+        dynamic: DynamicItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.expanded_comments.as_deref() == Some(key.as_str()) {
+            self.collapse_comments(window, cx);
+            return;
+        }
+
+        if let std::collections::hash_map::Entry::Vacant(entry) =
+            self.comment_views.entry(key.clone())
+        {
+            let view = cx.new(|_| comment::CommentsView::new(dynamic));
+            view.update(cx, |view, cx| view.load(true, cx));
+            entry.insert(view);
+        }
+
+        self.expanded_comments = Some(key.clone());
+        self.comment_trigger_key = Some(key);
+        cx.notify();
+        let focus = self.comments_focus.clone();
+        window.defer(cx, move |window, cx| window.focus(&focus, cx));
+    }
+
+    fn collapse_comments(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.expanded_comments.take().is_none() {
+            return;
+        }
+        cx.notify();
+        let focus = self.comment_trigger_focus.clone();
+        window.defer(cx, move |window, cx| window.focus(&focus, cx));
+    }
+
     fn load_if_needed(&mut self, cx: &mut Context<Self>) {
         if self.mid.is_none() {
             return;
@@ -294,14 +350,14 @@ impl SpaceView {
                     && !self.dynamics.loading
                     && self.dynamics.error.is_none() =>
             {
-                self.load_dynamics(true, cx);
+                self.load_dynamics(cx);
             }
             SpaceTab::Videos
                 if !self.space_videos.loaded
                     && !self.space_videos.loading
                     && self.space_videos.error.is_none() =>
             {
-                self.load_space_videos(true, cx);
+                self.load_space_videos(cx);
             }
             SpaceTab::Collections
                 if !self.collections.loaded
@@ -316,8 +372,8 @@ impl SpaceView {
 
     fn reload_tab(&mut self, cx: &mut Context<Self>) {
         match self.tab {
-            SpaceTab::Dynamics => self.load_dynamics(true, cx),
-            SpaceTab::Videos => self.load_space_videos(true, cx),
+            SpaceTab::Dynamics => self.load_dynamics(cx),
+            SpaceTab::Videos => self.load_space_videos(cx),
             SpaceTab::Collections => self.load_collections(true, cx),
         }
     }
@@ -333,108 +389,53 @@ impl SpaceView {
 
     fn submit_search(&mut self, cx: &mut Context<Self>) {
         let keyword = self.space_search.read(cx).value().trim().to_owned();
-        if keyword == self.space_videos.keyword {
+        if keyword == self.keyword {
             return;
         }
-        self.space_videos.keyword = keyword;
-        self.load_space_videos(true, cx);
-    }
-}
-
-struct DynamicsState {
-    items: Vec<DynamicItem>,
-    seen: HashSet<String>,
-    offset: String,
-    has_more: bool,
-    loading: bool,
-    loading_more: bool,
-    loaded: bool,
-    error: Option<String>,
-    more_error: Option<String>,
-    generation: u64,
-}
-
-impl DynamicsState {
-    fn new() -> Self {
-        Self {
-            items: Vec::new(),
-            seen: HashSet::new(),
-            offset: String::new(),
-            has_more: false,
-            loading: false,
-            loading_more: false,
-            loaded: false,
-            error: None,
-            more_error: None,
-            generation: 0,
+        self.keyword = keyword;
+        self.expanded_comments = None;
+        self.comment_trigger_key = None;
+        if self.tab == SpaceTab::Videos {
+            self.load_space_videos(cx);
+        } else {
+            self.space_videos = SpaceVideosState::new();
+            self.load_if_needed(cx);
+            cx.notify();
         }
-    }
-
-    fn reset(&mut self) -> u64 {
-        self.generation += 1;
-        self.items.clear();
-        self.seen.clear();
-        self.offset.clear();
-        self.has_more = true;
-        self.loading = true;
-        self.loading_more = false;
-        self.loaded = false;
-        self.error = None;
-        self.more_error = None;
-        self.generation
     }
 }
 
 struct SpaceVideosState {
-    items: Vec<VideoCard>,
-    seen: HashSet<String>,
-    page: u32,
-    total: u64,
-    keyword: String,
+    list: Paged<VideoCard, VideoMeta>,
     order: SpaceVideoOrder,
-    has_more: bool,
-    loading: bool,
-    loading_more: bool,
-    loaded: bool,
-    error: Option<String>,
-    more_error: Option<String>,
-    generation: u64,
-    scroll: VirtualListScrollHandle,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct VideoMeta {
+    pub(crate) page: u32,
+    pub(crate) total: u64,
 }
 
 impl SpaceVideosState {
     fn new() -> Self {
         Self {
-            items: Vec::new(),
-            seen: HashSet::new(),
-            page: 0,
-            total: 0,
-            keyword: String::new(),
+            list: Paged::new(),
             order: SpaceVideoOrder::default(),
-            has_more: false,
-            loading: false,
-            loading_more: false,
-            loaded: false,
-            error: None,
-            more_error: None,
-            generation: 0,
-            scroll: VirtualListScrollHandle::new(),
         }
     }
+}
 
-    fn reset(&mut self) -> u64 {
-        self.generation += 1;
-        self.items.clear();
-        self.seen.clear();
-        self.page = 0;
-        self.total = 0;
-        self.has_more = true;
-        self.loading = true;
-        self.loading_more = false;
-        self.loaded = false;
-        self.error = None;
-        self.more_error = None;
-        self.generation
+impl Deref for SpaceVideosState {
+    type Target = Paged<VideoCard, VideoMeta>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.list
+    }
+}
+
+impl DerefMut for SpaceVideosState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.list
     }
 }
 
@@ -468,165 +469,129 @@ impl CollectionsState {
         self.error = None;
         self.generation
     }
-
-    fn is_empty(&self) -> bool {
-        self.seasons.is_empty() && self.series.is_empty()
-    }
 }
 
 impl SpaceView {
-    fn load_dynamics(&mut self, reset: bool, cx: &mut Context<Self>) {
+    fn load_dynamics(&mut self, cx: &mut Context<Self>) {
         let Some(mid) = self.mid else {
             return;
-        };
-        if !reset && (self.dynamics.loading || self.dynamics.loading_more) {
-            return;
-        }
-        if !reset && (!self.dynamics.has_more || self.dynamics.offset.is_empty()) {
-            return;
-        }
-        let offset = if reset {
-            String::new()
-        } else {
-            self.dynamics.offset.clone()
         };
         let backend = match self.backend(cx) {
             Ok(backend) => backend,
             Err(error) => {
-                self.dynamics.error = Some(error);
+                self.dynamics.fail_first_reset(error);
                 cx.notify();
                 return;
             }
         };
-        let generation = if reset {
-            self.dynamics.reset()
-        } else {
-            self.dynamics.loading_more = true;
-            self.dynamics.more_error = None;
-            self.dynamics.generation
-        };
-        cx.notify();
 
-        spawn_api(
+        self.expanded_comments = None;
+        self.comment_views.clear();
+        self.comment_trigger_key = None;
+
+        spawn_first(
+            self,
             cx,
-            async move { backend.dynamics(mid, &offset).await },
-            move |this, result, cx| {
-                if this.dynamics.generation != generation {
-                    return;
-                }
-                this.dynamics.loading = false;
-                this.dynamics.loading_more = false;
-                match result {
-                    Ok(page) => {
-                        append_unique_by(
-                            &mut this.dynamics.items,
-                            &mut this.dynamics.seen,
-                            page.items,
-                            |item| item.id_str.clone(),
-                        );
-                        this.dynamics.offset = page.offset;
-                        this.dynamics.has_more = page.has_more;
-                        this.dynamics.loaded = true;
-                        this.dynamics.error = None;
-                        this.dynamics.more_error = None;
-                    }
-                    Err(error) => {
-                        let message = api_task_error_message(error, cx);
-                        if reset {
-                            this.dynamics.error = Some(message);
-                        } else {
-                            this.dynamics.more_error = Some(message);
-                        }
-                    }
-                }
-                cx.notify();
+            |this| &mut this.dynamics,
+            |item: &DynamicItem| item.id_str.clone(),
+            async move {
+                let page = backend.dynamics(mid, "").await?;
+                Ok(Page::new(page.items, page.has_more, page.offset))
             },
+            |_| {},
         );
     }
 
     fn load_more_dynamics(&mut self, cx: &mut Context<Self>) {
-        self.load_dynamics(false, cx);
-    }
-
-    fn load_space_videos(&mut self, reset: bool, cx: &mut Context<Self>) {
         let Some(mid) = self.mid else {
             return;
         };
-        if !reset
-            && (self.space_videos.loading
-                || self.space_videos.loading_more
-                || !self.space_videos.has_more)
-        {
+        if self.dynamics.meta.is_empty() {
             return;
         }
-        let page = if reset { 1 } else { self.space_videos.page + 1 };
-        let order = self.space_videos.order;
-        let keyword = self.space_videos.keyword.clone();
         let backend = match self.backend(cx) {
             Ok(backend) => backend,
             Err(error) => {
-                self.space_videos.error = Some(error);
+                self.dynamics.fail_more(error);
                 cx.notify();
                 return;
             }
         };
-        let generation = if reset {
-            self.space_videos.reset()
-        } else {
-            self.space_videos.loading_more = true;
-            self.space_videos.more_error = None;
-            self.space_videos.generation
-        };
-        cx.notify();
 
-        spawn_api(
+        spawn_more(
+            self,
             cx,
-            async move { backend.space_videos(mid, page, order, &keyword).await },
-            move |this, result, cx| {
-                if this.space_videos.generation != generation {
-                    return;
-                }
-                this.space_videos.loading = false;
-                this.space_videos.loading_more = false;
-                match result {
-                    Ok(page) => {
-                        let incoming = page
-                            .list
-                            .vlist
-                            .into_iter()
-                            .map(VideoCard::from)
-                            .collect::<Vec<_>>();
-                        let incoming_empty = incoming.is_empty();
-                        append_unique_by(
-                            &mut this.space_videos.items,
-                            &mut this.space_videos.seen,
-                            incoming,
-                            |card| card.bvid().to_owned(),
-                        );
-                        this.space_videos.page = page.page.pn;
-                        this.space_videos.total = page.page.count;
-                        this.space_videos.has_more = !incoming_empty
-                            && (this.space_videos.items.len() as u64) < page.page.count;
-                        this.space_videos.loaded = true;
-                        this.space_videos.error = None;
-                        this.space_videos.more_error = None;
-                    }
-                    Err(error) => {
-                        let message = api_task_error_message(error, cx);
-                        if reset {
-                            this.space_videos.error = Some(message);
-                        } else {
-                            this.space_videos.more_error = Some(message);
-                        }
-                    }
-                }
-                cx.notify();
+            |this| &mut this.dynamics,
+            |item: &DynamicItem| item.id_str.clone(),
+            move |offset| async move {
+                let page = backend.dynamics(mid, &offset).await?;
+                Ok(Page::new(page.items, page.has_more, page.offset))
             },
+            |_| {},
+        );
+    }
+
+    fn retry_more_dynamics(&mut self, cx: &mut Context<Self>) {
+        self.dynamics.retry_more();
+        self.load_more_dynamics(cx);
+    }
+
+    fn load_space_videos(&mut self, cx: &mut Context<Self>) {
+        let Some(mid) = self.mid else {
+            return;
+        };
+        let backend = match self.backend(cx) {
+            Ok(backend) => backend,
+            Err(error) => {
+                self.space_videos.fail_first_reset(error);
+                cx.notify();
+                return;
+            }
+        };
+        let order = self.space_videos.order;
+        let keyword = self.keyword.clone();
+
+        spawn_first(
+            self,
+            cx,
+            |this| &mut this.space_videos.list,
+            |card: &VideoCard| card.bvid().to_owned(),
+            async move { space_page(backend.space_videos(mid, 1, order, &keyword).await?) },
+            space_videos_applied,
         );
     }
 
     fn load_more_space_videos(&mut self, cx: &mut Context<Self>) {
-        self.load_space_videos(false, cx);
+        let Some(mid) = self.mid else {
+            return;
+        };
+        let backend = match self.backend(cx) {
+            Ok(backend) => backend,
+            Err(error) => {
+                self.space_videos.fail_more(error);
+                cx.notify();
+                return;
+            }
+        };
+        let order = self.space_videos.order;
+        let keyword = self.keyword.clone();
+
+        spawn_more(
+            self,
+            cx,
+            |this| &mut this.space_videos.list,
+            |card: &VideoCard| card.bvid().to_owned(),
+            move |meta| {
+                let page = meta.page + 1;
+                async move { space_page(backend.space_videos(mid, page, order, &keyword).await?) }
+            },
+            space_videos_applied,
+        );
+    }
+
+    fn retry_more_space_videos(&mut self, cx: &mut Context<Self>) {
+        self.space_videos.retry_more();
+        self.load_more_space_videos(cx);
     }
 
     fn set_space_order(&mut self, order: SpaceVideoOrder, cx: &mut Context<Self>) {
@@ -634,7 +599,7 @@ impl SpaceView {
             return;
         }
         self.space_videos.order = order;
-        self.load_space_videos(true, cx);
+        self.load_space_videos(cx);
     }
 
     fn load_collections(&mut self, reset: bool, cx: &mut Context<Self>) {
@@ -698,10 +663,10 @@ impl SpaceView {
     fn render_profile(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        let foreground = theme.foreground;
+        let _foreground = theme.foreground;
         let primary = theme.primary;
-        let primary_foreground = theme.primary_foreground;
-        let accent = theme.accent;
+        let _primary_foreground = theme.primary_foreground;
+        let _accent = theme.accent;
         let background = theme.background;
         let danger = theme.danger;
         let banner_bg = linear_gradient(
@@ -813,42 +778,13 @@ impl SpaceView {
                             .min_w_0()
                             .gap_1()
                             .pt_2()
-                            .child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .min_w_0()
-                                            .truncate()
-                                            .text_lg()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(foreground)
-                                            .child(name.to_owned()),
-                                    )
-                                    .when(level > 0, |this| {
-                                        this.child(profile_badge(
-                                            format!("LV{level}"),
-                                            primary.opacity(0.15),
-                                            primary,
-                                        ))
-                                    })
-                                    .when_some(vip, |this, label| {
-                                        this.child(profile_badge(
-                                            label,
-                                            primary,
-                                            primary_foreground,
-                                        ))
-                                    })
-                                    .when_some(official, |this, label| {
-                                        this.child(
-                                            div()
-                                                .max_w(px(220.))
-                                                .truncate()
-                                                .child(profile_badge(label, accent, muted)),
-                                        )
-                                    }),
-                            )
+                            .child(profile_title(
+                                name.to_owned(),
+                                Some(level),
+                                vip,
+                                official,
+                                cx,
+                            ))
                             .child(
                                 div()
                                     .id(SharedString::from(format!(
@@ -959,48 +895,43 @@ impl SpaceView {
             return centered_spinner();
         }
         if let Some(error) = self.dynamics.error.clone() {
-            return error_state(error, danger, "space-dynamics-retry", cx);
+            return error_state(
+                Layout::Centered,
+                error,
+                "space-dynamics-retry",
+                danger,
+                cx.listener(|this, _, _, cx| this.reload_tab(cx)),
+            );
         }
         if self.dynamics.items.is_empty() {
-            return empty_state(muted, "暂无动态");
+            return empty_state(Layout::Centered, muted, "暂无动态");
         }
 
+        let needle = (!self.keyword.is_empty()).then(|| self.keyword.to_lowercase());
         let cards = self
             .dynamics
             .items
             .iter()
             .enumerate()
+            .filter(|(_, item)| {
+                needle
+                    .as_deref()
+                    .is_none_or(|needle| dynamic_matches(item, needle))
+            })
             .map(|(index, item)| self.render_dynamic_card(item, index, cx))
             .collect::<Vec<_>>();
-        let footer = if self.dynamics.loading_more {
-            h_flex()
-                .h(LIST_FOOTER_HEIGHT)
+        if cards.is_empty() {
+            return v_flex()
+                .flex_1()
+                .min_h_0()
+                .items_center()
                 .justify_center()
-                .child(Spinner::new().small())
-                .into_any_element()
-        } else if let Some(error) = self.dynamics.more_error.clone() {
-            list_footer(
-                "space-dynamics-more",
-                Some(error),
-                muted,
-                danger,
-                cx.listener(|this, _, _, cx| this.load_more_dynamics(cx)),
-            )
-        } else if self.dynamics.has_more {
-            h_flex()
-                .h(LIST_FOOTER_HEIGHT)
-                .justify_center()
-                .child(
-                    Button::new("space-dynamics-more")
-                        .small()
-                        .ghost()
-                        .label("加载更多")
-                        .on_click(cx.listener(|this, _, _, cx| this.load_more_dynamics(cx))),
-                )
-                .into_any_element()
-        } else {
-            div().h(LIST_FOOTER_HEIGHT).into_any_element()
-        };
+                .gap_3()
+                .child(div().text_sm().text_color(muted).child("未找到匹配动态"))
+                .child(self.render_dynamics_footer(cx))
+                .into_any_element();
+        }
+        let footer = self.render_dynamics_footer(cx);
 
         div()
             .id("space-dynamics-scroll")
@@ -1019,6 +950,41 @@ impl SpaceView {
                 ),
             )
             .into_any_element()
+    }
+
+    fn render_dynamics_footer(&self, cx: &mut Context<Self>) -> AnyElement {
+        let muted = cx.theme().muted_foreground;
+        let danger = cx.theme().danger;
+
+        if self.dynamics.loading_more {
+            h_flex()
+                .h(LIST_FOOTER_HEIGHT)
+                .justify_center()
+                .child(Spinner::new().small())
+                .into_any_element()
+        } else if let Some(error) = self.dynamics.more_error.clone() {
+            list_footer(
+                "space-dynamics-more",
+                Some(error),
+                muted,
+                danger,
+                cx.listener(|this, _, _, cx| this.retry_more_dynamics(cx)),
+            )
+        } else if self.dynamics.has_more {
+            h_flex()
+                .h(LIST_FOOTER_HEIGHT)
+                .justify_center()
+                .child(
+                    Button::new("space-dynamics-more")
+                        .small()
+                        .ghost()
+                        .label("加载更多")
+                        .on_click(cx.listener(|this, _, _, cx| this.load_more_dynamics(cx))),
+                )
+                .into_any_element()
+        } else {
+            div().h(LIST_FOOTER_HEIGHT).into_any_element()
+        }
     }
 
     fn render_dynamic_card(
@@ -1042,10 +1008,15 @@ impl SpaceView {
         let stat = item.stat();
         let comment_count = stat.map(|stat| stat.comment.count).unwrap_or(0);
         let like_count = stat.map(|stat| stat.like.count).unwrap_or(0);
+        let key = comment_key(item);
+        let expanded = self.expanded_comments.as_deref() == Some(key.as_str());
+        let is_trigger = self.comment_trigger_key.as_deref() == Some(key.as_str());
+        let comment_color = if expanded { primary } else { muted };
         let on_comments = {
             let dynamic = item.clone();
-            cx.listener(move |_, _: &ClickEvent, window, cx| {
-                comment::open(dynamic.clone(), window, cx);
+            let key = key.clone();
+            cx.listener(move |this, _: &ClickEvent, window, cx| {
+                this.toggle_comments(key.clone(), dynamic.clone(), window, cx);
             })
         };
 
@@ -1146,14 +1117,25 @@ impl SpaceView {
                                 .text()
                                 .small()
                                 .px_2()
-                                .accessibility_label("查看评论")
-                                .tooltip("查看评论")
+                                .when(is_trigger, |button| {
+                                    button.track_focus(&self.comment_trigger_focus)
+                                })
+                                .accessibility_label(if expanded {
+                                    "收起评论"
+                                } else {
+                                    "查看评论"
+                                })
+                                .tooltip(if expanded {
+                                    "收起评论"
+                                } else {
+                                    "查看评论"
+                                })
                                 .on_click(on_comments)
                                 .child(
                                     h_flex()
                                         .items_center()
                                         .gap_1()
-                                        .text_color(muted)
+                                        .text_color(comment_color)
                                         .child(
                                             Icon::new(IconName::MessageCircle).with_size(px(16.)),
                                         )
@@ -1163,6 +1145,39 @@ impl SpaceView {
                     )
                     .child(action_item(IconName::ThumbsUp, format_count(like_count))),
             )
+            .when(expanded, |this| {
+                this.child(
+                    v_flex()
+                        .id(("space-inline-comments", index))
+                        .w_full()
+                        .track_focus(&self.comments_focus)
+                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                            if event.keystroke.key.as_str() == "escape" {
+                                this.collapse_comments(window, cx);
+                                cx.stop_propagation();
+                            }
+                        }))
+                        .gap_3()
+                        .border_t_1()
+                        .border_color(border)
+                        .pt_4()
+                        .child(
+                            h_flex().w_full().justify_end().gap_2().child(
+                                Button::new(("space-comments-collapse", index))
+                                    .small()
+                                    .ghost()
+                                    .icon(IconName::ChevronUp)
+                                    .label("收起")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.collapse_comments(window, cx)
+                                    })),
+                            ),
+                        )
+                        .when_some(self.comment_views.get(&key), |this, view| {
+                            this.child(view.clone())
+                        }),
+                )
+            })
             .into_any_element()
     }
 
@@ -1275,81 +1290,72 @@ impl SpaceView {
             .into_any_element()
     }
 
-    fn render_space_videos(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let toolbar = self.render_space_videos_toolbar(cx);
-        let content = self.render_space_videos_content(window, cx);
-        v_flex()
-            .flex_1()
-            .min_h_0()
-            .gap_4()
-            .child(toolbar)
-            .child(content)
-            .into_any_element()
-    }
-
-    fn render_space_videos_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
         let primary = cx.theme().primary;
         let muted = cx.theme().muted_foreground;
         let hover_bg = cx.theme().accent.opacity(0.5);
         let radius = cx.theme().radius;
+        let videos = self.tab == SpaceTab::Videos;
 
         h_flex()
             .flex_shrink_0()
             .items_center()
             .gap_2()
-            .child(
-                h_flex().items_center().gap_2().children(
-                    [
-                        (SpaceVideoOrder::Latest, "最新发布", 0usize),
-                        (SpaceVideoOrder::Plays, "最多播放", 1usize),
-                    ]
-                    .map(|(order, label, index)| {
-                        let active = self.space_videos.order == order;
-                        let group = SharedString::from(format!("space-order-{index}"));
-                        v_flex()
-                            .group(group.clone())
-                            .items_center()
-                            .rounded(radius)
-                            .when(!active, |this| this.hover(move |this| this.bg(hover_bg)))
-                            .child(
-                                Button::new(("space-order", index))
-                                    .text()
-                                    .small()
-                                    .px_2()
-                                    .accessibility_label(label)
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.set_space_order(order, cx);
-                                    }))
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(if active { primary } else { muted })
-                                            .group_hover(group, move |this| {
-                                                this.text_color(primary)
-                                            })
-                                            .child(label),
-                                    ),
-                            )
-                    }),
-                ),
-            )
+            .when(videos, |this| {
+                this.child(
+                    h_flex().items_center().gap_2().children(
+                        [
+                            (SpaceVideoOrder::Latest, "最新发布", 0usize),
+                            (SpaceVideoOrder::Plays, "最多播放", 1usize),
+                        ]
+                        .map(|(order, label, index)| {
+                            let active = self.space_videos.order == order;
+                            let group = SharedString::from(format!("space-order-{index}"));
+                            v_flex()
+                                .group(group.clone())
+                                .items_center()
+                                .rounded(radius)
+                                .when(!active, |this| this.hover(move |this| this.bg(hover_bg)))
+                                .child(
+                                    Button::new(("space-order", index))
+                                        .text()
+                                        .small()
+                                        .px_2()
+                                        .accessibility_label(label)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.set_space_order(order, cx);
+                                        }))
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(if active { primary } else { muted })
+                                                .group_hover(group, move |this| {
+                                                    this.text_color(primary)
+                                                })
+                                                .child(label),
+                                        ),
+                                )
+                        }),
+                    ),
+                )
+                .when(self.space_videos.meta.total > 0, |this| {
+                    this.child(
+                        div()
+                            .text_sm()
+                            .text_color(muted)
+                            .child(format!("共 {} 个投稿", self.space_videos.meta.total)),
+                    )
+                })
+            })
             .child(div().flex_1())
             .child(
-                div().w(px(220.)).child(
+                div().w(px(240.)).child(
                     Input::new(&self.space_search)
                         .small()
                         .cleanable(true)
                         .prefix(IconName::Search),
                 ),
             )
-            .when(self.space_videos.total > 0, |this| {
-                this.child(
-                    div()
-                        .text_sm()
-                        .text_color(muted)
-                        .child(format!("共 {} 个投稿", self.space_videos.total)),
-                )
-            })
             .into_any_element()
     }
 
@@ -1365,85 +1371,58 @@ impl SpaceView {
             return centered_spinner();
         }
         if let Some(error) = self.space_videos.error.clone() {
-            return error_state(error, danger, "space-videos-retry", cx);
+            return error_state(
+                Layout::Centered,
+                error,
+                "space-videos-retry",
+                danger,
+                cx.listener(|this, _, _, cx| this.reload_tab(cx)),
+            );
         }
         if self.space_videos.items.is_empty() {
-            return empty_state(muted, "暂无投稿");
+            return empty_state(
+                Layout::Centered,
+                muted,
+                if self.keyword.is_empty() {
+                    "暂无投稿"
+                } else {
+                    "未找到匹配投稿"
+                },
+            );
         }
 
         let style = CardStyle::new(cx);
-        let gutter = page_gutter(window);
         let columns = VideoCards::columns(self.list_width);
         let metrics = VideoCards::metrics(
             self.list_width,
             card_text_height(window),
             window.scale_factor(),
         );
-        let row_height = metrics.height();
+        let frame = CardFrame { style, metrics };
         let rows = self.space_videos.items.len().div_ceil(columns);
-        let known_width = self.list_width;
         let footer = self.space_videos.loading_more || self.space_videos.more_error.is_some();
-        let footer_index = rows;
+        let sizes = Rows::new(rows, metrics.height()).footer_if(footer, LIST_FOOTER_HEIGHT);
 
-        let mut sizes = vec![size(px(0.), row_height); rows];
-        if footer {
-            sizes.push(size(px(0.), LIST_FOOTER_HEIGHT));
-        }
-        let content_size = list_content_size(&sizes, rems(1.5).to_pixels(window.rem_size()));
-        let sizes = Rc::new(sizes);
-
-        let view = cx.entity();
-        let weak = view.downgrade();
-        let list = v_virtual_list(
-            view,
+        virtual_rows_tracked(
+            cx,
+            window,
             "space-video-list",
             sizes,
-            move |this, visible_range, window, cx| {
-                this.maybe_load_more_space_videos(visible_range.end.saturating_sub(1), rows, cx);
-                visible_range
+            self.list_width,
+            &self.space_videos.scroll,
+            move |this, range, window, cx| {
+                this.maybe_load_more_space_videos(range.end.saturating_sub(1), rows, cx);
+                range
                     .map(|row| {
-                        if footer && row == footer_index {
+                        if footer && row == rows {
                             this.render_space_videos_footer(cx)
                         } else {
-                            this.render_space_video_row(row, columns, metrics, style, window, cx)
+                            this.render_space_video_row(row, columns, frame, window, cx)
                         }
                     })
-                    .collect::<Vec<_>>()
+                    .collect()
             },
         )
-        .gap_y_6()
-        .track_scroll(&self.space_videos.scroll);
-
-        div()
-            .relative()
-            .flex_1()
-            .min_h_0()
-            .mr(px(-gutter.as_f32()))
-            .pr(gutter)
-            .overflow_hidden()
-            .on_children_prepainted(move |bounds, window, cx| {
-                let Some(width) = bounds.first().map(|bounds| bounds.size.width) else {
-                    return;
-                };
-                if width == known_width {
-                    return;
-                }
-                let weak = weak.clone();
-                window.defer(cx, move |_, cx| {
-                    let _ = weak.update(cx, |this, cx| {
-                        if this.list_width != width {
-                            this.list_width = width;
-                            cx.notify();
-                        }
-                    });
-                });
-            })
-            .child(list)
-            .child(virtual_list_scrollbar(
-                &self.space_videos.scroll,
-                content_size,
-            ))
-            .into_any_element()
     }
 
     fn maybe_load_more_space_videos(
@@ -1461,34 +1440,11 @@ impl SpaceView {
         &self,
         row: usize,
         columns: usize,
-        metrics: CardMetrics,
-        style: CardStyle,
+        frame: CardFrame,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let start = row * columns;
-        let end = (start + columns).min(self.space_videos.items.len());
-
-        h_flex()
-            .h(metrics.height())
-            .gap(CARD_GAP)
-            .children((start..end).map(|index| {
-                let card = &self.space_videos.items[index];
-                let open = card.open();
-                let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| {
-                    cx.emit(open.clone());
-                });
-                video_card(
-                    card,
-                    VideoCardKind::Default,
-                    style,
-                    metrics,
-                    window,
-                    cx,
-                    on_open,
-                )
-            }))
-            .into_any_element()
+        crate::grid::video_card_row(&self.space_videos.items, row, columns, frame, window, cx)
     }
 
     fn render_space_videos_footer(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1501,7 +1457,7 @@ impl SpaceView {
             more_error,
             muted,
             danger,
-            cx.listener(|this, _, _, cx| this.load_more_space_videos(cx)),
+            cx.listener(|this, _, _, cx| this.retry_more_space_videos(cx)),
         )
     }
 
@@ -1513,120 +1469,91 @@ impl SpaceView {
             return centered_spinner();
         }
         if let Some(error) = self.collections.error.clone() {
-            return error_state(error, danger, "space-collections-retry", cx);
+            return error_state(
+                Layout::Centered,
+                error,
+                "space-collections-retry",
+                danger,
+                cx.listener(|this, _, _, cx| this.reload_tab(cx)),
+            );
         }
-        if self.collections.is_empty() {
-            return v_flex()
-                .flex_1()
-                .min_h_0()
-                .items_center()
-                .justify_center()
-                .gap_3()
-                .child(
-                    Icon::new(IconName::ListVideo)
-                        .with_size(px(56.))
-                        .text_color(muted),
-                )
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(muted)
-                        .child("今天真是寂寞如雪啊~"),
-                )
-                .into_any_element();
+        let needle = (!self.keyword.is_empty()).then(|| self.keyword.to_lowercase());
+        let seasons = season_cards(&self.collections.seasons, needle.as_deref());
+        let series = series_cards(&self.collections.series, needle.as_deref());
+        if seasons.is_empty() && series.is_empty() {
+            return collection_empty_state(
+                muted,
+                if needle.is_some() {
+                    "未找到匹配合集或系列"
+                } else {
+                    "今天真是寂寞如雪啊~"
+                },
+            );
         }
 
         let columns = FolderCards::columns(self.list_width);
         let width = FolderCards::card_width(self.list_width, columns, window.scale_factor());
         let known_width = self.list_width;
         let weak = cx.entity().downgrade();
-        let sections = [
-            ("合集", season_cards(&self.collections.seasons)),
-            ("系列", series_cards(&self.collections.series)),
-        ]
-        .into_iter()
-        .filter(|(_, cards)| !cards.is_empty())
-        .map(|(title, cards)| render_collection_section(title, &cards, columns, width, muted, cx))
-        .collect::<Vec<_>>();
+        let sections = [("合集", seasons), ("系列", series)]
+            .into_iter()
+            .filter(|(_, cards)| !cards.is_empty())
+            .map(|(title, cards)| {
+                render_collection_section(title, &cards, columns, width, muted, cx)
+            })
+            .collect::<Vec<_>>();
 
         div()
             .id("space-collections-scroll")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
-            .on_prepaint(move |bounds, window, cx| {
-                let width = bounds.size.width;
-                if width == known_width {
-                    return;
-                }
-                let weak = weak.clone();
-                window.defer(cx, move |_, cx| {
-                    let _ = weak.update(cx, |this, cx| {
-                        if this.list_width != width {
-                            this.list_width = width;
-                            cx.notify();
-                        }
-                    });
-                });
-            })
+            .on_prepaint(track_element_width(known_width, weak))
             .child(v_flex().gap_5().pb_4().children(sections))
             .into_any_element()
     }
 
     fn render_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
-        let primary = cx.theme().primary;
-        let muted = cx.theme().muted_foreground;
-        let border = cx.theme().border;
-        let hover_bg = cx.theme().accent.opacity(0.5);
-        let radius = cx.theme().radius;
-
-        h_flex()
-            .flex_shrink_0()
-            .items_end()
-            .gap_4()
-            .border_b_1()
-            .border_color(border)
-            .children(SpaceTab::ALL.map(|tab| {
-                let active = tab == self.tab;
-                let group = SharedString::from(format!("space-tab-{}", tab.index()));
-
-                v_flex()
-                    .group(group.clone())
-                    .items_center()
-                    .gap_1()
-                    .rounded(radius)
-                    .when(!active, |this| this.hover(move |this| this.bg(hover_bg)))
-                    .child(
-                        Button::new(("space-tab", tab.index()))
-                            .text()
-                            .px_2()
-                            .py_1()
-                            .accessibility_label(tab.label())
-                            .on_click(cx.listener(move |this, _, _, cx| this.show_tab(tab, cx)))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(if active { primary } else { muted })
-                                    .group_hover(group, move |this| this.text_color(primary))
-                                    .child(tab.label()),
-                            ),
-                    )
-                    .child(div().h(px(2.)).w(px(24.)).rounded(px(1.)).bg(if active {
-                        primary
-                    } else {
-                        hsla(0., 0., 0., 0.)
-                    }))
-            }))
-            .into_any_element()
+        TabStrip::new("space-tab")
+            .gap(px(16.))
+            .padding_x(px(8.))
+            .render(
+                cx,
+                &SpaceTab::ALL,
+                self.tab,
+                SpaceTab::label,
+                |_| None,
+                |this, tab, cx| this.show_tab(tab, cx),
+            )
     }
 
     fn render_body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         match self.tab {
             SpaceTab::Dynamics => self.render_dynamics(cx),
-            SpaceTab::Videos => self.render_space_videos(window, cx),
+            SpaceTab::Videos => self.render_space_videos_content(window, cx),
             SpaceTab::Collections => self.render_collections(window, cx),
         }
     }
+}
+
+fn dynamic_matches(item: &DynamicItem, lowercase_needle: &str) -> bool {
+    text_matches(item.text(), lowercase_needle)
+        || text_matches(&item.author().name, lowercase_needle)
+        || item
+            .archive()
+            .is_some_and(|archive| text_matches(&archive.title, lowercase_needle))
+        || item
+            .forward()
+            .is_some_and(|forward| dynamic_matches(forward, lowercase_needle))
+}
+
+fn text_matches(text: &str, lowercase_needle: &str) -> bool {
+    text.to_lowercase().contains(lowercase_needle)
+}
+
+fn comment_key(item: &DynamicItem) -> String {
+    let (kind, oid) = item.comment_target();
+    format!("{kind}:{oid}")
 }
 
 impl Refresh for SpaceView {
@@ -1660,6 +1587,7 @@ impl Render for SpaceView {
             .text_color(foreground)
             .child(profile)
             .child(self.render_tabs(cx))
+            .child(self.render_toolbar(cx))
             .child(self.render_body(window, cx))
             .into_any_element()
     }
@@ -1672,9 +1600,10 @@ struct CollectionCard {
     kind: &'static str,
 }
 
-fn season_cards(seasons: &[SeasonMeta]) -> Vec<CollectionCard> {
+fn season_cards(seasons: &[SeasonMeta], needle: Option<&str>) -> Vec<CollectionCard> {
     seasons
         .iter()
+        .filter(|season| needle.is_none_or(|needle| text_matches(&season.name, needle)))
         .map(|season| CollectionCard {
             name: season.name.clone(),
             cover: season.cover.clone(),
@@ -1684,9 +1613,10 @@ fn season_cards(seasons: &[SeasonMeta]) -> Vec<CollectionCard> {
         .collect()
 }
 
-fn series_cards(series: &[SeriesMeta]) -> Vec<CollectionCard> {
+fn series_cards(series: &[SeriesMeta], needle: Option<&str>) -> Vec<CollectionCard> {
     series
         .iter()
+        .filter(|series| needle.is_none_or(|needle| text_matches(&series.name, needle)))
         .map(|series| CollectionCard {
             name: series.name.clone(),
             cover: series.cover.clone(),
@@ -1694,6 +1624,49 @@ fn series_cards(series: &[SeriesMeta]) -> Vec<CollectionCard> {
             kind: "系列",
         })
         .collect()
+}
+
+fn space_page(
+    page: rigili_bilibili::SpaceVideos,
+) -> Result<Page<VideoCard, VideoMeta>, rigili_bilibili::ApiError> {
+    let number = page.page.pn;
+    let total = page.page.count;
+    let incoming = page
+        .list
+        .vlist
+        .into_iter()
+        .map(VideoCard::from)
+        .collect::<Vec<_>>();
+    let has_more = !incoming.is_empty();
+    Ok(Page::new(
+        incoming,
+        has_more,
+        VideoMeta {
+            page: number,
+            total,
+        },
+    ))
+}
+
+fn space_videos_applied(this: &mut SpaceView) {
+    let state = &mut this.space_videos;
+    state.has_more = state.has_more && (state.items.len() as u64) < state.meta.total;
+}
+
+fn collection_empty_state(muted: Hsla, text: &'static str) -> AnyElement {
+    v_flex()
+        .flex_1()
+        .min_h_0()
+        .items_center()
+        .justify_center()
+        .gap_3()
+        .child(
+            Icon::new(IconName::ListVideo)
+                .with_size(px(56.))
+                .text_color(muted),
+        )
+        .child(div().text_sm().text_color(muted).child(text))
+        .into_any_element()
 }
 
 fn render_collection_section(
@@ -1806,43 +1779,72 @@ fn action_item(icon: IconName, count: String) -> AnyElement {
         .into_any_element()
 }
 
-fn centered_spinner() -> AnyElement {
-    v_flex()
-        .flex_1()
-        .min_h_0()
-        .items_center()
-        .justify_center()
-        .child(Spinner::new())
-        .into_any_element()
-}
+#[cfg(test)]
+mod tests {
+    use rigili_bilibili::{
+        DynamicArchive, DynamicAuthor, DynamicContent, DynamicDesc, DynamicItem, DynamicMajor,
+        DynamicModules, SeasonMeta,
+    };
 
-fn error_state(
-    error: String,
-    danger: Hsla,
-    id: &'static str,
-    cx: &mut Context<SpaceView>,
-) -> AnyElement {
-    v_flex()
-        .flex_1()
-        .min_h_0()
-        .items_center()
-        .justify_center()
-        .gap_3()
-        .child(div().text_sm().text_color(danger).child(error))
-        .child(
-            Button::new(id)
-                .label("重试")
-                .on_click(cx.listener(|this, _, _, cx| this.reload_tab(cx))),
-        )
-        .into_any_element()
-}
+    use super::{dynamic_matches, season_cards};
 
-fn empty_state(muted: Hsla, text: &'static str) -> AnyElement {
-    v_flex()
-        .flex_1()
-        .min_h_0()
-        .items_center()
-        .justify_center()
-        .child(div().text_sm().text_color(muted).child(text))
-        .into_any_element()
+    fn dynamic(text: &str, author: &str, archive: Option<&str>) -> DynamicItem {
+        DynamicItem {
+            modules: DynamicModules {
+                module_author: DynamicAuthor {
+                    name: author.into(),
+                    ..Default::default()
+                },
+                module_dynamic: DynamicContent {
+                    desc: Some(DynamicDesc { text: text.into() }),
+                    major: archive.map(|title| DynamicMajor {
+                        archive: Some(DynamicArchive {
+                            title: title.into(),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }),
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn matches_dynamic_text_author_and_video_title() {
+        let item = dynamic("今天聊聊 Rust", "小明", Some("GPUI 入门"));
+
+        assert!(dynamic_matches(&item, "rust"));
+        assert!(dynamic_matches(&item, "小明"));
+        assert!(dynamic_matches(&item, "gpui"));
+        assert!(!dynamic_matches(&item, "kotlin"));
+    }
+
+    #[test]
+    fn matches_forwarded_dynamic() {
+        let mut item = dynamic("转发", "UP主", None);
+        item.orig = Some(Box::new(dynamic("", "", Some("被转发的视频"))));
+
+        assert!(dynamic_matches(&item, "被转发"));
+    }
+
+    #[test]
+    fn filters_collections_by_name() {
+        let seasons = vec![
+            SeasonMeta {
+                name: "Rust 教程".into(),
+                ..Default::default()
+            },
+            SeasonMeta {
+                name: "旅行记录".into(),
+                ..Default::default()
+            },
+        ];
+
+        let cards = season_cards(&seasons, Some("rust"));
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].name, "Rust 教程");
+        assert_eq!(season_cards(&seasons, None).len(), 2);
+    }
 }

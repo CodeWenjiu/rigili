@@ -1,6 +1,6 @@
 rigili_macro::mod_prv!(create_folder, feed, list, sort_folders);
 
-use std::collections::HashSet;
+use std::ops::{Deref, DerefMut};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::alert::Alert;
@@ -12,13 +12,13 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::{BangumiFollow, FavFolder, NavStat};
 use rigili_core::backend::{self, Backend};
-use rigili_core::runtime::spawn_api;
 use rigili_core::{OpenSpace, OpenVideo, Refresh, format_count};
 
-use crate::grid::{VideoCard, profile_badge, profile_stat};
-use crate::login;
+use crate::grid::VideoCard;
+use crate::paging::Paged;
+use crate::profile::{profile_stat, profile_title};
+use crate::tabs::TabStrip;
 use create_folder::CreateFolderDialog;
-use rigili_core::api_task_error_message;
 use sort_folders::SortFoldersDialog;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -67,19 +67,14 @@ impl MineTab {
 }
 
 pub(crate) struct VideoListState {
-    items: Vec<VideoCard>,
-    seen: HashSet<String>,
-    page: u32,
-    cursor_max: u64,
-    cursor_view_at: i64,
-    has_more: bool,
-    loading: bool,
-    loading_more: bool,
-    loaded: bool,
-    error: Option<String>,
-    more_error: Option<String>,
-    generation: u64,
-    scroll: VirtualListScrollHandle,
+    list: Paged<VideoCard, ListMeta>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ListMeta {
+    pub(crate) page: u32,
+    pub(crate) max: u64,
+    pub(crate) view_at: i64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -114,37 +109,21 @@ impl FavoriteView {
 
 impl VideoListState {
     fn new() -> Self {
-        Self {
-            items: Vec::new(),
-            seen: HashSet::new(),
-            page: 0,
-            cursor_max: 0,
-            cursor_view_at: 0,
-            has_more: false,
-            loading: false,
-            loading_more: false,
-            loaded: false,
-            error: None,
-            more_error: None,
-            generation: 0,
-            scroll: VirtualListScrollHandle::new(),
-        }
+        Self { list: Paged::new() }
     }
+}
 
-    fn reset(&mut self) -> u64 {
-        self.generation += 1;
-        self.items.clear();
-        self.seen.clear();
-        self.page = 0;
-        self.cursor_max = 0;
-        self.cursor_view_at = 0;
-        self.has_more = false;
-        self.loading = true;
-        self.loading_more = false;
-        self.loaded = false;
-        self.error = None;
-        self.more_error = None;
-        self.generation
+impl Deref for VideoListState {
+    type Target = Paged<VideoCard, ListMeta>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.list
+    }
+}
+
+impl DerefMut for VideoListState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.list
     }
 }
 
@@ -196,46 +175,25 @@ impl CollectedState {
     }
 }
 
-pub(crate) struct BangumiState {
-    items: Vec<BangumiFollow>,
-    page: u32,
-    has_more: bool,
-    loading: bool,
-    loading_more: bool,
-    loaded: bool,
-    error: Option<String>,
-    more_error: Option<String>,
-    generation: u64,
-    scroll: VirtualListScrollHandle,
-}
+pub(crate) struct BangumiState(Paged<BangumiFollow, u32>);
 
 impl BangumiState {
     fn new() -> Self {
-        Self {
-            items: Vec::new(),
-            page: 0,
-            has_more: false,
-            loading: false,
-            loading_more: false,
-            loaded: false,
-            error: None,
-            more_error: None,
-            generation: 0,
-            scroll: VirtualListScrollHandle::new(),
-        }
+        Self(Paged::new())
     }
+}
 
-    fn reset(&mut self) -> u64 {
-        self.generation += 1;
-        self.items.clear();
-        self.page = 0;
-        self.has_more = false;
-        self.loading = true;
-        self.loading_more = false;
-        self.loaded = false;
-        self.error = None;
-        self.more_error = None;
-        self.generation
+impl Deref for BangumiState {
+    type Target = Paged<BangumiFollow, u32>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for BangumiState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
@@ -262,6 +220,30 @@ pub struct MineView {
 
 impl EventEmitter<OpenVideo> for MineView {}
 impl EventEmitter<OpenSpace> for MineView {}
+
+impl crate::list::ListWidth for MineView {
+    fn list_width(&self) -> Pixels {
+        self.list_width
+    }
+
+    fn set_list_width(&mut self, width: Pixels) {
+        self.list_width = width;
+    }
+}
+
+impl crate::season::SeasonOpener for MineView {
+    fn opening(&mut self) -> &mut Option<u64> {
+        &mut self.opening
+    }
+
+    fn notice(&mut self) -> &mut Option<String> {
+        &mut self.notice
+    }
+
+    fn season_backend(&self) -> Option<Backend> {
+        self.backend.clone()
+    }
+}
 
 impl MineView {
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -351,53 +333,15 @@ impl MineView {
     fn render_profile(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        let primary = theme.primary;
-        let primary_foreground = theme.primary_foreground;
 
         let Some(user) = rigili_core::login::user(cx) else {
-            return h_flex()
-                .w_full()
-                .p_6()
-                .gap_5()
-                .items_center()
-                .rounded(theme.radius_lg)
-                .bg(theme.muted.opacity(0.4))
-                .child(
-                    div()
-                        .size(px(64.))
-                        .rounded_full()
-                        .bg(theme.accent)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            Icon::new(IconName::CircleUser)
-                                .with_size(px(32.))
-                                .text_color(muted),
-                        ),
-                )
-                .child(
-                    v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .gap_1()
-                        .child(div().text_lg().child("未登录"))
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(muted)
-                                .child("登录后查看历史记录、收藏和稍后再看"),
-                        ),
-                )
-                .child(
-                    Button::new("mine-sign-in")
-                        .primary()
-                        .label("登录")
-                        .on_click(cx.listener(|_, _, window, cx| {
-                            login::open(window, cx);
-                        })),
-                )
-                .into_any_element();
+            return crate::login::Prompt::new(
+                "mine",
+                IconName::CircleUser,
+                "登录后查看历史记录、收藏和稍后再看",
+            )
+            .title("未登录")
+            .render(cx);
         };
 
         let stat = self.stat.as_ref();
@@ -434,29 +378,13 @@ impl MineView {
                     .flex_1()
                     .min_w_0()
                     .gap_2()
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_lg()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(user.uname.clone()),
-                            )
-                            .when_some(user.level(), |this, level| {
-                                this.child(profile_badge(
-                                    format!("LV{level}"),
-                                    primary.opacity(0.15),
-                                    primary,
-                                ))
-                            })
-                            .when_some(user.vip_label().map(str::to_owned), |this, label| {
-                                this.child(profile_badge(label, primary, primary_foreground))
-                            }),
-                    )
+                    .child(profile_title(
+                        user.uname.clone(),
+                        user.level(),
+                        user.vip_label().map(str::to_owned),
+                        None,
+                        cx,
+                    ))
                     .child(div().text_xs().text_color(muted).child(balance)),
             )
             .child(
@@ -484,78 +412,21 @@ impl MineView {
     }
 
     fn render_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
-        let primary = cx.theme().primary;
-        let muted = cx.theme().muted_foreground;
-        let border = cx.theme().border;
-        let hover_bg = cx.theme().accent.opacity(0.5);
-        let radius = cx.theme().radius;
-
-        h_flex()
-            .flex_shrink_0()
-            .items_end()
-            .gap_4()
-            .border_b_1()
-            .border_color(border)
-            .children(MineTab::ALL.map(|tab| {
-                let active = tab == self.tab;
-                let group = SharedString::from(format!("mine-tab-{}", tab.index()));
-
-                v_flex()
-                    .group(group.clone())
-                    .items_center()
-                    .gap_1()
-                    .rounded(radius)
-                    .when(!active, |this| this.hover(move |this| this.bg(hover_bg)))
-                    .child(
-                        Button::new(("mine-tab", tab.index()))
-                            .text()
-                            .px_2()
-                            .py_1()
-                            .accessibility_label(tab.label())
-                            .on_click(cx.listener(move |this, _, _, cx| this.show_tab(tab, cx)))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(if active { primary } else { muted })
-                                    .group_hover(group, move |this| this.text_color(primary))
-                                    .child(tab.label()),
-                            ),
-                    )
-                    .child(div().h(px(2.)).w(px(24.)).rounded(px(1.)).bg(if active {
-                        primary
-                    } else {
-                        hsla(0., 0., 0., 0.)
-                    }))
-            }))
-            .into_any_element()
+        TabStrip::new("mine-tab")
+            .gap(px(16.))
+            .padding_x(px(8.))
+            .render(
+                cx,
+                &MineTab::ALL,
+                self.tab,
+                MineTab::label,
+                |_| None,
+                |this, tab, cx| this.show_tab(tab, cx),
+            )
     }
 
     pub(super) fn open_season(&mut self, season_id: u64, cx: &mut Context<Self>) {
-        if self.opening.is_some() {
-            return;
-        }
-        let Some(backend) = self.backend.clone() else {
-            self.notice = Some("客户端尚未初始化".into());
-            cx.notify();
-            return;
-        };
-        self.opening = Some(season_id);
-        self.notice = None;
-        cx.notify();
-
-        spawn_api(
-            cx,
-            async move { rigili_core::resolve_season(backend, season_id).await },
-            move |this, result, cx| {
-                this.opening = None;
-                match result {
-                    Ok(Some(video)) => cx.emit(video),
-                    Ok(None) => this.notice = Some("该作品暂无可播放的剧集".into()),
-                    Err(error) => this.notice = Some(api_task_error_message(error, cx)),
-                }
-                cx.notify();
-            },
-        );
+        crate::season::SeasonOpener::open_season(self, season_id, cx);
     }
 
     fn current_folder(&self) -> Option<&FavFolder> {

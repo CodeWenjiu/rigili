@@ -41,6 +41,19 @@ pub fn get(cx: &App) -> Result<Backend, &ApiError> {
     }
 }
 
+pub fn cached(slot: &mut Option<Backend>, cx: &App) -> Result<Backend, String> {
+    if let Some(backend) = slot {
+        return Ok(backend.clone());
+    }
+    match get(cx) {
+        Ok(backend) => {
+            *slot = Some(backend.clone());
+            Ok(backend)
+        }
+        Err(error) => Err(crate::api_error_message(error)),
+    }
+}
+
 impl Backend {
     fn new() -> Result<Self, ApiError> {
         Ok(Self {

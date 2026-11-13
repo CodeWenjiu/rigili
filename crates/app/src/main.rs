@@ -1,14 +1,20 @@
 rigili_macro::mod_prv!(
     grid,
     home,
+    list,
     login,
     message,
     mine,
+    paging,
     platform,
     preview,
+    profile,
     search,
+    season,
     shell,
     space,
+    state_view,
+    tabs,
     watch_later
 );
 

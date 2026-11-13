@@ -1,26 +1,19 @@
 use gpui_kit::*;
 
-use super::{FavoriteView, FolderSource, MineTab, MineView, VideoListState};
+use super::{FavoriteView, FolderSource, ListMeta, MineTab, MineView, VideoListState};
+use rigili_bilibili::{BangumiFollow, BangumiFollows};
+use rigili_core::api_task_error_message;
 use rigili_core::backend::{self, Backend};
 use rigili_core::runtime::spawn_api;
 
-use crate::grid::{VideoCard, append_unique_by, index_by};
-use rigili_core::{api_error_message, api_task_error_message};
+use crate::grid::VideoCard;
+use crate::paging::{Page, spawn_first, spawn_more};
 
 const BANGUMI_PAGE_SIZE: usize = 20;
 
 impl MineView {
     pub(super) fn backend(&mut self, cx: &mut Context<Self>) -> Result<Backend, String> {
-        if let Some(backend) = &self.backend {
-            return Ok(backend.clone());
-        }
-        match backend::get(cx) {
-            Ok(backend) => {
-                self.backend = Some(backend.clone());
-                Ok(backend)
-            }
-            Err(error) => Err(api_error_message(error)),
-        }
+        backend::cached(&mut self.backend, cx)
     }
 
     pub(super) fn load_stat(&mut self, cx: &mut Context<Self>) {
@@ -163,93 +156,69 @@ impl MineView {
         let backend = match self.backend(cx) {
             Ok(backend) => backend,
             Err(error) => {
-                self.favorites.reset();
-                self.favorites.loading = false;
-                self.favorites.loaded = true;
-                self.favorites.error = Some(error);
+                self.favorites.fail_first_reset(error);
                 cx.notify();
                 return;
             }
         };
 
-        let generation = self.favorites.reset();
-        cx.notify();
-
-        spawn_api(
+        spawn_first(
+            self,
             cx,
-            async move { backend.fav_items(media_id, 1).await },
-            move |this, result, cx| {
-                if this.favorites.generation != generation {
-                    return;
-                }
-                this.favorites.loading = false;
-                this.favorites.loaded = true;
-                match result {
-                    Ok(page) => {
-                        this.favorites.page = 1;
-                        this.favorites.has_more = page.has_more;
-                        this.favorites.items = favorite_cards(page.into_items());
-                        this.favorites.seen =
-                            index_by(&this.favorites.items, |card| card.bvid().to_owned());
-                        this.favorites.scroll.scroll_to_item(0, ScrollStrategy::Top);
-                    }
-                    Err(error) => this.favorites.error = Some(api_task_error_message(error, cx)),
-                }
-                cx.notify();
+            |this| &mut this.favorites.list,
+            |card: &VideoCard| card.bvid().to_owned(),
+            async move {
+                let page = backend.fav_items(media_id, 1).await?;
+                let has_more = page.has_more;
+                Ok(Page::new(
+                    favorite_cards(page.into_items()),
+                    has_more,
+                    ListMeta {
+                        page: 1,
+                        ..Default::default()
+                    },
+                ))
+            },
+            |this| {
+                this.favorites.scroll.scroll_to_item(0, ScrollStrategy::Top);
             },
         );
     }
 
     pub(super) fn load_more_favorites(&mut self, cx: &mut Context<Self>) {
-        if self.favorites.loading
-            || self.favorites.loading_more
-            || !self.favorites.has_more
-            || self.favorites.more_error.is_some()
-        {
-            return;
-        }
         let Some(media_id) = self.folders.current else {
             return;
         };
-        let page = self.favorites.page + 1;
-        let generation = self.favorites.generation;
         let backend = match self.backend(cx) {
             Ok(backend) => backend,
             Err(error) => {
-                self.favorites.more_error = Some(error);
+                self.favorites.fail_more(error);
                 cx.notify();
                 return;
             }
         };
 
-        self.favorites.loading_more = true;
-        cx.notify();
-
-        spawn_api(
+        spawn_more(
+            self,
             cx,
-            async move { backend.fav_items(media_id, page).await },
-            move |this, result, cx| {
-                if this.favorites.generation != generation {
-                    return;
+            |this| &mut this.favorites.list,
+            |card: &VideoCard| card.bvid().to_owned(),
+            move |meta| {
+                let page = meta.page + 1;
+                async move {
+                    let result = backend.fav_items(media_id, page).await?;
+                    let has_more = result.has_more;
+                    Ok(Page::new(
+                        favorite_cards(result.into_items()),
+                        has_more,
+                        ListMeta {
+                            page,
+                            ..Default::default()
+                        },
+                    ))
                 }
-                this.favorites.loading_more = false;
-                match result {
-                    Ok(page_result) => {
-                        this.favorites.page = page;
-                        this.favorites.has_more = page_result.has_more;
-                        append_unique_by(
-                            &mut this.favorites.items,
-                            &mut this.favorites.seen,
-                            favorite_cards(page_result.into_items()),
-                            |card| card.bvid().to_owned(),
-                        );
-                    }
-                    Err(error) => {
-                        this.favorites.more_error = Some(api_task_error_message(error, cx));
-                    }
-                }
-                cx.notify();
             },
+            |_| {},
         );
     }
 
@@ -260,93 +229,50 @@ impl MineView {
         let backend = match self.backend(cx) {
             Ok(backend) => backend,
             Err(error) => {
-                self.history.reset();
-                self.history.loading = false;
-                self.history.loaded = true;
-                self.history.error = Some(error);
+                self.history.fail_first_reset(error);
                 cx.notify();
                 return;
             }
         };
 
-        let generation = self.history.reset();
-        cx.notify();
-
-        spawn_api(
+        spawn_first(
+            self,
             cx,
-            async move { backend.history(0, 0).await },
-            move |this, result, cx| {
-                if this.history.generation != generation {
-                    return;
-                }
-                this.history.loading = false;
-                this.history.loaded = true;
-                match result {
-                    Ok(page) => {
-                        this.history.cursor_max = page.cursor.max;
-                        this.history.cursor_view_at = page.cursor.view_at;
-                        this.history.has_more = !page.list.is_empty();
-                        this.history.items = history_cards(page.list);
-                        this.history.seen =
-                            index_by(&this.history.items, |card| card.bvid().to_owned());
-                        this.history.scroll.scroll_to_item(0, ScrollStrategy::Top);
-                    }
-                    Err(error) => this.history.error = Some(api_task_error_message(error, cx)),
-                }
-                cx.notify();
+            |this| &mut this.history.list,
+            |card: &VideoCard| card.bvid().to_owned(),
+            async move {
+                let page = backend.history(0, 0).await?;
+                Ok(history_page(page))
+            },
+            |this| {
+                this.history.scroll.scroll_to_item(0, ScrollStrategy::Top);
             },
         );
     }
 
     pub(super) fn load_more_history(&mut self, cx: &mut Context<Self>) {
-        if self.history.loading
-            || self.history.loading_more
-            || !self.history.has_more
-            || self.history.more_error.is_some()
-        {
+        if self.user_mid.is_none() {
             return;
         }
-        let max = self.history.cursor_max;
-        let view_at = self.history.cursor_view_at;
-        let generation = self.history.generation;
         let backend = match self.backend(cx) {
             Ok(backend) => backend,
             Err(error) => {
-                self.history.more_error = Some(error);
+                self.history.fail_more(error);
                 cx.notify();
                 return;
             }
         };
 
-        self.history.loading_more = true;
-        cx.notify();
-
-        spawn_api(
+        spawn_more(
+            self,
             cx,
-            async move { backend.history(max, view_at).await },
-            move |this, result, cx| {
-                if this.history.generation != generation {
-                    return;
-                }
-                this.history.loading_more = false;
-                match result {
-                    Ok(page) => {
-                        this.history.cursor_max = page.cursor.max;
-                        this.history.cursor_view_at = page.cursor.view_at;
-                        this.history.has_more = !page.list.is_empty();
-                        append_unique_by(
-                            &mut this.history.items,
-                            &mut this.history.seen,
-                            history_cards(page.list),
-                            |card| card.bvid().to_owned(),
-                        );
-                    }
-                    Err(error) => {
-                        this.history.more_error = Some(api_task_error_message(error, cx));
-                    }
-                }
-                cx.notify();
+            |this| &mut this.history.list,
+            |card: &VideoCard| card.bvid().to_owned(),
+            move |meta| async move {
+                let page = backend.history(meta.max, meta.view_at).await?;
+                Ok(history_page(page))
             },
+            |_| {},
         );
     }
 
@@ -357,41 +283,29 @@ impl MineView {
         let backend = match self.backend(cx) {
             Ok(backend) => backend,
             Err(error) => {
-                self.watch_later.reset();
-                self.watch_later.loading = false;
-                self.watch_later.loaded = true;
-                self.watch_later.error = Some(error);
+                self.watch_later.fail_first_reset(error);
                 cx.notify();
                 return;
             }
         };
 
-        let generation = self.watch_later.reset();
-        cx.notify();
-
-        spawn_api(
+        spawn_first(
+            self,
             cx,
-            async move { backend.watch_later().await },
-            move |this, result, cx| {
-                if this.watch_later.generation != generation {
-                    return;
-                }
-                this.watch_later.loading = false;
-                this.watch_later.loaded = true;
-                match result {
-                    Ok(page) => {
-                        this.watch_later.items = watch_later_cards(page.into_items());
-                        this.watch_later.seen =
-                            index_by(&this.watch_later.items, |card| card.bvid().to_owned());
-                        this.watch_later
-                            .scroll
-                            .scroll_to_item(0, ScrollStrategy::Top);
-                    }
-                    Err(error) => {
-                        this.watch_later.error = Some(api_task_error_message(error, cx));
-                    }
-                }
-                cx.notify();
+            |this| &mut this.watch_later.list,
+            |card: &VideoCard| card.bvid().to_owned(),
+            async move {
+                let page = backend.watch_later().await?;
+                Ok(Page::new(
+                    watch_later_cards(page.into_items()),
+                    false,
+                    ListMeta::default(),
+                ))
+            },
+            |this| {
+                this.watch_later
+                    .scroll
+                    .scroll_to_item(0, ScrollStrategy::Top);
             },
         );
     }
@@ -399,11 +313,11 @@ impl MineView {
     pub(super) fn retry_more(&mut self, tab: MineTab, cx: &mut Context<Self>) {
         match tab {
             MineTab::Favorites => {
-                self.favorites.more_error = None;
+                self.favorites.retry_more();
                 self.load_more_favorites(cx);
             }
             MineTab::History => {
-                self.history.more_error = None;
+                self.history.retry_more();
                 self.load_more_history(cx);
             }
             _ => {}
@@ -484,103 +398,56 @@ impl MineView {
         let backend = match self.backend(cx) {
             Ok(backend) => backend,
             Err(error) => {
-                let state = self.bangumi_state_mut(cinema);
-                state.reset();
-                state.loading = false;
-                state.loaded = true;
-                state.error = Some(error);
+                self.bangumi_state_mut(cinema).0.fail_first_reset(error);
                 cx.notify();
                 return;
             }
         };
         let season_type = if cinema { 2 } else { 1 };
-        let generation = self.bangumi_state_mut(cinema).reset();
-        cx.notify();
 
-        spawn_api(
+        spawn_first(
+            self,
             cx,
-            async move { backend.bangumi_follows(mid, season_type, 1).await },
-            move |this, result, cx| {
-                if this.bangumi_state(cinema).generation != generation {
-                    return;
-                }
-                let state = this.bangumi_state_mut(cinema);
-                state.loading = false;
-                state.loaded = true;
-                match result {
-                    Ok(page) => {
-                        state.page = 1;
-                        state.has_more = page.list.len() >= BANGUMI_PAGE_SIZE;
-                        state.items = page
-                            .list
-                            .into_iter()
-                            .filter(|item| item.season_id != 0)
-                            .collect();
-                        state.scroll.scroll_to_item(0, ScrollStrategy::Top);
-                    }
-                    Err(error) => {
-                        state.error = Some(api_task_error_message(error, cx));
-                    }
-                }
-                cx.notify();
+            move |this| &mut this.bangumi_state_mut(cinema).0,
+            |item: &BangumiFollow| item.season_id.to_string(),
+            async move { bangumi_page(backend.bangumi_follows(mid, season_type, 1).await?, 1) },
+            move |this| {
+                this.bangumi_state_mut(cinema)
+                    .scroll
+                    .scroll_to_item(0, ScrollStrategy::Top);
             },
         );
     }
 
     pub(super) fn load_more_bangumi(&mut self, cinema: bool, cx: &mut Context<Self>) {
-        {
-            let state = self.bangumi_state(cinema);
-            if state.loading || state.loading_more || !state.has_more || state.more_error.is_some()
-            {
-                return;
-            }
-        }
         let Some(mid) = self.user_mid else {
             return;
         };
-        let page_number = self.bangumi_state(cinema).page + 1;
-        let generation = self.bangumi_state(cinema).generation;
-        let season_type = if cinema { 2 } else { 1 };
         let backend = match self.backend(cx) {
             Ok(backend) => backend,
             Err(error) => {
-                self.bangumi_state_mut(cinema).more_error = Some(error);
+                self.bangumi_state_mut(cinema).0.fail_more(error);
                 cx.notify();
                 return;
             }
         };
+        let season_type = if cinema { 2 } else { 1 };
 
-        self.bangumi_state_mut(cinema).loading_more = true;
-        cx.notify();
-
-        spawn_api(
+        spawn_more(
+            self,
             cx,
-            async move { backend.bangumi_follows(mid, season_type, page_number).await },
-            move |this, result, cx| {
-                if this.bangumi_state(cinema).generation != generation {
-                    return;
-                }
-                let state = this.bangumi_state_mut(cinema);
-                state.loading_more = false;
-                match result {
-                    Ok(page) => {
-                        state.page = page_number;
-                        state.has_more = page.list.len() >= BANGUMI_PAGE_SIZE;
-                        state
-                            .items
-                            .extend(page.list.into_iter().filter(|item| item.season_id != 0));
-                    }
-                    Err(error) => {
-                        state.more_error = Some(api_task_error_message(error, cx));
-                    }
-                }
-                cx.notify();
+            move |this| &mut this.bangumi_state_mut(cinema).0,
+            |item: &BangumiFollow| item.season_id.to_string(),
+            move |meta| {
+                let page = meta + 1;
+                async move { bangumi_page(backend.bangumi_follows(mid, season_type, page).await?, page) }
             },
+            |_| {},
         );
     }
 
     pub(super) fn retry_bangumi_more(&mut self, cinema: bool, cx: &mut Context<Self>) {
-        self.bangumi_state_mut(cinema).more_error = None;
+        self.bangumi_state_mut(cinema).retry_more();
         self.load_more_bangumi(cinema, cx);
     }
 
@@ -596,6 +463,31 @@ impl MineView {
         }
         self.load_more_bangumi(cinema, cx);
     }
+}
+
+fn history_page(page: rigili_bilibili::HistoryPage) -> Page<VideoCard, ListMeta> {
+    let has_more = !page.list.is_empty();
+    Page::new(
+        history_cards(page.list),
+        has_more,
+        ListMeta {
+            page: 0,
+            max: page.cursor.max,
+            view_at: page.cursor.view_at,
+        },
+    )
+}
+
+fn bangumi_page(
+    page: BangumiFollows,
+    number: u32,
+) -> Result<Page<BangumiFollow, u32>, rigili_bilibili::ApiError> {
+    let has_more = page.list.len() >= BANGUMI_PAGE_SIZE;
+    Ok(Page::new(
+        page.list.into_iter().filter(|item| item.season_id != 0),
+        has_more,
+        number,
+    ))
 }
 
 fn favorite_cards(items: Vec<rigili_bilibili::FavItem>) -> Vec<VideoCard> {

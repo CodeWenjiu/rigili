@@ -5,88 +5,16 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::thumbnail;
 
-use super::items::{ArticleItem, LiveItem, MediaItem, UserItem};
+use super::items::{ArticleItem, UserItem};
 use crate::grid::{
-    CardGrid, CardMetrics, CardOverlay, CardStyle, MediaCard as CardLayout, MediaVideo, VideoCard,
-    VideoCards, card_height,
+    CardGrid, CardOverlay, CardStyle, MediaCard as CardLayout, MediaVideo, VideoCard, VideoCards,
+    card_height,
 };
 
 pub(crate) const ROW_HEIGHT: Pixels = px(96.);
 
 const PREVIEW_TEXT_HEIGHT: f32 = 22.;
 const USER_BLOCK_CHROME: f32 = 156.;
-
-pub(crate) fn media_item_card(
-    item: &MediaItem,
-    style: CardStyle,
-    metrics: CardMetrics,
-    window: &mut Window,
-    cx: &mut App,
-    on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> AnyElement {
-    crate::grid::media_card(
-        CardLayout {
-            id: item.id.clone(),
-            cover: &item.cover,
-            title: &item.title,
-            footer: Some(&item.subtitle),
-            footer_icon: Some(IconName::Tv),
-            title_lines: 2,
-            thumb_width: metrics.thumb_width,
-            author: None,
-            video: None,
-            overlay: CardOverlay {
-                leading: (!item.score.is_empty()).then_some((IconName::Star, item.score.as_str())),
-                secondary: None,
-                trailing: (!item.index_show.is_empty()).then_some(item.index_show.as_str()),
-                badge: item.badge.as_deref(),
-            },
-        },
-        style,
-        metrics.width,
-        metrics.text_height,
-        window,
-        cx,
-        on_open,
-    )
-    .into_any_element()
-}
-
-pub(crate) fn live_card(
-    item: &LiveItem,
-    style: CardStyle,
-    metrics: CardMetrics,
-    window: &mut Window,
-    cx: &mut App,
-    on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> AnyElement {
-    crate::grid::media_card(
-        CardLayout {
-            id: item.id.clone(),
-            cover: &item.cover,
-            title: &item.title,
-            footer: Some(&item.meta),
-            footer_icon: Some(IconName::Radio),
-            title_lines: 2,
-            thumb_width: metrics.thumb_width,
-            author: None,
-            video: None,
-            overlay: CardOverlay {
-                leading: Some((IconName::Eye, &item.online)),
-                secondary: None,
-                trailing: Some("直播中"),
-                badge: None,
-            },
-        },
-        style,
-        metrics.width,
-        metrics.text_height,
-        window,
-        cx,
-        on_open,
-    )
-    .into_any_element()
-}
 
 pub(crate) fn article_row(
     article: &ArticleItem,
@@ -219,14 +147,7 @@ pub(crate) fn user_row(
 }
 
 pub(crate) fn level_badge(level: u32, style: CardStyle) -> AnyElement {
-    div()
-        .px_1()
-        .rounded(px(3.))
-        .bg(style.primary().opacity(0.12))
-        .text_color(style.primary())
-        .text_xs()
-        .child(format!("LV{level}"))
-        .into_any_element()
+    crate::profile::level_badge(level, style.primary().opacity(0.12), style.primary())
 }
 
 pub(crate) fn user_block_height(width: Pixels) -> Pixels {

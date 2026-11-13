@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::button::*;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::*;
@@ -42,6 +43,90 @@ pub(crate) fn open(window: &mut Window, cx: &mut App) {
     window.open_dialog(cx, move |dialog, _, _| {
         dialog.w(px(280.)).title("登录").child(view.clone())
     });
+}
+
+pub(crate) struct Prompt {
+    id: &'static str,
+    icon: IconName,
+    title: Option<&'static str>,
+    message: &'static str,
+    centered: bool,
+}
+
+impl Prompt {
+    pub(crate) fn new(id: &'static str, icon: IconName, message: &'static str) -> Self {
+        Self {
+            id,
+            icon,
+            title: None,
+            message,
+            centered: false,
+        }
+    }
+
+    pub(crate) fn title(mut self, title: &'static str) -> Self {
+        self.title = Some(title);
+        self
+    }
+
+    pub(crate) fn centered(mut self) -> Self {
+        self.centered = true;
+        self
+    }
+
+    pub(crate) fn render<V: 'static>(self, cx: &mut Context<V>) -> AnyElement {
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let login = || {
+            Button::new(SharedString::from(format!("{}-sign-in", self.id)))
+                .primary()
+                .label("登录")
+                .on_click(cx.listener(|_, _, window, cx| open(window, cx)))
+        };
+
+        if self.centered {
+            return v_flex()
+                .flex_1()
+                .min_h_0()
+                .items_center()
+                .justify_center()
+                .gap_3()
+                .child(Icon::new(self.icon).with_size(px(48.)).text_color(muted))
+                .child(div().text_sm().text_color(muted).child(self.message))
+                .child(login())
+                .into_any_element();
+        }
+
+        h_flex()
+            .w_full()
+            .p_6()
+            .gap_5()
+            .items_center()
+            .rounded(theme.radius_lg)
+            .bg(theme.muted.opacity(0.4))
+            .child(
+                div()
+                    .size(px(64.))
+                    .rounded_full()
+                    .bg(theme.accent)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(Icon::new(self.icon).with_size(px(32.)).text_color(muted)),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .when_some(self.title, |this, title| {
+                        this.child(div().text_lg().child(title))
+                    })
+                    .child(div().text_sm().text_color(muted).child(self.message)),
+            )
+            .child(login())
+            .into_any_element()
+    }
 }
 
 pub(crate) fn restore(_window: &mut Window, cx: &mut App) {

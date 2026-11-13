@@ -257,31 +257,27 @@ impl Client {
     where
         T: DeserializeOwned + Default,
     {
-        let envelope: Envelope<T> = serde_json::from_str(body)?;
-        if envelope.code == 0 {
-            return Ok(envelope.data.or(envelope.result).unwrap_or_default());
-        }
-
-        let error = ApiError::Bilibili {
-            code: envelope.code,
-            message: envelope.message,
-        };
-        if error.is_login_required() {
-            let _ = self.clear_session();
-        }
-        Err(error)
+        let Envelope {
+            code,
+            message,
+            data,
+            result,
+        } = serde_json::from_str(body)?;
+        self.check_code(code, message)?;
+        Ok(data.or(result).unwrap_or_default())
     }
 
     fn parse_ack(&self, body: &str) -> Result<(), ApiError> {
         let envelope: Envelope<serde_json::Value> = serde_json::from_str(body)?;
-        if envelope.code == 0 {
+        self.check_code(envelope.code, envelope.message)
+    }
+
+    fn check_code(&self, code: i64, message: String) -> Result<(), ApiError> {
+        if code == 0 {
             return Ok(());
         }
 
-        let error = ApiError::Bilibili {
-            code: envelope.code,
-            message: envelope.message,
-        };
+        let error = ApiError::Bilibili { code, message };
         if error.is_login_required() {
             let _ = self.clear_session();
         }

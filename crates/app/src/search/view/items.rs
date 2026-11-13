@@ -1,13 +1,12 @@
-use gpui_kit::SharedString;
-use rigili_bilibili::{SearchArticle, SearchLiveRoom, SearchMedia, SearchUser};
+use rigili_bilibili::{SearchArticle, SearchUser};
 
-use crate::grid::VideoCard;
+use crate::grid::{LiveCard, PgcCard, VideoCard};
 use rigili_core::{format_count, format_date};
 
 pub(crate) enum SearchItem {
     Video(VideoCard),
-    Media(MediaItem),
-    Live(LiveItem),
+    Media(PgcCard),
+    Live(LiveCard),
     Article(ArticleItem),
     User(UserItem),
 }
@@ -15,33 +14,13 @@ pub(crate) enum SearchItem {
 impl SearchItem {
     pub(crate) fn key(&self) -> String {
         match self {
-            Self::Video(video) => format!("video:{}", video.bvid()),
-            Self::Media(media) => format!("pgc:{}", media.season_id),
-            Self::Live(live) => format!("live:{}", live.room_id),
+            Self::Video(video) => video.key(),
+            Self::Media(media) => media.key(),
+            Self::Live(live) => live.key(),
             Self::Article(article) => format!("article:{}", article.id),
             Self::User(user) => format!("user:{}", user.mid),
         }
     }
-}
-
-pub(crate) struct MediaItem {
-    pub(crate) id: SharedString,
-    pub(crate) season_id: u64,
-    pub(crate) cover: String,
-    pub(crate) title: String,
-    pub(crate) subtitle: String,
-    pub(crate) score: String,
-    pub(crate) index_show: String,
-    pub(crate) badge: Option<String>,
-}
-
-pub(crate) struct LiveItem {
-    pub(crate) id: SharedString,
-    pub(crate) room_id: u64,
-    pub(crate) cover: String,
-    pub(crate) title: String,
-    pub(crate) meta: String,
-    pub(crate) online: String,
 }
 
 pub(crate) struct ArticleItem {
@@ -64,40 +43,6 @@ pub(crate) struct UserItem {
     pub(crate) videos: String,
     pub(crate) description: String,
     pub(crate) preview: Vec<VideoCard>,
-}
-
-impl From<SearchMedia> for MediaItem {
-    fn from(media: SearchMedia) -> Self {
-        Self {
-            id: SharedString::from(format!("search-pgc-{}", media.season_id)),
-            season_id: media.season_id,
-            cover: media.cover,
-            title: media.title,
-            subtitle: media.subtitle,
-            score: media.score,
-            index_show: media.index_show,
-            badge: media.badge,
-        }
-    }
-}
-
-impl From<SearchLiveRoom> for LiveItem {
-    fn from(room: SearchLiveRoom) -> Self {
-        let meta = if room.area.is_empty() {
-            room.name
-        } else {
-            format!("{} · {}", room.name, room.area)
-        };
-
-        Self {
-            id: SharedString::from(format!("search-live-{}", room.room_id)),
-            room_id: room.room_id,
-            cover: room.cover,
-            title: room.title,
-            meta,
-            online: format_count(room.online),
-        }
-    }
 }
 
 impl From<SearchArticle> for ArticleItem {
@@ -141,8 +86,8 @@ impl From<SearchUser> for UserItem {
 
 #[cfg(test)]
 mod tests {
-    use super::{ArticleItem, LiveItem, MediaItem, SearchItem, UserItem};
-    use crate::grid::VideoCard;
+    use super::{ArticleItem, SearchItem, UserItem};
+    use crate::grid::{LiveCard, PgcCard, VideoCard};
     use rigili_bilibili::{SearchArticle, SearchLiveRoom, SearchMedia, SearchUser, SearchVideo};
 
     fn video(bvid: &str) -> VideoCard {
@@ -162,7 +107,7 @@ mod tests {
 
     #[test]
     fn maps_search_results_to_items() {
-        let media = MediaItem::from(SearchMedia {
+        let media = PgcCard::from(SearchMedia {
             season_id: 7,
             title: "番剧".into(),
             cover: "https://example.invalid/cover.jpg".into(),
@@ -173,7 +118,7 @@ mod tests {
         });
         assert_eq!(SearchItem::Media(media).key(), "pgc:7");
 
-        let live = LiveItem::from(SearchLiveRoom {
+        let live = LiveCard::from(SearchLiveRoom {
             room_id: 42,
             uid: 1,
             name: "主播".into(),

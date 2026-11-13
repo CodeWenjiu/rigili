@@ -22,6 +22,7 @@ use crate::platform::image_cache;
 use crate::preview;
 use crate::search::SearchView;
 use crate::space::{CloseSpace, SpaceView};
+use crate::tabs::TabStrip;
 use rigili_playback::PlaybackRequest;
 use search_box::SearchBox;
 
@@ -451,53 +452,26 @@ impl MainView {
     }
 
     fn render_home_tabs(&self, selected: HomeTab, cx: &mut Context<Self>) -> AnyElement {
-        let primary = cx.theme().primary;
-        let muted = cx.theme().muted_foreground;
-        let hover_bg = cx.theme().accent.opacity(0.5);
-        let radius = cx.theme().radius;
-
-        h_flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap_2()
-            .children(HomeTab::ALL.map(|tab| {
-                let active = tab == selected;
-                let group = SharedString::from(format!("top-tab-{}", tab.index()));
-
-                v_flex()
-                    .group(group.clone())
-                    .items_center()
-                    .gap_1()
-                    .rounded(radius)
-                    .when(!active, |this| this.hover(move |this| this.bg(hover_bg)))
-                    .child(
-                        Button::new(("top-tab", tab.index()))
-                            .text()
-                            .px_3()
-                            .py_1()
-                            .accessibility_label(tab.label())
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.messages_open = false;
-                                this.page = Page::Home;
-                                this.spaces.clear();
-                                this.home.update(cx, |home, cx| home.show_tab(tab, cx));
-                                cx.notify();
-                            }))
-                            .child(
-                                div()
-                                    .text_base()
-                                    .text_color(if active { primary } else { muted })
-                                    .group_hover(group, move |this| this.text_color(primary))
-                                    .child(tab.label()),
-                            ),
-                    )
-                    .child(div().h(px(2.)).w(px(24.)).rounded(px(1.)).bg(if active {
-                        primary
-                    } else {
-                        hsla(0., 0., 0., 0.)
-                    }))
-            }))
-            .into_any_element()
+        TabStrip::new("top-tab")
+            .text_base()
+            .gap(px(8.))
+            .padding_x(px(12.))
+            .divider(false)
+            .items_end(false)
+            .render(
+                cx,
+                &HomeTab::ALL,
+                selected,
+                HomeTab::label,
+                |_| None,
+                |this, tab, cx| {
+                    this.messages_open = false;
+                    this.page = Page::Home;
+                    this.spaces.clear();
+                    this.home.update(cx, |home, cx| home.show_tab(tab, cx));
+                    cx.notify();
+                },
+            )
     }
 
     fn render_top_bar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {

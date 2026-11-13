@@ -1,5 +1,13 @@
 use std::fmt::Write;
 
+/// Normalizes a protocol-relative Bilibili URL to an absolute https URL.
+pub fn normalize_url(url: &str) -> String {
+    match url.strip_prefix("//") {
+        Some(rest) => format!("https://{rest}"),
+        None => url.to_owned(),
+    }
+}
+
 /// Builds a 16:9 thumbnail URL for a Bilibili cover image.
 pub fn thumbnail(url: &str, width: u32) -> String {
     let (prefix, rest) = image_parts(url);
@@ -38,7 +46,20 @@ fn image_parts(url: &str) -> (&'static str, &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{banner, thumbnail};
+    use super::{banner, normalize_url, thumbnail};
+
+    #[test]
+    fn normalizes_protocol_relative_urls() {
+        assert_eq!(
+            normalize_url("//i0.hdslb.com/bfs/archive/a.jpg"),
+            "https://i0.hdslb.com/bfs/archive/a.jpg"
+        );
+        assert_eq!(
+            normalize_url("https://i0.hdslb.com/bfs/archive/a.jpg"),
+            "https://i0.hdslb.com/bfs/archive/a.jpg"
+        );
+        assert_eq!(normalize_url(""), "");
+    }
 
     #[test]
     fn builds_thumbnail_and_banner_urls() {

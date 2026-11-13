@@ -7,73 +7,25 @@ use gpui_kit::*;
 use rigili_bilibili::api::search::SearchOrder;
 
 use super::{SearchTab, SearchView};
+use crate::tabs::TabStrip;
 
 impl SearchView {
     pub(super) fn render_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
-        let primary = cx.theme().primary;
-        let muted = cx.theme().muted_foreground;
-        let border = cx.theme().border;
-        let hover_bg = cx.theme().accent.opacity(0.5);
-        let radius = cx.theme().radius;
-
-        h_flex()
-            .flex_shrink_0()
-            .items_end()
-            .gap_4()
-            .border_b_1()
-            .border_color(border)
-            .children(SearchTab::ALL.map(|tab| {
-                let active = tab == self.tab;
-                let group = SharedString::from(format!("search-tab-{}", tab.index()));
-                let count = self.count(tab).filter(|count| *count > 0);
-
-                v_flex()
-                    .group(group.clone())
-                    .items_center()
-                    .gap_1()
-                    .rounded(radius)
-                    .when(!active, |this| this.hover(move |this| this.bg(hover_bg)))
-                    .child(
-                        Button::new(("search-tab", tab.index()))
-                            .text()
-                            .px_2()
-                            .py_1()
-                            .accessibility_label(tab.label())
-                            .on_click(cx.listener(move |this, _, _, cx| this.show_tab(tab, cx)))
-                            .child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(if active { primary } else { muted })
-                                            .group_hover(group, move |this| {
-                                                this.text_color(primary)
-                                            })
-                                            .child(tab.label()),
-                                    )
-                                    .when_some(count, |this, count| {
-                                        this.child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(if active {
-                                                    primary
-                                                } else {
-                                                    muted.opacity(0.8)
-                                                })
-                                                .child(tab_count_label(count)),
-                                        )
-                                    }),
-                            ),
-                    )
-                    .child(div().h(px(2.)).w(px(24.)).rounded(px(1.)).bg(if active {
-                        primary
-                    } else {
-                        hsla(0., 0., 0., 0.)
-                    }))
-            }))
-            .into_any_element()
+        TabStrip::new("search-tab")
+            .gap(px(16.))
+            .padding_x(px(8.))
+            .render(
+                cx,
+                &SearchTab::ALL,
+                self.tab,
+                SearchTab::label,
+                |tab| {
+                    self.count(tab)
+                        .filter(|count| *count > 0)
+                        .map(tab_count_label)
+                },
+                |this, tab, cx| this.show_tab(tab, cx),
+            )
     }
 
     pub(super) fn render_orders(&self, cx: &mut Context<Self>) -> AnyElement {

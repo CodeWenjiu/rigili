@@ -25,10 +25,7 @@ fn clean_text(text: &str) -> String {
 }
 
 fn normalize_pic(url: &str) -> String {
-    match url.strip_prefix("//") {
-        Some(rest) => format!("https://{rest}"),
-        None => url.to_owned(),
-    }
+    crate::normalize_url(url)
 }
 
 fn deserialize_count<'de, D>(deserializer: D) -> Result<u64, D::Error>
