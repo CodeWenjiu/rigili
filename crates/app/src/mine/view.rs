@@ -17,6 +17,7 @@ use rigili_core::{OpenSpace, OpenVideo, Refresh, format_count};
 use crate::grid::VideoCard;
 use crate::paging::Paged;
 use crate::profile::{profile_stat, profile_title};
+use crate::scroll;
 use crate::tabs::TabStrip;
 use create_folder::CreateFolderDialog;
 use sort_folders::SortFoldersDialog;
@@ -216,6 +217,7 @@ pub struct MineView {
     notice: Option<String>,
     user_mid: Option<u64>,
     list_width: Pixels,
+    folder_scroll: scroll::ScrollArea,
 }
 
 impl EventEmitter<OpenVideo> for MineView {}
@@ -267,6 +269,7 @@ impl MineView {
             notice: None,
             user_mid: None,
             list_width: px(0.),
+            folder_scroll: scroll::ScrollArea::new(),
         }
     }
 

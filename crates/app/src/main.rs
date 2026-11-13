@@ -9,6 +9,7 @@ rigili_macro::mod_prv!(
     platform,
     preview,
     profile,
+    scroll,
     search,
     season,
     shell,

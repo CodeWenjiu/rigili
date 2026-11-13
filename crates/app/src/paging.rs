@@ -1,11 +1,12 @@
 use std::collections::HashSet;
 use std::future::Future;
 
-use gpui_kit::component::VirtualListScrollHandle;
 use gpui_kit::*;
 use rigili_bilibili::ApiError;
 use rigili_core::api_task_error_message;
 use rigili_core::runtime::spawn_api;
+
+use crate::list::ListScroll;
 
 pub(crate) struct Page<T, M = ()> {
     pub(crate) items: Vec<T>,
@@ -34,7 +35,7 @@ pub(crate) struct Paged<T, M = ()> {
     pub(crate) error: Option<String>,
     pub(crate) more_error: Option<String>,
     pub(crate) generation: u64,
-    pub(crate) scroll: VirtualListScrollHandle,
+    pub(crate) scroll: ListScroll,
 }
 
 impl<T, M: Default> Paged<T, M> {
@@ -50,7 +51,7 @@ impl<T, M: Default> Paged<T, M> {
             error: None,
             more_error: None,
             generation: 0,
-            scroll: VirtualListScrollHandle::new(),
+            scroll: ListScroll::new(),
         }
     }
 }

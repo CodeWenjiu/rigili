@@ -21,3 +21,6 @@ reqwest = { version = "0.12", default-features = false, features = ["gzip", "rus
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 image = { version = "0.25", default-features = false }
 qrcodegen = "1"
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }

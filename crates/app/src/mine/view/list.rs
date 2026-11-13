@@ -7,8 +7,7 @@ use super::{FavoriteView, FolderSource, MineTab, MineView};
 
 use crate::grid::{
     BangumiCards, CARD_GAP, CardFrame, CardGrid, CardMetrics, CardOverlay, CardStyle, FolderCards,
-    MediaCard, VideoCards, card_grid_loading, card_text_height, media_card,
-    skeleton_card,
+    MediaCard, VideoCards, card_grid_loading, card_text_height, media_card, skeleton_card,
 };
 use crate::list::{
     LIST_FOOTER_HEIGHT, Rows, list_footer, track_element_width, virtual_rows_tracked,
@@ -166,14 +165,18 @@ impl MineView {
             })
             .collect::<Vec<_>>();
 
-        div()
-            .id("mine-folder-grid")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .on_prepaint(track_element_width(known_width, weak))
-            .child(v_flex().gap_y_6().children(rows))
-            .into_any_element()
+        crate::scroll::attach(
+            div()
+                .id("mine-folder-grid")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .on_prepaint(track_element_width(known_width, weak))
+                .child(v_flex().gap_y_6().children(rows)),
+            &self.folder_scroll,
+            cx,
+        )
+        .into_any_element()
     }
 
     fn retry_folder_source(&mut self, source: FolderSource, cx: &mut Context<Self>) {

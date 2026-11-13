@@ -30,6 +30,7 @@ use crate::list::{
 use crate::login;
 use crate::paging::{Page, Paged, spawn_first, spawn_more};
 use crate::profile::{profile_stat, profile_title};
+use crate::scroll;
 use crate::state_view::{Layout, centered_spinner, empty_state, error_state};
 use crate::tabs::TabStrip;
 
@@ -76,6 +77,8 @@ pub struct SpaceView {
     dynamics: Paged<DynamicItem, String>,
     space_videos: SpaceVideosState,
     collections: CollectionsState,
+    dynamics_scroll: scroll::ScrollArea,
+    collections_scroll: scroll::ScrollArea,
     list_width: Pixels,
     keyword: String,
     space_search: Entity<InputState>,
@@ -131,6 +134,8 @@ impl SpaceView {
             dynamics: Paged::new(),
             space_videos: SpaceVideosState::new(),
             collections: CollectionsState::new(),
+            dynamics_scroll: scroll::ScrollArea::new(),
+            collections_scroll: scroll::ScrollArea::new(),
             list_width: px(0.),
             keyword: String::new(),
             space_search,
@@ -933,23 +938,27 @@ impl SpaceView {
         }
         let footer = self.render_dynamics_footer(cx);
 
-        div()
-            .id("space-dynamics-scroll")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .child(
-                h_flex().w_full().items_start().justify_center().child(
-                    v_flex()
-                        .w_full()
-                        .max_w(DYNAMIC_CARD_MAX_WIDTH)
-                        .gap_4()
-                        .pb_4()
-                        .children(cards)
-                        .child(footer),
+        crate::scroll::attach(
+            div()
+                .id("space-dynamics-scroll")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .child(
+                    h_flex().w_full().items_start().justify_center().child(
+                        v_flex()
+                            .w_full()
+                            .max_w(DYNAMIC_CARD_MAX_WIDTH)
+                            .gap_4()
+                            .pb_4()
+                            .children(cards)
+                            .child(footer),
+                    ),
                 ),
-            )
-            .into_any_element()
+            &self.dynamics_scroll,
+            cx,
+        )
+        .into_any_element()
     }
 
     fn render_dynamics_footer(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1503,14 +1512,18 @@ impl SpaceView {
             })
             .collect::<Vec<_>>();
 
-        div()
-            .id("space-collections-scroll")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .on_prepaint(track_element_width(known_width, weak))
-            .child(v_flex().gap_5().pb_4().children(sections))
-            .into_any_element()
+        crate::scroll::attach(
+            div()
+                .id("space-collections-scroll")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .on_prepaint(track_element_width(known_width, weak))
+                .child(v_flex().gap_5().pb_4().children(sections)),
+            &self.collections_scroll,
+            cx,
+        )
+        .into_any_element()
     }
 
     fn render_tabs(&self, cx: &mut Context<Self>) -> AnyElement {

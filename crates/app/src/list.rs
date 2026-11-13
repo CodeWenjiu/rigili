@@ -1,16 +1,51 @@
-use std::ops::Range;
+use std::ops::{Deref, Range};
 use std::rc::Rc;
 
 use gpui_kit::component::button::*;
 use gpui_kit::component::scroll::{Scrollbar, ScrollbarHandle};
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::v_virtual_list;
 use gpui_kit::component::*;
+use gpui_kit::component::{VirtualListScrollHandle, v_virtual_list};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
+use crate::scroll;
+
 pub(crate) const LIST_FOOTER_HEIGHT: Pixels = px(56.);
 const PAGE_GUTTER_REMS: f32 = 1.5;
+
+pub(crate) struct ListScroll {
+    handle: VirtualListScrollHandle,
+    motion: scroll::Motion,
+}
+
+impl ListScroll {
+    pub(crate) fn new() -> Self {
+        Self {
+            handle: VirtualListScrollHandle::new(),
+            motion: scroll::Motion::new(),
+        }
+    }
+
+    fn listener<V: Render + 'static>(
+        &self,
+        cx: &Context<V>,
+    ) -> impl Fn(&ScrollEvent, &mut Window, &mut App) + 'static {
+        scroll::wheel_listener(
+            self.motion.clone(),
+            self.handle.base_handle().clone(),
+            cx.entity().downgrade(),
+        )
+    }
+}
+
+impl Deref for ListScroll {
+    type Target = VirtualListScrollHandle;
+
+    fn deref(&self) -> &Self::Target {
+        &self.handle
+    }
+}
 
 fn page_gutter(window: &Window) -> Pixels {
     rems(PAGE_GUTTER_REMS).to_pixels(window.rem_size())
@@ -166,7 +201,7 @@ pub(crate) fn virtual_rows<V, R>(
     window: &Window,
     id: impl Into<ElementId>,
     rows: Rows,
-    scroll: &VirtualListScrollHandle,
+    scroll: &ListScroll,
     render: R,
 ) -> AnyElement
 where
@@ -190,7 +225,7 @@ pub(crate) fn virtual_rows_tracked<V, R>(
     id: impl Into<ElementId>,
     rows: Rows,
     known_width: Pixels,
-    scroll: &VirtualListScrollHandle,
+    scroll: &ListScroll,
     render: R,
 ) -> AnyElement
 where
@@ -206,7 +241,7 @@ fn virtual_rows_inner<V, R, T>(
     window: &Window,
     id: impl Into<ElementId>,
     rows: Rows,
-    scroll: &VirtualListScrollHandle,
+    scroll: &ListScroll,
     tracker: Option<T>,
     render: R,
 ) -> AnyElement
@@ -230,6 +265,7 @@ where
     let gap = rows.gap.to_pixels(window.rem_size());
     let content_size = list_content_size(&sizes, gap);
     let gutter = page_gutter(window);
+    let listener = scroll.listener(cx);
     let list = v_virtual_list(
         cx.entity(),
         id,
@@ -237,7 +273,7 @@ where
         move |this, range, window, cx| render(this, range, window, cx),
     )
     .gap(gap)
-    .track_scroll(scroll);
+    .track_scroll(&scroll.handle);
 
     div()
         .relative()
@@ -246,10 +282,171 @@ where
         .mr(px(-gutter.as_f32()))
         .pr(gutter)
         .overflow_hidden()
+        .on_scroll(listener)
+        .on_mouse_down(
+            MouseButton::Left,
+            scroll::cancel_listener(scroll.motion.clone()),
+        )
         .when_some(tracker, |this, tracker| {
             this.on_children_prepainted(tracker)
         })
         .child(list)
-        .child(virtual_list_scrollbar(scroll, content_size))
+        .child(virtual_list_scrollbar(&scroll.handle, content_size))
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use gpui_kit::component::v_flex;
+    use gpui_kit::prelude::*;
+    use gpui_kit::test::{TestEventExt as _, TestWindowExt};
+    use gpui_kit::{
+        App, Bounds, Context, InputEvent as _, IntoElement, Render, ScrollDelta, ScrollEvent,
+        TestAppContext, Window, WindowBounds, WindowOptions, div, point, px, size,
+    };
+
+    use super::{ListScroll, Rows, virtual_rows};
+
+    struct Fixture {
+        scroll: ListScroll,
+    }
+
+    impl Render for Fixture {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            v_flex().size_full().child(virtual_rows(
+                cx,
+                window,
+                "virtual-scroll-test",
+                Rows::new(100, px(40.)),
+                &self.scroll,
+                |_, range, _, _| range.map(|_| div().h(px(40.)).into_any_element()).collect(),
+            ))
+        }
+    }
+
+    fn open_fixture(
+        cx: &mut TestAppContext,
+    ) -> (gpui_kit::AnyWindowHandle, gpui_kit::Entity<Fixture>) {
+        cx.update(gpui_kit::init);
+        cx.update(|cx| {
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds {
+                    origin: Default::default(),
+                    size: size(px(800.), px(600.)),
+                })),
+                ..Default::default()
+            };
+            gpui_kit::open_window(options, cx, |_, cx| {
+                cx.new(|_| Fixture {
+                    scroll: ListScroll::new(),
+                })
+            })
+            .expect("open test window")
+        })
+    }
+
+    fn wheel(window: &mut Window, cx: &mut App) {
+        window.pointer_move(point(px(300.), px(200.)), None, cx);
+        for _ in 0..2 {
+            window.dispatch_event(
+                ScrollEvent {
+                    position: point(px(300.), px(200.)),
+                    delta: ScrollDelta::Lines(point(0., -3.)),
+                    ..Default::default()
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        }
+    }
+
+    fn precise(window: &mut Window, cx: &mut App) {
+        window.dispatch_event(
+            ScrollEvent {
+                position: point(px(300.), px(200.)),
+                delta: ScrollDelta::Pixels(point(px(0.), px(-6.))),
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+    }
+
+    fn coast(cx: &mut TestAppContext, window: gpui_kit::AnyWindowHandle) {
+        for _ in 0..30 {
+            cx.background_executor
+                .advance_clock(Duration::from_millis(16));
+            let _ = cx.update_window(window, |_, window, cx| {
+                window.simulate_next_frame(cx);
+            });
+        }
+    }
+
+    #[gpui_kit::test]
+    fn virtual_list_wheel_scrolls_smoothly_and_stops(cx: &mut TestAppContext) {
+        let (window, view) = open_fixture(cx);
+        let mut line = px(0.);
+
+        let _ = cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            line = window.line_height();
+            wheel(window, cx);
+        });
+
+        let target = px(-6. * line.as_f32());
+        let immediate = cx.update(|cx| view.read(cx).scroll.offset().y);
+        assert!(
+            immediate > target * 0.5,
+            "the notch should not jump to the target: {immediate:?}"
+        );
+
+        coast(cx, window);
+
+        let settled = cx.update(|cx| view.read(cx).scroll.offset().y);
+        assert!(
+            (settled - target).abs() <= px(1.),
+            "the wheel should settle at the default target: {settled:?} vs {target:?}"
+        );
+
+        coast(cx, window);
+        assert_eq!(
+            cx.update(|cx| view.read(cx).scroll.offset().y),
+            settled,
+            "mouse-wheel notches must not coast"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn virtual_list_precise_scroll_coasts(cx: &mut TestAppContext) {
+        let (window, view) = open_fixture(cx);
+
+        let _ = cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.pointer_move(point(px(300.), px(200.)), None, cx);
+        });
+        for _ in 0..4 {
+            let _ = cx.update_window(window, |_, window, cx| {
+                precise(window, cx);
+            });
+            cx.background_executor
+                .advance_clock(Duration::from_millis(8));
+        }
+        let after_gesture = cx.update(|cx| view.read(cx).scroll.offset().y);
+        assert!(
+            after_gesture < px(0.),
+            "the gesture should scroll: {after_gesture:?}"
+        );
+
+        coast(cx, window);
+
+        let after_coast = cx.update(|cx| view.read(cx).scroll.offset().y);
+        assert!(
+            after_coast < after_gesture,
+            "momentum should keep scrolling: {after_gesture:?} -> {after_coast:?}"
+        );
+    }
 }
