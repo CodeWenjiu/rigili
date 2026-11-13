@@ -1290,60 +1290,55 @@ impl SpaceView {
         let muted = cx.theme().muted_foreground;
         let hover_bg = cx.theme().accent.opacity(0.5);
         let radius = cx.theme().radius;
-        let videos = self.tab == SpaceTab::Videos;
 
         h_flex()
             .flex_shrink_0()
             .items_center()
             .gap_2()
-            .when(videos, |this| {
+            .child(
+                h_flex().items_center().gap_2().children(
+                    [
+                        (SpaceVideoOrder::Latest, "最新发布", 0usize),
+                        (SpaceVideoOrder::Plays, "最多播放", 1usize),
+                    ]
+                    .map(|(order, label, index)| {
+                        let active = self.space_videos.order == order;
+                        let group = SharedString::from(format!("space-order-{index}"));
+                        v_flex()
+                            .group(group.clone())
+                            .items_center()
+                            .rounded(radius)
+                            .when(!active, |this| this.hover(move |this| this.bg(hover_bg)))
+                            .child(
+                                Button::new(("space-order", index))
+                                    .text()
+                                    .small()
+                                    .px_2()
+                                    .accessibility_label(label)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.set_space_order(order, cx);
+                                    }))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(if active { primary } else { muted })
+                                            .group_hover(group, move |this| {
+                                                this.text_color(primary)
+                                            })
+                                            .child(label),
+                                    ),
+                            )
+                    }),
+                ),
+            )
+            .when(self.space_videos.meta.total > 0, |this| {
                 this.child(
-                    h_flex().items_center().gap_2().children(
-                        [
-                            (SpaceVideoOrder::Latest, "最新发布", 0usize),
-                            (SpaceVideoOrder::Plays, "最多播放", 1usize),
-                        ]
-                        .map(|(order, label, index)| {
-                            let active = self.space_videos.order == order;
-                            let group = SharedString::from(format!("space-order-{index}"));
-                            v_flex()
-                                .group(group.clone())
-                                .items_center()
-                                .rounded(radius)
-                                .when(!active, |this| this.hover(move |this| this.bg(hover_bg)))
-                                .child(
-                                    Button::new(("space-order", index))
-                                        .text()
-                                        .small()
-                                        .px_2()
-                                        .accessibility_label(label)
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.set_space_order(order, cx);
-                                        }))
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(if active { primary } else { muted })
-                                                .group_hover(group, move |this| {
-                                                    this.text_color(primary)
-                                                })
-                                                .child(label),
-                                        ),
-                                )
-                        }),
-                    ),
+                    div()
+                        .text_sm()
+                        .text_color(muted)
+                        .child(format!("共 {} 个投稿", self.space_videos.meta.total)),
                 )
-                .when(self.space_videos.meta.total > 0, |this| {
-                    this.child(
-                        div()
-                            .text_sm()
-                            .text_color(muted)
-                            .child(format!("共 {} 个投稿", self.space_videos.meta.total)),
-                    )
-                })
             })
-            .child(div().flex_1())
-            .child(self.search.field())
             .into_any_element()
     }
 
@@ -1514,17 +1509,26 @@ impl SpaceView {
     }
 
     fn render_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
-        TabStrip::new("space-tab")
-            .gap(px(16.))
-            .padding_x(px(8.))
-            .render(
-                cx,
-                &SpaceTab::ALL,
-                self.tab,
-                SpaceTab::label,
-                |_| None,
-                |this, tab, cx| this.show_tab(tab, cx),
+        h_flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap_2()
+            .child(
+                TabStrip::new("space-tab")
+                    .gap(px(16.))
+                    .padding_x(px(8.))
+                    .render(
+                        cx,
+                        &SpaceTab::ALL,
+                        self.tab,
+                        SpaceTab::label,
+                        |_| None,
+                        |this, tab, cx| this.show_tab(tab, cx),
+                    ),
             )
+            .child(div().flex_1())
+            .child(self.search.field())
+            .into_any_element()
     }
 
     fn render_body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -1572,6 +1576,7 @@ impl Render for SpaceView {
         let background = cx.theme().background;
         let foreground = cx.theme().foreground;
         let profile = self.render_profile(cx);
+        let toolbar = (self.tab == SpaceTab::Videos).then(|| self.render_toolbar(cx));
 
         v_flex()
             .size_full()
@@ -1583,7 +1588,7 @@ impl Render for SpaceView {
             .text_color(foreground)
             .child(profile)
             .child(self.render_tabs(cx))
-            .child(self.render_toolbar(cx))
+            .when_some(toolbar, |this, toolbar| this.child(toolbar))
             .child(self.render_body(window, cx))
             .into_any_element()
     }
