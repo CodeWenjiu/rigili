@@ -9,7 +9,10 @@ pub(super) const MPV_FORMAT_NODE_ARRAY: c_int = 7;
 pub(super) const MPV_FORMAT_NODE_MAP: c_int = 8;
 
 pub(super) const MPV_RENDER_PARAM_API_TYPE: c_int = 1;
+pub(super) const MPV_RENDER_PARAM_OPENGL_INIT_PARAMS: c_int = 2;
+pub(super) const MPV_RENDER_PARAM_OPENGL_FBO: c_int = 3;
 pub(super) const MPV_RENDER_PARAM_NEXT_FRAME_INFO: c_int = 11;
+pub(super) const MPV_RENDER_PARAM_DRM_DISPLAY_V2: c_int = 16;
 pub(super) const MPV_RENDER_PARAM_SW_SIZE: c_int = 17;
 pub(super) const MPV_RENDER_PARAM_SW_FORMAT: c_int = 18;
 pub(super) const MPV_RENDER_PARAM_SW_STRIDE: c_int = 19;
@@ -39,6 +42,29 @@ pub(super) struct MpvRenderParam {
 pub(super) struct MpvRenderFrameInfo {
     pub(super) flags: u64,
     pub(super) target_time: i64,
+}
+
+#[repr(C)]
+pub(super) struct MpvOpenGlInitParams {
+    pub(super) get_proc_address: Option<extern "C" fn(*mut c_void, *const c_char) -> *mut c_void>,
+    pub(super) get_proc_address_ctx: *mut c_void,
+}
+
+#[repr(C)]
+pub(super) struct MpvOpenGlDrmParamsV2 {
+    pub(super) fd: c_int,
+    pub(super) crtc_id: c_int,
+    pub(super) connector_id: c_int,
+    pub(super) atomic_request_ptr: *mut c_void,
+    pub(super) render_fd: c_int,
+}
+
+#[repr(C)]
+pub(super) struct MpvOpenGlFbo {
+    pub(super) fbo: c_int,
+    pub(super) w: c_int,
+    pub(super) h: c_int,
+    pub(super) internal_format: c_int,
 }
 
 #[repr(C)]
@@ -106,6 +132,11 @@ unsafe extern "C" {
         params: *mut MpvRenderParam,
     ) -> c_int;
     pub(super) fn mpv_render_context_update(ctx: *mut MpvRenderContext) -> u64;
+    pub(super) fn mpv_render_context_set_update_callback(
+        ctx: *mut MpvRenderContext,
+        callback: Option<extern "C" fn(*mut c_void)>,
+        data: *mut c_void,
+    );
     pub(super) fn mpv_render_context_get_info(
         ctx: *mut MpvRenderContext,
         param: MpvRenderParam,

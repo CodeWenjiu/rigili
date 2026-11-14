@@ -7,15 +7,16 @@ use std::{
 
 use crate::{
     VideoSize,
-    mpv::{Mpv, MpvError, RenderContext},
+    mpv::{Mpv, MpvError, RenderWake, Renderer},
 };
 
 use super::{
-    handle::Command,
+    handle::{Command, RenderBackend},
     status::{PlaybackPhase, PlayerStatus, VideoFrame},
     sync::lock,
 };
 
+const EVENT_NONE: c_int = 0;
 const MPV_EVENT_SHUTDOWN: c_int = 1;
 const MPV_EVENT_END_FILE: c_int = 7;
 const MPV_EVENT_FILE_LOADED: c_int = 8;
@@ -23,11 +24,14 @@ const MPV_EVENT_VIDEO_RECONFIG: c_int = 17;
 
 const MPV_RENDER_UPDATE_FRAME: u64 = 1;
 
-const EVENT_TIMEOUT: f64 = 0.005;
 const STATUS_INTERVAL: Duration = Duration::from_millis(100);
+const LOADING_WAIT: Duration = Duration::from_millis(10);
+const IDLE_WAIT: Duration = Duration::from_millis(100);
 
 pub(super) fn run_worker(
     receiver: mpsc::Receiver<Command>,
+    backend: RenderBackend,
+    wake: Arc<RenderWake>,
     frame_slot: Arc<Mutex<Option<VideoFrame>>>,
     status: Arc<Mutex<PlayerStatus>>,
 ) {
@@ -38,7 +42,11 @@ pub(super) fn run_worker(
             return;
         }
     };
-    let render = match RenderContext::new(&mpv) {
+    let render = match backend {
+        RenderBackend::GpuPreferred => Renderer::new(&mpv, wake.clone()),
+        RenderBackend::Software => Renderer::new_software(&mpv, wake.clone()),
+    };
+    let mut render = match render {
         Ok(render) => render,
         Err(error) => {
             lock(&status).error = Some(error.to_string());
@@ -62,27 +70,32 @@ pub(super) fn run_worker(
             }
         }
 
-        let event = mpv.wait_event(EVENT_TIMEOUT);
-        match event.event_id {
-            MPV_EVENT_SHUTDOWN => return,
-            MPV_EVENT_VIDEO_RECONFIG => state.needs_redraw = true,
-            MPV_EVENT_FILE_LOADED => {
-                state.loading = false;
-                if let Some(audio) = state.pending_audio.take()
-                    && let Err(error) = mpv.command(&["audio-add", audio.as_str(), "select"])
-                {
-                    lock(&status).error = Some(error.to_string());
-                }
-                state.needs_redraw = true;
+        loop {
+            let event = mpv.wait_event(0.0);
+            if event.event_id == EVENT_NONE {
+                break;
             }
-            MPV_EVENT_END_FILE => {
-                state.loading = false;
-                if event.error < 0 {
-                    state.pending_audio.take();
-                    lock(&status).error = Some(MpvError::from_code(event.error).to_string());
+            match event.event_id {
+                MPV_EVENT_SHUTDOWN => return,
+                MPV_EVENT_VIDEO_RECONFIG => state.needs_redraw = true,
+                MPV_EVENT_FILE_LOADED => {
+                    state.loading = false;
+                    if let Some(audio) = state.pending_audio.take()
+                        && let Err(error) = mpv.command(&["audio-add", audio.as_str(), "select"])
+                    {
+                        lock(&status).error = Some(error.to_string());
+                    }
+                    state.needs_redraw = true;
                 }
+                MPV_EVENT_END_FILE => {
+                    state.loading = false;
+                    if event.error < 0 {
+                        state.pending_audio.take();
+                        lock(&status).error = Some(MpvError::from_code(event.error).to_string());
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         }
 
         let update = render.update();
@@ -94,7 +107,7 @@ pub(super) fn run_worker(
         };
         if (state.needs_redraw || update & MPV_RENDER_UPDATE_FRAME != 0)
             && ready
-            && let Some(frame) = state.render(&mpv, &render)
+            && let Some(frame) = state.render(&mpv, &mut render)
         {
             state.has_frame = true;
             *lock(&frame_slot) = Some(frame);
@@ -104,6 +117,12 @@ pub(super) fn run_worker(
             update_status(&mpv, &status, state.loading);
             last_status = Instant::now();
         }
+
+        wake.wait(if state.loading {
+            LOADING_WAIT
+        } else {
+            IDLE_WAIT
+        });
     }
 }
 
@@ -190,7 +209,7 @@ impl State {
         ControlFlow::Continue(())
     }
 
-    fn render(&mut self, mpv: &Mpv, render: &RenderContext) -> Option<VideoFrame> {
+    fn render(&mut self, mpv: &Mpv, render: &mut Renderer) -> Option<VideoFrame> {
         let source = mpv.video_size()?;
         let size = target_dimensions(source, self.viewport);
         if size.width == 0 || size.height == 0 {
@@ -199,15 +218,21 @@ impl State {
 
         let stride = size.width * 4;
         let length = stride as usize * size.height as usize;
-        if self.buffer.len() != length {
-            self.buffer.resize(length, 0);
+        self.buffer.clear();
+        if self.buffer.capacity() < length {
+            self.buffer = Vec::with_capacity(length);
         }
+        let pointer = self.buffer.spare_capacity_mut().as_mut_ptr().cast::<u8>();
 
         render
-            .render(size.width, size.height, stride, &mut self.buffer)
+            .render(size.width, size.height, stride, pointer)
             .ok()?;
-        for pixel in self.buffer.as_chunks_mut::<4>().0 {
-            pixel[3] = 255;
+
+        // SAFETY: the renderer writes the colour bytes of every pixel and fills
+        // the padding byte, so the whole region is initialized before the length
+        // is exposed.
+        unsafe {
+            self.buffer.set_len(length);
         }
 
         self.needs_redraw = false;

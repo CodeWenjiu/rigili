@@ -6,7 +6,7 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use crate::VideoSize;
+use crate::{VideoSize, mpv::RenderWake};
 
 use super::{
     status::{PlayerStatus, VideoFrame},
@@ -24,7 +24,14 @@ struct PlayerInner {
     frame: Arc<Mutex<Option<VideoFrame>>>,
     status: Arc<Mutex<PlayerStatus>>,
     viewport: Mutex<VideoSize>,
+    wake: Arc<RenderWake>,
     worker: Mutex<Option<JoinHandle<()>>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum RenderBackend {
+    GpuPreferred,
+    Software,
 }
 
 pub(super) enum Command {
@@ -42,15 +49,26 @@ pub(super) enum Command {
 
 impl Player {
     pub fn new() -> Self {
+        Self::spawn(RenderBackend::GpuPreferred)
+    }
+
+    /// Creates a player that always renders on the CPU, for small previews.
+    pub fn new_software() -> Self {
+        Self::spawn(RenderBackend::Software)
+    }
+
+    fn spawn(backend: RenderBackend) -> Self {
         let (sender, receiver) = mpsc::channel();
         let frame = Arc::new(Mutex::new(None));
         let status = Arc::new(Mutex::new(PlayerStatus::default()));
+        let wake = Arc::new(RenderWake::default());
 
         let worker_frame = Arc::clone(&frame);
         let worker_status = Arc::clone(&status);
+        let worker_wake = Arc::clone(&wake);
         let worker = thread::Builder::new()
             .name("rigili-mpv".into())
-            .spawn(move || run_worker(receiver, worker_frame, worker_status));
+            .spawn(move || run_worker(receiver, backend, worker_wake, worker_frame, worker_status));
 
         let worker = match worker {
             Ok(worker) => Some(worker),
@@ -66,6 +84,7 @@ impl Player {
                 frame,
                 status,
                 viewport: Mutex::new(VideoSize::default()),
+                wake,
                 worker: Mutex::new(worker),
             }),
         }
@@ -121,6 +140,7 @@ impl Player {
         if let Err(error) = lock(&self.inner.sender).send(command) {
             lock(&self.inner.status).error = Some(format!("播放器线程不可用：{error}"));
         }
+        self.inner.wake.signal();
     }
 }
 
@@ -133,6 +153,7 @@ impl Default for Player {
 impl Drop for PlayerInner {
     fn drop(&mut self) {
         let _ = lock(&self.sender).send(Command::Shutdown);
+        self.wake.signal();
         if let Some(worker) = lock(&self.worker).take() {
             let _ = worker.join();
         }

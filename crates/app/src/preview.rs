@@ -146,7 +146,7 @@ struct PreviewSurface {
 
 impl PreviewSurface {
     fn new(video: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let player = Player::new();
+        let player = Player::new_software();
         player.set_volume(0.0);
         player.load(&video, None);
 

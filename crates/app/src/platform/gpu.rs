@@ -33,12 +33,11 @@ pub(crate) fn prefer_vulkan() {
         .collect::<Vec<_>>()
         .join(":");
 
-    // GPUI's wgpu instance requests Vulkan + GL, and bringing up the GL backend
-    // loads Mesa's LLVM shader compiler. Both variables must be set before the
-    // first GPU thread starts; a hardware Vulkan driver makes GL unnecessary.
+    // GPUI's wgpu instance requests Vulkan + GL. Pin Vulkan to the hardware
+    // ICDs so a software rasterizer is never selected; EGL must stay usable for
+    // the player's GPU renderer.
     unsafe {
         std::env::set_var("VK_ICD_FILENAMES", list);
-        std::env::set_var("__EGL_VENDOR_LIBRARY_FILENAMES", "/nonexistent");
     }
 }
 

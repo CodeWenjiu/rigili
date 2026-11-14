@@ -6154,6 +6154,8 @@ dependencies = [
 name = "rigili_player"
 version = "0.1.0"
 dependencies = [
+ "glow",
+ "khronos-egl",
  "rigili_macro",
  "thiserror 2.0.21",
 ]

@@ -617,6 +617,7 @@ impl MainView {
     }
 
     fn open_playback(&mut self, request: PlaybackRequest, cx: &mut Context<Self>) {
+        preview::stop_all(cx);
         if let Some(playback) = self.playback.as_ref() {
             if playback.load(request.clone(), cx).is_ok() {
                 return;
