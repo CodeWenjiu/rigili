@@ -10,6 +10,12 @@ pub enum PlaybackPhase {
     Ended,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BufferedRange {
+    pub start: f64,
+    pub end: f64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlayerStatus {
     pub phase: PlaybackPhase,
@@ -18,6 +24,7 @@ pub struct PlayerStatus {
     pub duration: f64,
     pub volume: f64,
     pub speed: f64,
+    pub buffered: Vec<BufferedRange>,
     pub hwdec: Option<String>,
     pub audio_codec: Option<String>,
     pub video_size: Option<VideoSize>,
@@ -33,6 +40,7 @@ impl Default for PlayerStatus {
             duration: 0.0,
             volume: 100.0,
             speed: 1.0,
+            buffered: Vec::new(),
             hwdec: None,
             audio_codec: None,
             video_size: None,
@@ -40,7 +48,6 @@ impl Default for PlayerStatus {
         }
     }
 }
-
 
 #[derive(Clone, Debug)]
 pub struct VideoFrame {

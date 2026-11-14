@@ -4,6 +4,9 @@ pub(super) const MPV_FORMAT_STRING: c_int = 1;
 pub(super) const MPV_FORMAT_FLAG: c_int = 3;
 pub(super) const MPV_FORMAT_INT64: c_int = 4;
 pub(super) const MPV_FORMAT_DOUBLE: c_int = 5;
+pub(super) const MPV_FORMAT_NODE: c_int = 6;
+pub(super) const MPV_FORMAT_NODE_ARRAY: c_int = 7;
+pub(super) const MPV_FORMAT_NODE_MAP: c_int = 8;
 
 pub(super) const MPV_RENDER_PARAM_API_TYPE: c_int = 1;
 pub(super) const MPV_RENDER_PARAM_NEXT_FRAME_INFO: c_int = 11;
@@ -36,6 +39,29 @@ pub(super) struct MpvRenderParam {
 pub(super) struct MpvRenderFrameInfo {
     pub(super) flags: u64,
     pub(super) target_time: i64,
+}
+
+#[repr(C)]
+pub(super) struct MpvNode {
+    pub(super) value: MpvNodeValue,
+    pub(super) format: c_int,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(super) union MpvNodeValue {
+    pub(super) string: *mut c_char,
+    pub(super) flag: c_int,
+    pub(super) int64: i64,
+    pub(super) double: f64,
+    pub(super) list: *mut MpvNodeList,
+}
+
+#[repr(C)]
+pub(super) struct MpvNodeList {
+    pub(super) num: c_int,
+    pub(super) values: *mut MpvNode,
+    pub(super) keys: *mut *mut c_char,
 }
 
 #[repr(C)]
@@ -73,6 +99,7 @@ unsafe extern "C" {
     pub(super) fn mpv_wait_event(ctx: *mut MpvHandle, timeout: f64) -> *mut MpvEvent;
     pub(super) fn mpv_error_string(error: c_int) -> *const c_char;
     pub(super) fn mpv_free(data: *mut c_void);
+    pub(super) fn mpv_free_node_contents(node: *mut MpvNode);
     pub(super) fn mpv_render_context_create(
         result: *mut *mut MpvRenderContext,
         mpv: *mut MpvHandle,

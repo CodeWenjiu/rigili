@@ -135,6 +135,7 @@ impl State {
                     status.phase = PlaybackPhase::Loading;
                     status.time_pos = 0.0;
                     status.duration = 0.0;
+                    status.buffered.clear();
                     status.error = None;
                 }
                 lock(frame_slot).take();
@@ -252,6 +253,7 @@ fn update_status(mpv: &Mpv, status: &Mutex<PlayerStatus>, loading: bool) {
     next.paused = mpv.get_property_flag("pause").unwrap_or(next.paused);
     next.time_pos = mpv.get_property_double("time-pos").unwrap_or(next.time_pos);
     next.duration = mpv.get_property_double("duration").unwrap_or(next.duration);
+    next.buffered = mpv.buffered_ranges();
     next.volume = mpv.get_property_double("volume").unwrap_or(next.volume);
     next.speed = mpv.get_property_double("speed").unwrap_or(next.speed);
     next.hwdec = mpv.get_property_string("hwdec-current");
