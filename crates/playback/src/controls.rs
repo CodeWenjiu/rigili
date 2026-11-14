@@ -3,6 +3,8 @@ use std::time::Duration;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::*;
 use gpui_kit::component::hover_card::HoverCard;
+use gpui_kit::component::list::ListItem;
+use gpui_kit::component::popover::Popover;
 use gpui_kit::component::slider::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
@@ -10,6 +12,7 @@ use gpui_kit::*;
 use rigili_bilibili::Chapter;
 use rigili_player::{BufferedRange, PlayerStatus};
 
+use super::request::VideoQuality;
 use super::surface::PlayerView;
 use crate::shortcuts::{ToggleFullscreen, TogglePlayback};
 use gpui_kit::base::{Slider as BaseSlider, SliderIndicator, SliderThumb, SliderTrack};
@@ -22,6 +25,9 @@ pub(super) struct Transport<'a> {
     pub(super) progress_active: bool,
     pub(super) chapters: &'a [Chapter],
     pub(super) volume_popup: Entity<VolumePopup>,
+    pub(super) qualities: &'a [VideoQuality],
+    pub(super) selected_quality: u32,
+    pub(super) quality_open: bool,
     pub(super) preview: Option<AnyElement>,
     pub(super) live: bool,
     pub(super) player: WeakEntity<PlayerView>,
@@ -249,6 +255,19 @@ impl Transport<'_> {
         let duration = self.status.duration.max(0.0);
         let paused = self.status.paused;
         let speed = self.status.speed;
+        let volume_icon = volume_icon(self.status.volume, self.status.muted);
+        let quality = self
+            .qualities
+            .iter()
+            .find(|quality| quality.id == self.selected_quality)
+            .filter(|_| self.qualities.len() > 1)
+            .map(|quality| quality.short_label.clone());
+        let quality_tooltip = match self.status.video_size {
+            Some(size) if size.width > 0 && size.height > 0 => {
+                format!("{}×{} · 切换清晰度", size.width, size.height)
+            }
+            _ => "切换清晰度".to_owned(),
+        };
         let fullscreen = window.is_fullscreen();
         let preview = self.preview.take();
         let progress = (!self.live).then(|| {
@@ -348,9 +367,10 @@ impl Transport<'_> {
                             .open_delay(Duration::from_millis(120))
                             .close_delay(Duration::from_millis(200))
                             .trigger(
-                                div().px_2().py_1().child(
-                                    Icon::new(IconName::Volume).size(px(20.)).text_color(muted),
-                                ),
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .child(Icon::new(volume_icon).size(px(20.)).text_color(muted)),
                             )
                             .content({
                                 let popup = self.volume_popup.clone();
@@ -365,6 +385,48 @@ impl Transport<'_> {
                                 }
                             }),
                     )
+                    .when_some(quality, |this, current| {
+                        this.child(
+                            Popover::new("quality-popover")
+                                .anchor(Anchor::BottomRight)
+                                .offset(px(6.))
+                                .open(self.quality_open)
+                                .trigger(
+                                    Button::new("quality")
+                                        .ghost()
+                                        .small()
+                                        .label(current)
+                                        .tooltip(quality_tooltip),
+                                )
+                                .on_open_change({
+                                    let weak = weak.clone();
+                                    move |open, _, cx| {
+                                        let _ = weak.update(cx, |this, cx| {
+                                            this.set_quality_popover_open(*open, cx);
+                                        });
+                                    }
+                                })
+                                .child(v_flex().min_w(px(120.)).gap_1().children(
+                                    self.qualities.iter().map(|quality| {
+                                        let selected = quality.id == self.selected_quality;
+                                        ListItem::new(("quality", quality.id))
+                                            .check_icon(IconName::Check)
+                                            .confirmed(selected)
+                                            .selected(selected)
+                                            .on_click({
+                                                let weak = weak.clone();
+                                                let id = quality.id;
+                                                move |_, _, cx| {
+                                                    let _ = weak.update(cx, |this, cx| {
+                                                        this.switch_quality(id, cx);
+                                                    });
+                                                }
+                                            })
+                                            .child(quality.label.clone())
+                                    }),
+                                )),
+                        )
+                    })
                     .child(
                         Button::new("speed")
                             .ghost()
@@ -401,6 +463,18 @@ impl Transport<'_> {
     }
 }
 
+fn volume_icon(volume: f64, muted: bool) -> IconName {
+    if muted {
+        return IconName::VolumeOff;
+    }
+    match volume {
+        value if value <= 0.0 => IconName::VolumeOff,
+        value if value <= 33.0 => IconName::Volume,
+        value if value <= 66.0 => IconName::Volume1,
+        _ => IconName::Volume2,
+    }
+}
+
 pub(super) fn speed_label(speed: f64) -> String {
     let text = format!("{speed:.2}");
     let text = text.trim_end_matches('0').trim_end_matches('.');
@@ -409,8 +483,18 @@ pub(super) fn speed_label(speed: f64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{progress_segments, speed_label};
+    use super::{progress_segments, speed_label, volume_icon};
+    use gpui_kit::assets::IconName;
     use rigili_bilibili::Chapter;
+
+    #[test]
+    fn picks_volume_icons_by_level() {
+        assert_eq!(volume_icon(0.0, false), IconName::VolumeOff);
+        assert_eq!(volume_icon(50.0, true), IconName::VolumeOff);
+        assert_eq!(volume_icon(20.0, false), IconName::Volume);
+        assert_eq!(volume_icon(50.0, false), IconName::Volume1);
+        assert_eq!(volume_icon(100.0, false), IconName::Volume2);
+    }
 
     #[test]
     fn labels_speeds() {

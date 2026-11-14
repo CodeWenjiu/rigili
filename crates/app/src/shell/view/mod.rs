@@ -117,6 +117,7 @@ impl NavItem {
 
 pub fn open_main(cx: &mut App) -> Result<()> {
     let options = WindowOptions {
+        app_id: Some("rigili".into()),
         titlebar: Some(TitlebarOptions {
             title: Some("Rigili".into()),
             ..Default::default()

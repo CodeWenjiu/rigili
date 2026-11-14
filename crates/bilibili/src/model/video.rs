@@ -188,6 +188,10 @@ impl VideoShot {
 pub struct PlayUrl {
     #[serde(default)]
     pub dash: Option<Dash>,
+    #[serde(default)]
+    pub accept_quality: Vec<u32>,
+    #[serde(default)]
+    pub accept_description: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]

@@ -6,7 +6,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::info::{InfoEvent, InfoPanel, InfoTab};
-use super::request::{PlaybackRequest, PlaybackSource, resolve, resolve_streams};
+use super::request::{PlaybackRequest, PlaybackSource, Streams, resolve, resolve_streams};
 use super::surface::PlayerView;
 use crate::shortcuts::{
     Reload, SeekBack, SeekForward, SpeedDown, SpeedUp, ToggleComments, ToggleFullscreen,
@@ -29,6 +29,7 @@ pub struct PlayerWindow {
     is_live: bool,
     error: Option<String>,
     show_info: bool,
+    fullscreen_info: bool,
     generation: u64,
     _info_sub: Subscription,
 }
@@ -62,6 +63,7 @@ impl PlayerWindow {
             is_live: false,
             error,
             show_info: true,
+            fullscreen_info: false,
             generation: 0,
             _info_sub: info_sub,
         };
@@ -75,10 +77,15 @@ impl PlayerWindow {
         self.start(request, cx);
     }
 
-    pub(crate) fn toggle_panel(&mut self, tab: InfoTab, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_panel(&mut self, tab: InfoTab, window: &Window, cx: &mut Context<Self>) {
         let current = self.info.read(cx).tab();
-        self.show_info = panel_visibility(self.show_info, current, tab);
-        if self.show_info {
+        let visible = if window.is_fullscreen() {
+            &mut self.fullscreen_info
+        } else {
+            &mut self.show_info
+        };
+        *visible = panel_visibility(*visible, current, tab);
+        if *visible {
             self.info.update(cx, |info, cx| info.show_tab(tab, cx));
         }
         cx.notify();
@@ -142,12 +149,7 @@ impl PlayerWindow {
                                 info.set_related(related, cx);
                             });
                             this.player.update(cx, |player, cx| {
-                                player.load_urls(
-                                    resolved.streams.video,
-                                    resolved.streams.audio,
-                                    false,
-                                    cx,
-                                )
+                                player.load_streams(resolved.streams, false, cx)
                             });
                             this.load_previews(bvid.clone(), cid, cx);
                             this.load_chapters(bvid.clone(), cid, cx);
@@ -174,8 +176,9 @@ impl PlayerWindow {
                     match result {
                         Ok(url) => {
                             this.info.update(cx, |info, cx| info.clear(cx));
-                            this.player
-                                .update(cx, |player, cx| player.load_urls(url, None, true, cx));
+                            this.player.update(cx, |player, cx| {
+                                player.load_streams(Streams::single(url), true, cx)
+                            });
                         }
                         Err(error) => this.handle_error(error, cx),
                     }
@@ -232,9 +235,8 @@ impl PlayerWindow {
                 match result {
                     Ok(streams) => {
                         this.info.update(cx, |info, cx| info.select(cid, cx));
-                        this.player.update(cx, |player, cx| {
-                            player.load_urls(streams.video, streams.audio, false, cx)
-                        });
+                        this.player
+                            .update(cx, |player, cx| player.load_streams(streams, false, cx));
                         this.load_previews(preview_bvid, cid, cx);
                         this.load_chapters(chapters_bvid, cid, cx);
                     }
@@ -463,7 +465,12 @@ impl Render for PlayerWindow {
         let client_decorated = matches!(window.window_decorations(), Decorations::Client { .. });
         let info_loaded = !self.is_live && self.info.read(cx).is_loaded();
         let wide_enough = window.viewport_size().width >= INFO_MIN_WINDOW;
-        let show_info = self.show_info && !fullscreen && info_loaded && wide_enough;
+        let panel_open = if fullscreen {
+            self.fullscreen_info
+        } else {
+            self.show_info
+        };
+        let show_info = panel_open && info_loaded && (fullscreen || wide_enough);
         let title = self.title.clone();
         let weak = cx.entity().downgrade();
 
@@ -493,19 +500,18 @@ impl Render for PlayerWindow {
                 this.player
                     .update(cx, |player, cx| player.adjust_speed(true, cx));
             }))
-            .on_action(cx.listener(|this, _: &ToggleMute, window, cx| {
-                this.player
-                    .update(cx, |player, cx| player.toggle_mute(window, cx));
+            .on_action(cx.listener(|this, _: &ToggleMute, _, cx| {
+                this.player.update(cx, |player, cx| player.toggle_mute(cx));
             }))
             .on_action(cx.listener(|this, _: &ToggleFullscreen, window, cx| {
                 this.player
                     .update(cx, |player, cx| player.toggle_fullscreen(window, cx));
             }))
-            .on_action(cx.listener(|this, _: &ToggleInfo, _, cx| {
-                this.toggle_panel(InfoTab::Info, cx);
+            .on_action(cx.listener(|this, _: &ToggleInfo, window, cx| {
+                this.toggle_panel(InfoTab::Info, window, cx);
             }))
-            .on_action(cx.listener(|this, _: &ToggleComments, _, cx| {
-                this.toggle_panel(InfoTab::Comments, cx);
+            .on_action(cx.listener(|this, _: &ToggleComments, window, cx| {
+                this.toggle_panel(InfoTab::Comments, window, cx);
             }))
             .on_action(cx.listener(|this, _: &Reload, _, cx| {
                 this.info.update(cx, |info, cx| info.reload_current(cx));
@@ -611,6 +617,7 @@ pub fn open(
 ) -> Result<(AnyWindowHandle, Entity<PlayerWindow>)> {
     let title = request.title.clone();
     let mut options = TitleBar::window_options();
+    options.app_id = Some("rigili".into());
     options.titlebar = Some(TitlebarOptions {
         title: Some(title.into()),
         ..TitleBar::title_bar_options()

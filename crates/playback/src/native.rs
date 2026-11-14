@@ -5,7 +5,7 @@ use wayland_client::{
     Connection, Dispatch, EventQueue, Proxy, QueueHandle,
     backend::{Backend, ObjectId},
     globals::{GlobalListContents, registry_queue_init},
-    protocol::{wl_buffer, wl_registry, wl_surface},
+    protocol::{wl_buffer, wl_compositor, wl_region, wl_registry, wl_surface},
 };
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
     zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1},
@@ -52,6 +52,14 @@ impl WaylandOutput {
         let dmabuf = globals
             .bind::<ZwpLinuxDmabufV1, OutputState, ()>(&qh, 2..=4, ())
             .map_err(|error| format!("linux-dmabuf unavailable: {error}"))?;
+        let compositor = globals
+            .bind::<wl_compositor::WlCompositor, OutputState, ()>(&qh, 1..=6, ())
+            .map_err(|error| format!("wl_compositor unavailable: {error}"))?;
+        let empty_region = compositor.create_region(&qh, ());
+        surface.set_input_region(Some(&empty_region));
+        surface.commit();
+        empty_region.destroy();
+        let _ = connection.flush();
 
         Ok(Self {
             connection,
@@ -166,6 +174,30 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for OutputState {
         _: &wl_registry::WlRegistry,
         _: wl_registry::Event,
         _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<wl_compositor::WlCompositor, ()> for OutputState {
+    fn event(
+        _: &mut Self,
+        _: &wl_compositor::WlCompositor,
+        _: wl_compositor::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<wl_region::WlRegion, ()> for OutputState {
+    fn event(
+        _: &mut Self,
+        _: &wl_region::WlRegion,
+        _: wl_region::Event,
+        _: &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {

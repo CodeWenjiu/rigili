@@ -21,7 +21,10 @@ icon_assets!(
         Share,
         Share2,
         Tv,
-        Volume
+        Volume,
+        Volume1,
+        Volume2,
+        VolumeOff
     ]
 );
 
@@ -81,6 +84,9 @@ mod tests {
             IconName::Share2,
             IconName::Tv,
             IconName::Volume,
+            IconName::Volume1,
+            IconName::Volume2,
+            IconName::VolumeOff,
         ] {
             assert!(
                 AppAssets.load(&icon.path()).unwrap().is_some(),

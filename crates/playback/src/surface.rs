@@ -15,6 +15,7 @@ use rigili_player::{PlaybackPhase, Player, PlayerStatus, VideoFrame, VideoSize};
 
 use super::controls::{Transport, VolumePopup, speed_label};
 use super::native::WaylandOutput;
+use super::{Streams, VideoQuality};
 use rigili_core::{cursor, format_clock};
 
 const PREVIEW_WIDTH: f32 = 200.;
@@ -24,7 +25,16 @@ const PAUSED_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const CONTROLS_IDLE: Duration = Duration::from_secs(3);
 const SPEED_NOTICE: Duration = Duration::from_millis(1200);
+const VOLUME_NOTICE: Duration = Duration::from_millis(900);
 const SPEEDS: [f64; 10] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0];
+const WHEEL_VOLUME_STEP: f32 = 5.0;
+const PRECISE_VOLUME_STEP: f32 = 2.0;
+
+#[derive(Clone, Copy)]
+enum Notice {
+    Speed(f64),
+    Volume(f64),
+}
 
 pub(super) struct PlayerView {
     player: Player,
@@ -40,6 +50,10 @@ pub(super) struct PlayerView {
     native_failed: bool,
     native_bounds: Option<Bounds<DevicePixels>>,
     video_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    qualities: Vec<VideoQuality>,
+    selected_quality: u32,
+    audio_url: Option<String>,
+    quality_popover_open: bool,
     seeking: Option<f64>,
     volume_dragging: bool,
     progress_max: f64,
@@ -55,8 +69,7 @@ pub(super) struct PlayerView {
     preview_hovered: bool,
     progress_bounds: Option<Bounds<Pixels>>,
     focus: FocusHandle,
-    muted_volume: Option<f64>,
-    speed_notice: Option<(f64, Instant)>,
+    notice: Option<(Notice, Instant)>,
     _progress_sub: Option<Subscription>,
     _subscriptions: Vec<Subscription>,
     _poll_task: Task<()>,
@@ -130,6 +143,10 @@ impl PlayerView {
             native_failed: false,
             native_bounds: None,
             video_bounds: Rc::new(Cell::new(None)),
+            qualities: Vec::new(),
+            selected_quality: 0,
+            audio_url: None,
+            quality_popover_open: false,
             seeking: None,
             volume_dragging: false,
             progress_max: 0.0,
@@ -145,21 +162,14 @@ impl PlayerView {
             preview_hovered: false,
             progress_bounds: None,
             focus,
-            muted_volume: None,
-            speed_notice: None,
+            notice: None,
             _progress_sub: progress_sub,
             _subscriptions: subscriptions,
             _poll_task: poll_task,
         }
     }
 
-    pub(super) fn load_urls(
-        &mut self,
-        video: String,
-        audio: Option<String>,
-        live: bool,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn load_streams(&mut self, streams: Streams, live: bool, cx: &mut Context<Self>) {
         if let Some(frame) = self.frame.take() {
             self.retired_frames.push(frame);
         }
@@ -168,15 +178,20 @@ impl PlayerView {
         self.chapters.clear();
         self.previews = None;
         self.preview_time = None;
-        self.speed_notice = None;
+        self.notice = None;
         self.progress_max = 0.0;
+        self.quality_popover_open = false;
+        self.selected_quality = streams.video_id;
+        self.audio_url = streams.audio.clone();
+        self.qualities = streams.qualities;
         self.status = PlayerStatus {
             phase: PlaybackPhase::Loading,
             volume: self.status.volume,
+            muted: self.status.muted,
             speed: self.status.speed,
             ..PlayerStatus::default()
         };
-        self.player.load(&video, audio.as_deref());
+        self.player.load(&streams.video, streams.audio.as_deref());
         self.native_requested = self.native.is_some() && !self.native_failed;
         self.native_bounds = None;
         if self.native_requested {
@@ -189,6 +204,39 @@ impl PlayerView {
             }
         }
         cx.notify();
+    }
+
+    pub(super) fn switch_quality(&mut self, id: u32, cx: &mut Context<Self>) {
+        if self.live || id == self.selected_quality {
+            return;
+        }
+        let Some(quality) = self
+            .qualities
+            .iter()
+            .find(|quality| quality.id == id)
+            .cloned()
+        else {
+            return;
+        };
+        let start = self.seeking.unwrap_or(self.status.time_pos).max(0.0);
+        let paused = self.status.paused;
+        self.selected_quality = id;
+        self.quality_popover_open = false;
+        self.status.phase = PlaybackPhase::Loading;
+        self.status.error = None;
+        self.player
+            .switch_video(&quality.url, self.audio_url.as_deref(), start, paused);
+        cx.notify();
+    }
+
+    pub(super) fn set_quality_popover_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.quality_popover_open != open {
+            self.quality_popover_open = open;
+            if open {
+                self.last_activity = Instant::now();
+            }
+            cx.notify();
+        }
     }
 
     pub(super) fn toggle_pause(&mut self, cx: &mut Context<Self>) {
@@ -240,26 +288,45 @@ impl PlayerView {
     }
 
     fn show_speed_notice(&mut self, speed: f64) {
-        self.speed_notice = Some((speed, Instant::now() + SPEED_NOTICE));
+        self.notice = Some((Notice::Speed(speed), Instant::now() + SPEED_NOTICE));
     }
 
-    pub(super) fn toggle_mute(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.muted_volume.take() {
-            Some(volume) => self.set_volume(volume, window, cx),
-            None => {
-                let volume = self.status.volume.max(1.0);
-                self.muted_volume = Some(volume);
-                self.set_volume(0., window, cx);
-            }
-        }
+    fn show_volume_notice(&mut self, volume: f64) {
+        self.notice = Some((Notice::Volume(volume), Instant::now() + VOLUME_NOTICE));
+    }
+
+    pub(super) fn toggle_mute(&mut self, cx: &mut Context<Self>) {
+        let muted = !self.status.muted;
+        self.status.muted = muted;
+        self.player.set_muted(muted);
+        self.last_activity = Instant::now();
+        cx.notify();
     }
 
     fn set_volume(&mut self, volume: f64, window: &mut Window, cx: &mut Context<Self>) {
         self.status.volume = volume;
+        if self.status.muted {
+            self.status.muted = false;
+            self.player.set_muted(false);
+        }
         self.player.set_volume(volume);
         self.volume
             .update(cx, |slider, cx| slider.set_value(volume as f32, window, cx));
         cx.notify();
+    }
+
+    fn on_scroll(&mut self, event: &ScrollEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if event.source != ScrollSource::Pointer {
+            return;
+        }
+        let step = scroll_volume_step(event.delta, window.line_height().as_f32());
+        if step == 0.0 {
+            return;
+        }
+        let volume = (self.status.volume + step).clamp(0.0, 100.0);
+        self.show_volume_notice(volume);
+        self.last_activity = Instant::now();
+        self.set_volume(volume, window, cx);
     }
 
     pub(super) fn toggle_fullscreen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -421,6 +488,7 @@ impl PlayerView {
             || self.seeking.is_some()
             || self.volume_dragging
             || self.volume_popup_open
+            || self.quality_popover_open
     }
 
     fn controls_idle(&self) -> bool {
@@ -457,9 +525,7 @@ impl PlayerView {
         match event {
             SliderEvent::Change(SliderValue::Single(value)) => {
                 self.volume_dragging = true;
-                self.muted_volume = None;
-                self.status.volume = *value as f64;
-                self.player.set_volume(*value as f64);
+                self.set_volume(*value as f64, window, cx);
             }
             SliderEvent::Release(_) => {
                 self.volume_dragging = false;
@@ -480,11 +546,8 @@ impl PlayerView {
 
         self.sync_native_bounds(window, cx);
         let mut changed = self.pump_native();
-        if notice_expired(
-            self.speed_notice.map(|(_, deadline)| deadline),
-            Instant::now(),
-        ) {
-            self.speed_notice = None;
+        if notice_expired(self.notice.map(|(_, deadline)| deadline), Instant::now()) {
+            self.notice = None;
             changed = true;
         }
         if let Some(frame) = self.player.take_frame()
@@ -662,7 +725,10 @@ impl Render for PlayerView {
             self.status.phase,
             PlaybackPhase::Buffering | PlaybackPhase::Loading
         );
-        let speed_notice = self.speed_notice.map(|(speed, _)| speed_label(speed));
+        let notice = self.notice.map(|(notice, _)| match notice {
+            Notice::Speed(speed) => speed_label(speed),
+            Notice::Volume(volume) => format!("音量 {volume:.0}%"),
+        });
         let paused = self.status.paused && !self.controls_visible;
         let native_active = self.native_requested && !self.native_failed && self.native.is_some();
         let frame = (!native_active).then(|| self.frame.clone()).flatten();
@@ -687,6 +753,9 @@ impl Render for PlayerView {
                             progress_active: self.preview_hovered || self.seeking.is_some(),
                             chapters: &self.chapters,
                             volume_popup: self.volume_popup.clone(),
+                            qualities: &self.qualities,
+                            selected_quality: self.selected_quality,
+                            quality_open: self.quality_popover_open,
                             preview: self.progress_preview(cx),
                             live: self.live,
                             player: cx.entity().downgrade(),
@@ -731,24 +800,32 @@ impl Render for PlayerView {
                     .into_any_element(),
             );
         }
-        if paused {
+        if paused && !buffering && self.status.error.is_none() && notice.is_none() {
             overlays.push(
                 div()
                     .absolute()
-                    .right_3()
-                    .bottom_3()
-                    .p_2()
-                    .rounded_full()
-                    .bg(hsla(0., 0., 0., 0.55))
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
                     .child(
-                        Icon::new(IconName::Pause)
-                            .size(px(18.))
-                            .text_color(Hsla::white()),
+                        div()
+                            .size(px(80.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .bg(hsla(0., 0., 0., 0.5))
+                            .child(
+                                Icon::new(IconName::Pause)
+                                    .size(px(36.))
+                                    .text_color(Hsla::white()),
+                            ),
                     )
                     .into_any_element(),
             );
         }
-        if let Some(label) = speed_notice {
+        if let Some(label) = notice {
             overlays.push(
                 div()
                     .absolute()
@@ -770,8 +847,6 @@ impl Render for PlayerView {
                     .into_any_element(),
             );
         }
-        let has_overlays = !overlays.is_empty();
-
         let video = div()
             .id("player-video-surface")
             .relative()
@@ -779,14 +854,6 @@ impl Render for PlayerView {
             .min_h_0()
             .overflow_hidden()
             .bg(Hsla::black())
-            .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _, cx| this.pointer_moved(cx)))
-            .on_hover(cx.listener(|this, hovered, _, cx| {
-                if *hovered {
-                    this.pointer_moved(cx);
-                } else {
-                    this.pointer_left_video(cx);
-                }
-            }))
             .children(frame.map(|frame| img(frame).size_full().object_fit(ObjectFit::Contain)))
             .child(
                 canvas(
@@ -811,9 +878,26 @@ impl Render for PlayerView {
                     .track_focus(&self.focus)
                     .key_context(crate::shortcuts::VIDEO),
             )
-            .when(has_overlays, |this| {
-                this.child(deferred(div().absolute().size_full().children(overlays)))
-            });
+            .child(deferred(
+                div()
+                    .id("player-video-input")
+                    .absolute()
+                    .size_full()
+                    .on_mouse_move(
+                        cx.listener(|this, _: &MouseMoveEvent, _, cx| this.pointer_moved(cx)),
+                    )
+                    .on_hover(cx.listener(|this, hovered, _, cx| {
+                        if *hovered {
+                            this.pointer_moved(cx);
+                        } else {
+                            this.pointer_left_video(cx);
+                        }
+                    }))
+                    .on_scroll(cx.listener(|this, event: &ScrollEvent, window, cx| {
+                        this.on_scroll(event, window, cx);
+                    }))
+                    .children(overlays),
+            ));
 
         v_flex()
             .size_full()
@@ -868,6 +952,30 @@ fn contain_rect(area: Bounds<Pixels>, source: Option<VideoSize>) -> Bounds<Pixel
     )
 }
 
+fn precise_scroll(delta: ScrollDelta) -> bool {
+    match delta {
+        ScrollDelta::Pixels(_) => true,
+        ScrollDelta::Lines(lines) => {
+            (lines.y - lines.y.round()).abs() > 0.01 || (lines.x - lines.x.round()).abs() > 0.01
+        }
+    }
+}
+
+fn scroll_volume_step(delta: ScrollDelta, line_height: f32) -> f64 {
+    let lines = match delta {
+        ScrollDelta::Lines(delta) => delta.y,
+        ScrollDelta::Pixels(delta) => delta.y.as_f32() / line_height.max(1.0),
+    };
+    f64::from(
+        lines
+            * if precise_scroll(delta) {
+                PRECISE_VOLUME_STEP
+            } else {
+                WHEEL_VOLUME_STEP
+            },
+    )
+}
+
 fn notice_expired(deadline: Option<Instant>, now: Instant) -> bool {
     deadline.is_some_and(|deadline| deadline <= now)
 }
@@ -899,9 +1007,34 @@ mod tests {
 
     use super::{
         IDLE_POLL_INTERVAL, PAUSED_POLL_INTERVAL, POLL_INTERVAL, next_speed, notice_expired,
-        poll_interval,
+        poll_interval, scroll_volume_step,
     };
+    use gpui_kit::{ScrollDelta, point, px};
     use rigili_player::PlaybackPhase;
+
+    #[test]
+    fn maps_wheel_and_trackpad_scroll_to_volume() {
+        assert_eq!(
+            scroll_volume_step(ScrollDelta::Lines(point(0., 1.)), 20.0),
+            5.0
+        );
+        assert_eq!(
+            scroll_volume_step(ScrollDelta::Lines(point(0., -2.)), 20.0),
+            -10.0
+        );
+        assert_eq!(
+            scroll_volume_step(ScrollDelta::Pixels(point(px(0.), px(20.))), 20.0),
+            2.0
+        );
+        assert_eq!(
+            scroll_volume_step(ScrollDelta::Pixels(point(px(0.), px(-10.))), 20.0),
+            -1.0
+        );
+        assert_eq!(
+            scroll_volume_step(ScrollDelta::Lines(point(0.5, 0.)), 20.0),
+            0.0
+        );
+    }
 
     #[test]
     fn cycles_playback_speeds() {

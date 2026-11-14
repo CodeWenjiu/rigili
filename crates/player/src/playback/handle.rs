@@ -44,10 +44,13 @@ pub(super) enum Command {
     Load {
         video: String,
         audio: Option<String>,
+        start: Option<f64>,
+        paused: bool,
     },
     TogglePause,
     Seek(f64),
     SetVolume(f64),
+    SetMute(bool),
     SetSpeed(f64),
     SetViewport(VideoSize),
     Shutdown,
@@ -114,6 +117,18 @@ impl Player {
         self.send(Command::Load {
             video: video.to_owned(),
             audio: audio.map(str::to_owned),
+            start: None,
+            paused: false,
+        });
+    }
+
+    /// Reloads the video stream while keeping the current audio and position.
+    pub fn switch_video(&self, video: &str, audio: Option<&str>, start: f64, paused: bool) {
+        self.send(Command::Load {
+            video: video.to_owned(),
+            audio: audio.map(str::to_owned),
+            start: Some(start.max(0.0)),
+            paused,
         });
     }
 
@@ -127,6 +142,10 @@ impl Player {
 
     pub fn set_volume(&self, volume: f64) {
         self.send(Command::SetVolume(volume.clamp(0.0, 100.0)));
+    }
+
+    pub fn set_muted(&self, muted: bool) {
+        self.send(Command::SetMute(muted));
     }
 
     pub fn set_speed(&self, speed: f64) {
