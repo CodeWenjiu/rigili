@@ -6144,10 +6144,13 @@ version = "0.1.0"
 dependencies = [
  "gpui-kit",
  "image",
+ "raw-window-handle",
  "rigili_bilibili",
  "rigili_core",
  "rigili_macro",
  "rigili_player",
+ "wayland-client",
+ "wayland-protocols",
 ]
 
 [[package]]

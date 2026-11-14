@@ -19,6 +19,7 @@ use super::{
     gl::GlRender,
     handle::Mpv,
 };
+use crate::native::Dmabuf;
 
 pub(crate) enum Renderer {
     Sw(RenderContext),
@@ -63,6 +64,32 @@ impl Renderer {
         match self {
             Self::Sw(render) => render.render(width, height, stride, pointer),
             Self::Gl(render) => render.render(width, height, stride, pointer),
+        }
+    }
+
+    pub(crate) fn render_native(
+        &mut self,
+        slot: usize,
+        width: u32,
+        height: u32,
+    ) -> Result<(), MpvError> {
+        match self {
+            Self::Gl(render) => render.render_native(slot, width, height),
+            Self::Sw(_) => Err(MpvError::invalid_argument(
+                "software rendering has no native output",
+            )),
+        }
+    }
+
+    pub(crate) fn dmabuf(&mut self, slot: usize) -> Result<Dmabuf, MpvError> {
+        match self {
+            Self::Gl(render) => render
+                .dmabuf(slot)?
+                .try_clone()
+                .map_err(|error| MpvError::invalid_argument(format!("无法复制 DMA-BUF：{error}"))),
+            Self::Sw(_) => Err(MpvError::invalid_argument(
+                "software rendering has no native output",
+            )),
         }
     }
 }

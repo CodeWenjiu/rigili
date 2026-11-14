@@ -1,3 +1,5 @@
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -7,10 +9,12 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use image::RgbaImage;
+use raw_window_handle::{HasDisplayHandle, RawDisplayHandle, RawWindowHandle};
 use rigili_bilibili::{Chapter, VideoShot, normalize_url};
 use rigili_player::{PlaybackPhase, Player, PlayerStatus, VideoFrame, VideoSize};
 
 use super::controls::{Transport, VolumePopup, speed_label};
+use super::native::WaylandOutput;
 use rigili_core::{cursor, format_clock};
 
 const PREVIEW_WIDTH: f32 = 200.;
@@ -31,6 +35,11 @@ pub(super) struct PlayerView {
     retired_frames: Vec<Arc<RenderImage>>,
     status: PlayerStatus,
     status_source: Arc<PlayerStatus>,
+    native: Option<NativeSurface>,
+    native_requested: bool,
+    native_failed: bool,
+    native_bounds: Option<Bounds<DevicePixels>>,
+    video_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     seeking: Option<f64>,
     volume_dragging: bool,
     progress_max: f64,
@@ -51,6 +60,12 @@ pub(super) struct PlayerView {
     _progress_sub: Option<Subscription>,
     _subscriptions: Vec<Subscription>,
     _poll_task: Task<()>,
+}
+
+struct NativeSurface {
+    composition: WindowCompositionSurface,
+    output: WaylandOutput,
+    visible: bool,
 }
 
 impl PlayerView {
@@ -99,6 +114,7 @@ impl PlayerView {
         let player = Player::new();
         let status_source = player.status();
         let status = (*status_source).clone();
+        let native = create_native_surface(window);
 
         Self {
             player,
@@ -109,6 +125,11 @@ impl PlayerView {
             retired_frames: Vec::new(),
             status,
             status_source,
+            native,
+            native_requested: false,
+            native_failed: false,
+            native_bounds: None,
+            video_bounds: Rc::new(Cell::new(None)),
             seeking: None,
             volume_dragging: false,
             progress_max: 0.0,
@@ -156,6 +177,17 @@ impl PlayerView {
             ..PlayerStatus::default()
         };
         self.player.load(&video, audio.as_deref());
+        self.native_requested = self.native.is_some() && !self.native_failed;
+        self.native_bounds = None;
+        if self.native_requested {
+            self.player.set_native_output(true);
+            if let Some(native) = &mut self.native {
+                if let Ok(surface) = native.composition.platform_surface() {
+                    let _ = surface.set_visible(false);
+                }
+                native.visible = false;
+            }
+        }
         cx.notify();
     }
 
@@ -446,7 +478,8 @@ impl PlayerView {
             let _ = window.drop_image(frame);
         }
 
-        let mut changed = false;
+        self.sync_native_bounds(window, cx);
+        let mut changed = self.pump_native();
         if notice_expired(
             self.speed_notice.map(|(_, deadline)| deadline),
             Instant::now(),
@@ -491,9 +524,101 @@ impl PlayerView {
             changed = true;
         }
 
+        self.sync_native_bounds(window, cx);
+
         if changed {
             cx.notify();
         }
+    }
+
+    fn pump_native(&mut self) -> bool {
+        let Some(mut native) = self.native.take() else {
+            return false;
+        };
+        let mut changed = false;
+        let mut failure = None;
+
+        if self.native_requested {
+            match native.output.poll() {
+                Ok(released) => {
+                    for slot in released {
+                        self.player.native_frame_released(slot);
+                    }
+                }
+                Err(error) => failure = Some(error),
+            }
+
+            if failure.is_none() {
+                let frames = self.player.take_native_frames();
+                if let Some((frame, skipped)) = frames.split_last() {
+                    for skipped in skipped {
+                        self.player.native_frame_released(skipped.slot);
+                    }
+                    match native.output.present(frame) {
+                        Ok(()) => {
+                            if !native.visible {
+                                let _ = native
+                                    .composition
+                                    .platform_surface()
+                                    .map(|surface| surface.set_visible(true));
+                                native.output.commit();
+                                native.visible = true;
+                                changed = true;
+                            }
+                        }
+                        Err(error) => failure = Some(error),
+                    }
+                }
+            }
+
+            if failure.is_none() && self.player.native_output_failed() {
+                failure = Some("the renderer cannot export GPU frames".into());
+            }
+        }
+
+        if let Some(error) = failure {
+            self.native_failed = true;
+            self.native_requested = false;
+            self.player.set_native_output(false);
+            if let Ok(surface) = native.composition.platform_surface() {
+                let _ = surface.set_visible(false);
+            }
+            native.visible = false;
+            changed = true;
+            eprintln!("direct GPU output unavailable, using readback: {error}");
+        }
+
+        self.native = Some(native);
+        changed
+    }
+
+    fn sync_native_bounds(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if !self.native_requested || self.native_failed {
+            return;
+        }
+        let Some(area) = self.video_bounds.get() else {
+            return;
+        };
+        let rect = contain_rect(area, self.status.video_size);
+        let bounds = rect.to_device_pixels(window.scale_factor());
+        if self.native_bounds == Some(bounds) {
+            return;
+        }
+        self.native_bounds = Some(bounds);
+        let Some(native) = &self.native else {
+            return;
+        };
+        if let Ok(surface) = native.composition.platform_surface() {
+            if surface.set_bounds(bounds).is_err() {
+                self.native_failed = true;
+                self.native_requested = false;
+                self.player.set_native_output(false);
+                let _ = surface.set_visible(false);
+                return;
+            }
+            native.output.commit();
+        }
+        cx.notify();
     }
 
     fn rebuild_progress(
@@ -539,31 +664,113 @@ impl Render for PlayerView {
         );
         let speed_notice = self.speed_notice.map(|(speed, _)| speed_label(speed));
         let paused = self.status.paused && !self.controls_visible;
-        let frame = self.frame.clone();
+        let native_active = self.native_requested && !self.native_failed && self.native.is_some();
+        let frame = (!native_active).then(|| self.frame.clone()).flatten();
+        let video_bounds = self.video_bounds.clone();
         let player = self.player.clone();
-        let controls = self.controls_visible.then(|| {
-            div()
-                .id("player-controls")
-                .absolute()
-                .left_0()
-                .right_0()
-                .bottom_0()
-                .on_hover(cx.listener(|this, hovered, _, _| this.bar_hovered(*hovered)))
-                .child(
-                    Transport {
-                        status: &self.status,
-                        seeking: self.seeking,
-                        progress: &self.progress,
-                        progress_active: self.preview_hovered || self.seeking.is_some(),
-                        chapters: &self.chapters,
-                        volume_popup: self.volume_popup.clone(),
-                        preview: self.progress_preview(cx),
-                        live: self.live,
-                        player: cx.entity().downgrade(),
-                    }
-                    .render(window, cx),
-                )
-        });
+
+        let mut overlays: Vec<AnyElement> = Vec::new();
+        if self.controls_visible {
+            overlays.push(
+                div()
+                    .id("player-controls")
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .on_hover(cx.listener(|this, hovered, _, _| this.bar_hovered(*hovered)))
+                    .child(
+                        Transport {
+                            status: &self.status,
+                            seeking: self.seeking,
+                            progress: &self.progress,
+                            progress_active: self.preview_hovered || self.seeking.is_some(),
+                            chapters: &self.chapters,
+                            volume_popup: self.volume_popup.clone(),
+                            preview: self.progress_preview(cx),
+                            live: self.live,
+                            player: cx.entity().downgrade(),
+                        }
+                        .render(window, cx),
+                    )
+                    .into_any_element(),
+            );
+        }
+        if buffering {
+            overlays.push(
+                div()
+                    .absolute()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(Spinner::new().large())
+                    .into_any_element(),
+            );
+        }
+        if let Some(error) = self.status.error.clone() {
+            overlays.push(
+                div()
+                    .absolute()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .max_w_96()
+                            .p_4()
+                            .rounded(radius)
+                            .border_1()
+                            .border_color(border)
+                            .bg(background)
+                            .text_sm()
+                            .text_color(danger)
+                            .child(error),
+                    )
+                    .into_any_element(),
+            );
+        }
+        if paused {
+            overlays.push(
+                div()
+                    .absolute()
+                    .right_3()
+                    .bottom_3()
+                    .p_2()
+                    .rounded_full()
+                    .bg(hsla(0., 0., 0., 0.55))
+                    .child(
+                        Icon::new(IconName::Pause)
+                            .size(px(18.))
+                            .text_color(Hsla::white()),
+                    )
+                    .into_any_element(),
+            );
+        }
+        if let Some(label) = speed_notice {
+            overlays.push(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .px_4()
+                            .py_2()
+                            .rounded(radius)
+                            .bg(hsla(0., 0., 0., 0.62))
+                            .text_xl()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(Hsla::white())
+                            .child(label),
+                    )
+                    .into_any_element(),
+            );
+        }
+        let has_overlays = !overlays.is_empty();
 
         let video = div()
             .id("player-video-surface")
@@ -584,6 +791,7 @@ impl Render for PlayerView {
             .child(
                 canvas(
                     move |bounds, window, _| {
+                        video_bounds.set(Some(bounds));
                         let scale = window.scale_factor();
                         player.set_viewport(VideoSize::new(
                             (f32::from(bounds.size.width) * scale).round().max(0.0) as u32,
@@ -603,76 +811,8 @@ impl Render for PlayerView {
                     .track_focus(&self.focus)
                     .key_context(crate::shortcuts::VIDEO),
             )
-            .when_some(controls, |this, controls| this.child(controls))
-            .when(buffering, |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .size_full()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(Spinner::new().large()),
-                )
-            })
-            .when_some(self.status.error.clone(), |this, error| {
-                this.child(
-                    div()
-                        .absolute()
-                        .size_full()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            div()
-                                .max_w_96()
-                                .p_4()
-                                .rounded(radius)
-                                .border_1()
-                                .border_color(border)
-                                .bg(background)
-                                .text_sm()
-                                .text_color(danger)
-                                .child(error),
-                        ),
-                )
-            })
-            .when(paused, |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .right_3()
-                        .bottom_3()
-                        .p_2()
-                        .rounded_full()
-                        .bg(hsla(0., 0., 0., 0.55))
-                        .child(
-                            Icon::new(IconName::Pause)
-                                .size(px(18.))
-                                .text_color(Hsla::white()),
-                        ),
-                )
-            })
-            .when_some(speed_notice, |this, label| {
-                this.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            div()
-                                .px_4()
-                                .py_2()
-                                .rounded(radius)
-                                .bg(hsla(0., 0., 0., 0.62))
-                                .text_xl()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(Hsla::white())
-                                .child(label),
-                        ),
-                )
+            .when(has_overlays, |this| {
+                this.child(deferred(div().absolute().size_full().children(overlays)))
             });
 
         v_flex()
@@ -681,6 +821,51 @@ impl Render for PlayerView {
             .text_color(foreground)
             .child(video)
     }
+}
+
+fn create_native_surface(window: &mut Window) -> Option<NativeSurface> {
+    let surface = window
+        .enable_window_composition()
+        .ok()
+        .and_then(|composition| composition.create_native_surface().ok())?;
+    let handle = surface.platform_surface().ok()?.platform_handle().ok()?;
+    let handle = handle.downcast::<RawWindowHandle>().ok()?;
+    let RawWindowHandle::Wayland(surface_handle) = *handle else {
+        return None;
+    };
+    let display = window.display_handle().ok()?;
+    let RawDisplayHandle::Wayland(display_handle) = display.as_raw() else {
+        return None;
+    };
+    let output = WaylandOutput::new(
+        display_handle.display.as_ptr(),
+        surface_handle.surface.as_ptr(),
+    )
+    .map_err(|error| eprintln!("direct GPU output unavailable: {error}"))
+    .ok()?;
+    Some(NativeSurface {
+        composition: surface,
+        output,
+        visible: false,
+    })
+}
+
+fn contain_rect(area: Bounds<Pixels>, source: Option<VideoSize>) -> Bounds<Pixels> {
+    let Some(source) = source.filter(|size| size.width > 0 && size.height > 0) else {
+        return area;
+    };
+    let area_width = f32::from(area.size.width);
+    let area_height = f32::from(area.size.height);
+    let scale = (area_width / source.width as f32).min(area_height / source.height as f32);
+    let width = source.width as f32 * scale;
+    let height = source.height as f32 * scale;
+    Bounds::new(
+        point(
+            area.origin.x + px((area_width - width) / 2.0),
+            area.origin.y + px((area_height - height) / 2.0),
+        ),
+        size(px(width), px(height)),
+    )
 }
 
 fn notice_expired(deadline: Option<Instant>, now: Instant) -> bool {

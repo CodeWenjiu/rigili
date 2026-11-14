@@ -11,10 +11,11 @@ use crate::{
 };
 
 use super::{
-    handle::{Command, RenderBackend},
+    handle::{Command, NativeSlot, RenderBackend},
     status::{PlaybackPhase, StatusSlot, VideoFrame},
     sync::{lock, mutate_status},
 };
+use crate::native::NativeFrame;
 
 const EVENT_NONE: c_int = 0;
 const MPV_EVENT_SHUTDOWN: c_int = 1;
@@ -38,6 +39,7 @@ pub(super) fn run_worker(
     wake: Arc<RenderWake>,
     frame_slot: Arc<Mutex<Option<VideoFrame>>>,
     status: Arc<StatusSlot>,
+    native: Arc<NativeSlot>,
 ) {
     let mpv = match Mpv::new() {
         Ok(mpv) => mpv,
@@ -117,12 +119,20 @@ pub(super) fn run_worker(
         } else {
             info.present && !info.redraw
         };
-        if (state.needs_redraw || update & MPV_RENDER_UPDATE_FRAME != 0)
-            && ready
-            && let Some(frame) = state.render(&mpv, &mut render)
-        {
-            state.has_frame = true;
-            *lock(&frame_slot) = Some(frame);
+        if (state.needs_redraw || update & MPV_RENDER_UPDATE_FRAME != 0) && ready {
+            if native.enabled() {
+                if let Some(slot) = native.acquire()
+                    && let Err(error) = state.render_native(&mpv, &mut render, &native, slot)
+                {
+                    eprintln!("direct GPU output failed, falling back to readback: {error}");
+                    native.fail();
+                    state.has_frame = false;
+                    state.needs_redraw = true;
+                    push_frame(&mut state, &mpv, &mut render, &frame_slot);
+                }
+            } else {
+                push_frame(&mut state, &mpv, &mut render, &frame_slot);
+            }
         }
 
         if last_status.elapsed() >= STATUS_INTERVAL {
@@ -261,6 +271,44 @@ impl State {
             height: size.height,
             data: std::mem::take(&mut self.buffer),
         })
+    }
+
+    fn render_native(
+        &mut self,
+        mpv: &Mpv,
+        render: &mut Renderer,
+        native: &NativeSlot,
+        slot: usize,
+    ) -> Result<(), MpvError> {
+        let source = mpv
+            .video_size()
+            .ok_or_else(|| MpvError::invalid_argument("video size is unknown"))?;
+        let size = target_dimensions(source, self.viewport);
+        if size.width == 0 || size.height == 0 {
+            return Err(MpvError::invalid_argument("output size is empty"));
+        }
+
+        render.render_native(slot, size.width, size.height)?;
+        native.publish(NativeFrame {
+            slot: slot as u8,
+            width: size.width,
+            height: size.height,
+            dmabuf: render.dmabuf(slot)?,
+        });
+        self.needs_redraw = false;
+        Ok(())
+    }
+}
+
+fn push_frame(
+    state: &mut State,
+    mpv: &Mpv,
+    render: &mut Renderer,
+    frame_slot: &Mutex<Option<VideoFrame>>,
+) {
+    if let Some(frame) = state.render(mpv, render) {
+        state.has_frame = true;
+        *lock(frame_slot) = Some(frame);
     }
 }
 

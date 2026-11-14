@@ -19,7 +19,7 @@ impl MpvError {
         }
     }
 
-    pub(super) fn invalid_argument(message: impl Into<String>) -> Self {
+    pub(crate) fn invalid_argument(message: impl Into<String>) -> Self {
         Self {
             code: -1,
             message: message.into(),

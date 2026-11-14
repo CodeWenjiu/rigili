@@ -1,12 +1,17 @@
 use std::{
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
         mpsc::{self, Sender},
     },
     thread::{self, JoinHandle},
+    time::Duration,
 };
 
-use crate::{VideoSize, mpv::RenderWake};
+use crate::{
+    VideoSize,
+    mpv::RenderWake,
+    native::{NATIVE_SLOTS, NativeFrame},
+};
 
 use super::{
     status::{PlayerStatus, StatusSlot, VideoFrame},
@@ -26,6 +31,7 @@ struct PlayerInner {
     viewport: Mutex<VideoSize>,
     wake: Arc<RenderWake>,
     worker: Mutex<Option<JoinHandle<()>>>,
+    native: Arc<NativeSlot>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -62,13 +68,24 @@ impl Player {
         let frame = Arc::new(Mutex::new(None));
         let status = Arc::new(StatusSlot::new(Arc::new(PlayerStatus::default())));
         let wake = Arc::new(RenderWake::default());
+        let native = Arc::new(NativeSlot::default());
 
         let worker_frame = Arc::clone(&frame);
         let worker_status = Arc::clone(&status);
         let worker_wake = Arc::clone(&wake);
+        let worker_native = Arc::clone(&native);
         let worker = thread::Builder::new()
             .name("rigili-mpv".into())
-            .spawn(move || run_worker(receiver, backend, worker_wake, worker_frame, worker_status));
+            .spawn(move || {
+                run_worker(
+                    receiver,
+                    backend,
+                    worker_wake,
+                    worker_frame,
+                    worker_status,
+                    worker_native,
+                )
+            });
 
         let worker = match worker {
             Ok(worker) => Some(worker),
@@ -88,6 +105,7 @@ impl Player {
                 viewport: Mutex::new(VideoSize::default()),
                 wake,
                 worker: Mutex::new(worker),
+                native,
             }),
         }
     }
@@ -134,6 +152,27 @@ impl Player {
         lock(&self.inner.frame).take()
     }
 
+    /// Switches the worker between CPU readback and direct GPU output.
+    pub fn set_native_output(&self, enabled: bool) {
+        self.inner.native.request(enabled);
+        self.inner.wake.signal();
+    }
+
+    /// Takes the newest frame rendered for direct GPU output.
+    pub fn take_native_frames(&self) -> Vec<NativeFrame> {
+        self.inner.native.take()
+    }
+
+    /// Tells the worker the compositor released a native frame.
+    pub fn native_frame_released(&self, slot: u8) {
+        self.inner.native.release(slot);
+        self.inner.wake.signal();
+    }
+
+    pub fn native_output_failed(&self) -> bool {
+        self.inner.native.failed()
+    }
+
     pub fn status(&self) -> Arc<PlayerStatus> {
         lock(&self.inner.status).clone()
     }
@@ -156,12 +195,110 @@ impl Default for Player {
 
 impl Drop for PlayerInner {
     fn drop(&mut self) {
+        self.native.fail();
         let _ = lock(&self.sender).send(Command::Shutdown);
         self.wake.signal();
         if let Some(worker) = lock(&self.worker).take() {
             let _ = worker.join();
         }
     }
+}
+
+pub(crate) struct NativeSlot {
+    state: Mutex<NativeState>,
+    condvar: Condvar,
+}
+
+struct NativeState {
+    requested: bool,
+    failed: bool,
+    free: [bool; NATIVE_SLOTS],
+    frames: Vec<NativeFrame>,
+}
+
+impl Default for NativeSlot {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(NativeState {
+                requested: false,
+                failed: false,
+                free: [true; NATIVE_SLOTS],
+                frames: Vec::new(),
+            }),
+            condvar: Condvar::new(),
+        }
+    }
+}
+
+impl NativeSlot {
+    pub(crate) fn request(&self, enabled: bool) {
+        let mut state = lock(&self.state);
+        state.requested = enabled;
+        state.failed = false;
+        state.free = [true; NATIVE_SLOTS];
+        state.frames.clear();
+        drop(state);
+        self.condvar.notify_all();
+    }
+
+    pub(crate) fn enabled(&self) -> bool {
+        let state = lock(&self.state);
+        state.requested && !state.failed
+    }
+
+    pub(crate) fn failed(&self) -> bool {
+        lock(&self.state).failed
+    }
+
+    /// Waits for a texture the compositor is no longer reading.
+    pub(crate) fn acquire(&self) -> Option<usize> {
+        let mut state = lock(&self.state);
+        let mut slot = free_slot(&state);
+        if slot.is_none() && state.requested && !state.failed {
+            let (guard, _) = self
+                .condvar
+                .wait_timeout(state, Duration::from_millis(20))
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state = guard;
+            slot = free_slot(&state);
+        }
+        let slot = slot?;
+        state.free[slot] = false;
+        Some(slot)
+    }
+
+    pub(crate) fn publish(&self, frame: NativeFrame) {
+        lock(&self.state).frames.push(frame);
+    }
+
+    pub(crate) fn take(&self) -> Vec<NativeFrame> {
+        std::mem::take(&mut lock(&self.state).frames)
+    }
+
+    pub(crate) fn release(&self, slot: u8) {
+        let mut state = lock(&self.state);
+        if let Some(free) = state.free.get_mut(slot as usize) {
+            *free = true;
+        }
+        drop(state);
+        self.condvar.notify_all();
+    }
+
+    pub(crate) fn fail(&self) {
+        let mut state = lock(&self.state);
+        state.failed = true;
+        state.free = [true; NATIVE_SLOTS];
+        state.frames.clear();
+        drop(state);
+        self.condvar.notify_all();
+    }
+}
+
+fn free_slot(state: &NativeState) -> Option<usize> {
+    if !state.requested || state.failed {
+        return None;
+    }
+    state.free.iter().position(|free| *free)
 }
 
 #[cfg(test)]

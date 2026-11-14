@@ -6,8 +6,11 @@ publish = false
 
 [dependencies]
 gpui-kit.workspace = true
+raw-window-handle = "0.6"
 rigili_bilibili.workspace = true
 rigili_core.workspace = true
 rigili_macro.workspace = true
 rigili_player.workspace = true
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
 image = { version = "0.25", default-features = false }

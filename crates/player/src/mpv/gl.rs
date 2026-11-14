@@ -1,13 +1,15 @@
 use std::{
     ffi::{CStr, c_char, c_int, c_void},
     fs::{File, OpenOptions},
-    os::fd::AsRawFd,
+    os::fd::{AsRawFd, FromRawFd, OwnedFd},
     ptr::{NonNull, null, null_mut},
     sync::Arc,
 };
 
 use glow::HasContext;
 use khronos_egl as egl;
+
+use crate::native::{Dmabuf, DmabufPlane, NATIVE_SLOTS};
 
 use super::{
     error::{MpvError, check},
@@ -27,61 +29,37 @@ use super::{
 
 const EGL_PLATFORM_SURFACELESS_MESA: egl::Enum = 0x31dd;
 
+type ExportQuery =
+    unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_int, *mut c_int, *mut u64) -> u32;
+type ExportImage =
+    unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_int, *mut c_int, *mut c_int) -> u32;
+
 pub(crate) struct GlRender {
     egl: EglContext,
     render: NonNull<MpvRenderContext>,
     _render_fd: Option<File>,
+    slots: [GlSlot; NATIVE_SLOTS],
+    size: (u32, u32),
+    generation: u64,
+}
+
+struct GlSlot {
     framebuffer: glow::Framebuffer,
     texture: glow::Texture,
-    size: (u32, u32),
+    dmabuf: Option<Dmabuf>,
+    egl_image: Option<egl::Image>,
 }
 
 impl GlRender {
     pub(crate) fn new(mpv: &Mpv, wake: Arc<RenderWake>) -> Result<Self, MpvError> {
         let egl = EglContext::new()?;
 
-        let (framebuffer, texture) = unsafe {
-            let texture = egl.gl.create_texture().map_err(|error| {
-                MpvError::invalid_argument(format!("无法创建 OpenGL 纹理：{error}"))
-            })?;
-            egl.gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-            egl.gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_MIN_FILTER,
-                glow::LINEAR as i32,
-            );
-            egl.gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_MAG_FILTER,
-                glow::LINEAR as i32,
-            );
-            egl.gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_WRAP_S,
-                glow::CLAMP_TO_EDGE as i32,
-            );
-            egl.gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_WRAP_T,
-                glow::CLAMP_TO_EDGE as i32,
-            );
-            egl.gl.bind_texture(glow::TEXTURE_2D, None);
-
-            let framebuffer = egl.gl.create_framebuffer().map_err(|error| {
-                MpvError::invalid_argument(format!("无法创建 OpenGL 帧缓冲：{error}"))
-            })?;
-            egl.gl
-                .bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
-            egl.gl.framebuffer_texture_2d(
-                glow::FRAMEBUFFER,
-                glow::COLOR_ATTACHMENT0,
-                glow::TEXTURE_2D,
-                Some(texture),
-                0,
-            );
-            egl.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-            (framebuffer, texture)
-        };
+        let slots = (0..NATIVE_SLOTS)
+            .map(|_| create_slot(&egl))
+            .collect::<Result<Vec<_>, _>>()?;
+        let slots: [GlSlot; NATIVE_SLOTS] = slots
+            .try_into()
+            .map_err(|_| MpvError::invalid_argument("OpenGL slot count mismatch"))?;
 
         let mut init_params = MpvOpenGlInitParams {
             get_proc_address: Some(load_proc_address),
@@ -127,9 +105,9 @@ impl GlRender {
             egl,
             render,
             _render_fd: render_fd,
-            framebuffer,
-            texture,
+            slots,
             size: (0, 0),
+            generation: 0,
         };
         unsafe {
             mpv_render_context_set_update_callback(
@@ -176,18 +154,46 @@ impl GlRender {
         stride: u32,
         pointer: *mut u8,
     ) -> Result<(), MpvError> {
-        if width == 0 || height == 0 {
-            return Err(MpvError::invalid_argument("render size is empty"));
-        }
         if stride != width * 4 {
             return Err(MpvError::invalid_argument(
                 "OpenGL output expects a tight stride",
             ));
         }
+        self.render_frame(0, width, height)?;
+
+        // mpv renders in GL orientation, so glReadPixels returns rows bottom-up;
+        // the resulting buffer is already top-down and FLIP_Y must stay off.
+        let length = width as usize * height as usize * 4;
+        // SAFETY: the caller guarantees `pointer` has room for `stride * height`
+        // bytes, and `stride` is the tight width * 4 checked above.
+        let pixels = unsafe { std::slice::from_raw_parts_mut(pointer, length) };
+        unsafe {
+            self.egl
+                .gl
+                .bind_framebuffer(glow::FRAMEBUFFER, Some(self.slots[0].framebuffer));
+            self.egl.gl.pixel_store_i32(glow::PACK_ALIGNMENT, 4);
+            self.egl.gl.read_pixels(
+                0,
+                0,
+                width as i32,
+                height as i32,
+                glow::BGRA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(Some(pixels)),
+            );
+            self.egl.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        }
+        Ok(())
+    }
+
+    fn render_frame(&mut self, slot: usize, width: u32, height: u32) -> Result<(), MpvError> {
+        if width == 0 || height == 0 {
+            return Err(MpvError::invalid_argument("render size is empty"));
+        }
         self.resize(width, height)?;
 
         let mut fbo = MpvOpenGlFbo {
-            fbo: self.framebuffer.0.get() as c_int,
+            fbo: self.slots[slot].framebuffer.0.get() as c_int,
             w: width as c_int,
             h: height as c_int,
             internal_format: 0,
@@ -204,69 +210,88 @@ impl GlRender {
         ];
         check(unsafe { mpv_render_context_render(self.render.as_ptr(), params.as_mut_ptr()) })?;
         unsafe { mpv_render_context_report_swap(self.render.as_ptr()) };
-
-        // mpv renders in GL orientation, so glReadPixels returns rows bottom-up;
-        // the resulting buffer is already top-down and FLIP_Y must stay off.
-        let length = width as usize * height as usize * 4;
-        // SAFETY: the caller guarantees `pointer` has room for `stride * height`
-        // bytes, and `stride` is the tight width * 4 checked above.
-        let pixels = unsafe { std::slice::from_raw_parts_mut(pointer, length) };
-        unsafe {
-            self.egl
-                .gl
-                .bind_framebuffer(glow::FRAMEBUFFER, Some(self.framebuffer));
-            self.egl.gl.pixel_store_i32(glow::PACK_ALIGNMENT, 4);
-            self.egl.gl.read_pixels(
-                0,
-                0,
-                width as i32,
-                height as i32,
-                glow::BGRA,
-                glow::UNSIGNED_BYTE,
-                glow::PixelPackData::Slice(Some(pixels)),
-            );
-            self.egl.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-        }
         Ok(())
+    }
+
+    pub(crate) fn render_native(
+        &mut self,
+        slot: usize,
+        width: u32,
+        height: u32,
+    ) -> Result<(), MpvError> {
+        self.render_frame(slot, width, height)?;
+        unsafe { self.egl.gl.finish() };
+        self.ensure_dmabuf(slot)
+    }
+
+    pub(crate) fn dmabuf(&mut self, slot: usize) -> Result<&Dmabuf, MpvError> {
+        self.ensure_dmabuf(slot)?;
+        Ok(self.slots[slot]
+            .dmabuf
+            .as_ref()
+            .expect("dmabuf was just created"))
+    }
+
+    fn ensure_dmabuf(&mut self, slot: usize) -> Result<(), MpvError> {
+        if self.slots[slot].dmabuf.is_some() {
+            return Ok(());
+        }
+        self.generation = self.generation.wrapping_add(1);
+        let (image, dmabuf) = export_texture(&self.egl, self.slots[slot].texture, self.generation)?;
+        self.slots[slot].egl_image = Some(image);
+        self.slots[slot].dmabuf = Some(dmabuf);
+        Ok(())
+    }
+
+    fn clear_dmabufs(&mut self) {
+        for slot in &mut self.slots {
+            if let Some(image) = slot.egl_image.take() {
+                let _ = self.egl.egl.destroy_image(self.egl.display, image);
+            }
+            slot.dmabuf = None;
+        }
     }
 
     fn resize(&mut self, width: u32, height: u32) -> Result<(), MpvError> {
         if self.size == (width, height) {
             return Ok(());
         }
+        self.clear_dmabufs();
 
-        unsafe {
-            self.egl
-                .gl
-                .bind_texture(glow::TEXTURE_2D, Some(self.texture));
-            self.egl.gl.tex_image_2d(
-                glow::TEXTURE_2D,
-                0,
-                glow::RGBA8 as i32,
-                width as i32,
-                height as i32,
-                0,
-                glow::RGBA,
-                glow::UNSIGNED_BYTE,
-                glow::PixelUnpackData::Slice(None),
-            );
-            self.egl
-                .gl
-                .bind_framebuffer(glow::FRAMEBUFFER, Some(self.framebuffer));
-            self.egl.gl.framebuffer_texture_2d(
-                glow::FRAMEBUFFER,
-                glow::COLOR_ATTACHMENT0,
-                glow::TEXTURE_2D,
-                Some(self.texture),
-                0,
-            );
-            let status = self.egl.gl.check_framebuffer_status(glow::FRAMEBUFFER);
-            self.egl.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-            self.egl.gl.bind_texture(glow::TEXTURE_2D, None);
-            if status != glow::FRAMEBUFFER_COMPLETE {
-                return Err(MpvError::invalid_argument(format!(
-                    "OpenGL framebuffer is incomplete: {status:#x}"
-                )));
+        for slot in &self.slots {
+            unsafe {
+                self.egl
+                    .gl
+                    .bind_texture(glow::TEXTURE_2D, Some(slot.texture));
+                self.egl.gl.tex_image_2d(
+                    glow::TEXTURE_2D,
+                    0,
+                    glow::RGBA8 as i32,
+                    width as i32,
+                    height as i32,
+                    0,
+                    glow::RGBA,
+                    glow::UNSIGNED_BYTE,
+                    glow::PixelUnpackData::Slice(None),
+                );
+                self.egl
+                    .gl
+                    .bind_framebuffer(glow::FRAMEBUFFER, Some(slot.framebuffer));
+                self.egl.gl.framebuffer_texture_2d(
+                    glow::FRAMEBUFFER,
+                    glow::COLOR_ATTACHMENT0,
+                    glow::TEXTURE_2D,
+                    Some(slot.texture),
+                    0,
+                );
+                let status = self.egl.gl.check_framebuffer_status(glow::FRAMEBUFFER);
+                self.egl.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+                self.egl.gl.bind_texture(glow::TEXTURE_2D, None);
+                if status != glow::FRAMEBUFFER_COMPLETE {
+                    return Err(MpvError::invalid_argument(format!(
+                        "OpenGL framebuffer is incomplete: {status:#x}"
+                    )));
+                }
             }
         }
 
@@ -369,6 +394,124 @@ impl Drop for EglContext {
     }
 }
 
+fn export_texture(
+    egl: &EglContext,
+    texture: glow::Texture,
+    generation: u64,
+) -> Result<(egl::Image, Dmabuf), MpvError> {
+    let buffer = unsafe { egl::ClientBuffer::from_ptr(texture.0.get() as usize as *mut c_void) };
+    let image = egl
+        .egl
+        .create_image(
+            egl.display,
+            egl.context,
+            egl::GL_TEXTURE_2D as egl::Enum,
+            buffer,
+            &[egl::IMAGE_PRESERVED as egl::Attrib, 1, egl::ATTRIB_NONE],
+        )
+        .map_err(|error| MpvError::invalid_argument(format!("无法创建 EGLImage：{error}")))?;
+
+    let query: ExportQuery = match egl.egl.get_proc_address("eglExportDMABUFImageQueryMESA") {
+        // SAFETY: the MESA export extension entry point uses this signature.
+        Some(proc) => unsafe { std::mem::transmute::<extern "system" fn(), ExportQuery>(proc) },
+        None => {
+            let _ = egl.egl.destroy_image(egl.display, image);
+            return Err(MpvError::invalid_argument(
+                "eglExportDMABUFImageQueryMESA is not supported",
+            ));
+        }
+    };
+    let export: ExportImage = match egl.egl.get_proc_address("eglExportDMABUFImageMESA") {
+        // SAFETY: the MESA export extension entry point uses this signature.
+        Some(proc) => unsafe { std::mem::transmute::<extern "system" fn(), ExportImage>(proc) },
+        None => {
+            let _ = egl.egl.destroy_image(egl.display, image);
+            return Err(MpvError::invalid_argument(
+                "eglExportDMABUFImageMESA is not supported",
+            ));
+        }
+    };
+
+    let mut fourcc = 0;
+    let mut planes = 0;
+    let mut modifier = 0u64;
+    if unsafe {
+        query(
+            egl.display.as_ptr(),
+            image.as_ptr(),
+            &mut fourcc,
+            &mut planes,
+            &mut modifier,
+        )
+    } == 0
+    {
+        let _ = egl.egl.destroy_image(egl.display, image);
+        return Err(MpvError::invalid_argument(
+            "eglExportDMABUFImageQueryMESA failed",
+        ));
+    }
+    if !(1..=4).contains(&planes) {
+        let _ = egl.egl.destroy_image(egl.display, image);
+        return Err(MpvError::invalid_argument(format!(
+            "unsupported dmabuf plane count: {planes}"
+        )));
+    }
+
+    let mut fds = [-1; 4];
+    let mut strides = [0; 4];
+    let mut offsets = [0; 4];
+    if unsafe {
+        export(
+            egl.display.as_ptr(),
+            image.as_ptr(),
+            fds.as_mut_ptr(),
+            strides.as_mut_ptr(),
+            offsets.as_mut_ptr(),
+        )
+    } == 0
+    {
+        let _ = egl.egl.destroy_image(egl.display, image);
+        close_fds(&fds);
+        return Err(MpvError::invalid_argument(
+            "eglExportDMABUFImageMESA failed",
+        ));
+    }
+
+    let mut result = Vec::with_capacity(planes as usize);
+    for index in 0..planes as usize {
+        if fds[index] < 0 {
+            let _ = egl.egl.destroy_image(egl.display, image);
+            close_fds(&fds);
+            return Err(MpvError::invalid_argument("dmabuf export returned no fd"));
+        }
+        // SAFETY: the exported fds are owned by this process.
+        result.push(DmabufPlane {
+            fd: unsafe { OwnedFd::from_raw_fd(fds[index]) },
+            offset: offsets[index] as u32,
+            stride: strides[index] as u32,
+        });
+    }
+
+    Ok((
+        image,
+        Dmabuf {
+            generation,
+            fourcc: fourcc as u32,
+            modifier,
+            planes: result,
+        },
+    ))
+}
+
+fn close_fds(fds: &[c_int]) {
+    for &fd in fds {
+        if fd >= 0 {
+            // SAFETY: the fd was returned by the EGL export and is not used elsewhere.
+            drop(unsafe { OwnedFd::from_raw_fd(fd) });
+        }
+    }
+}
+
 // VAAPI GL interop needs a render node even though the EGL context is
 // surfaceless, so hand mpv the first usable node.
 fn open_render_node() -> Option<File> {
@@ -406,11 +549,120 @@ extern "C" fn render_update(data: *mut c_void) {
 
 impl Drop for GlRender {
     fn drop(&mut self) {
+        self.clear_dmabufs();
         unsafe {
             mpv_render_context_set_update_callback(self.render.as_ptr(), None, null_mut());
             mpv_render_context_free(self.render.as_ptr());
-            self.egl.gl.delete_framebuffer(self.framebuffer);
-            self.egl.gl.delete_texture(self.texture);
+            for slot in &self.slots {
+                self.egl.gl.delete_framebuffer(slot.framebuffer);
+                self.egl.gl.delete_texture(slot.texture);
+            }
+        }
+    }
+}
+
+fn create_slot(egl: &EglContext) -> Result<GlSlot, MpvError> {
+    unsafe {
+        let texture = egl.gl.create_texture().map_err(|error| {
+            MpvError::invalid_argument(format!("无法创建 OpenGL 纹理：{error}"))
+        })?;
+        egl.gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+        egl.gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MIN_FILTER,
+            glow::LINEAR as i32,
+        );
+        egl.gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MAG_FILTER,
+            glow::LINEAR as i32,
+        );
+        egl.gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_WRAP_S,
+            glow::CLAMP_TO_EDGE as i32,
+        );
+        egl.gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_WRAP_T,
+            glow::CLAMP_TO_EDGE as i32,
+        );
+        egl.gl.bind_texture(glow::TEXTURE_2D, None);
+
+        let framebuffer = egl.gl.create_framebuffer().map_err(|error| {
+            MpvError::invalid_argument(format!("无法创建 OpenGL 帧缓冲：{error}"))
+        })?;
+        egl.gl
+            .bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
+        egl.gl.framebuffer_texture_2d(
+            glow::FRAMEBUFFER,
+            glow::COLOR_ATTACHMENT0,
+            glow::TEXTURE_2D,
+            Some(texture),
+            0,
+        );
+        egl.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+
+        Ok(GlSlot {
+            framebuffer,
+            texture,
+            dmabuf: None,
+            egl_image: None,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires EGL and a GPU"]
+    fn exports_the_texture_as_dmabuf() {
+        let context = EglContext::new().expect("egl context");
+        let gl = &context.gl;
+        let (width, height) = (320u32, 180u32);
+
+        unsafe {
+            let texture = gl.create_texture().expect("texture");
+            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::LINEAR as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::LINEAR as i32,
+            );
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA8 as i32,
+                width as i32,
+                height as i32,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(None),
+            );
+            gl.bind_texture(glow::TEXTURE_2D, None);
+            gl.finish();
+
+            let (image, dmabuf) = export_texture(&context, texture, 1).expect("dmabuf");
+            println!(
+                "dmabuf fourcc={:#x} modifier={:#x} planes={}",
+                dmabuf.fourcc,
+                dmabuf.modifier,
+                dmabuf.planes.len()
+            );
+            for plane in &dmabuf.planes {
+                println!("stride={} offset={}", plane.stride, plane.offset);
+            }
+
+            let _ = context.egl.destroy_image(context.display, image);
+            gl.delete_texture(texture);
         }
     }
 }
