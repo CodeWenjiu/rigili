@@ -55,7 +55,7 @@ pub(super) enum InfoEvent {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum InfoTab {
+pub(super) enum InfoTab {
     #[default]
     Info,
     Comments,
@@ -446,6 +446,22 @@ impl InfoPanel {
         if tab == InfoTab::Comments && !self.comments_loaded && !self.comments_loading {
             self.load_comments(cx);
         }
+    }
+
+    pub(super) fn show_tab(&mut self, tab: InfoTab, cx: &mut Context<Self>) {
+        let index = match tab {
+            InfoTab::Info => 0,
+            InfoTab::Comments => 1,
+        };
+        self.select_tab(index, cx);
+    }
+
+    pub(super) fn tab(&self) -> InfoTab {
+        self.tab
+    }
+
+    pub(super) fn reload_current(&mut self, cx: &mut Context<Self>) {
+        self.reload(cx);
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {

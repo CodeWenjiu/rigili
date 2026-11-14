@@ -10,14 +10,15 @@ use image::RgbaImage;
 use rigili_bilibili::{Chapter, VideoShot, normalize_url};
 use rigili_player::{PlaybackPhase, Player, PlayerStatus, VideoFrame, VideoSize};
 
-use super::controls::{Transport, VolumePopup};
+use super::controls::{Transport, VolumePopup, speed_label};
 use rigili_core::{cursor, format_clock};
 
 const PREVIEW_WIDTH: f32 = 200.;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
 const CONTROLS_IDLE: Duration = Duration::from_secs(3);
-const SPEEDS: [f64; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+const SPEED_NOTICE: Duration = Duration::from_millis(1200);
+const SPEEDS: [f64; 10] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0];
 
 pub(super) struct PlayerView {
     player: Player,
@@ -41,6 +42,9 @@ pub(super) struct PlayerView {
     preview_time: Option<f64>,
     preview_hovered: bool,
     progress_bounds: Option<Bounds<Pixels>>,
+    focus: FocusHandle,
+    muted_volume: Option<f64>,
+    speed_notice: Option<(f64, Instant)>,
     _progress_sub: Option<Subscription>,
     _subscriptions: Vec<Subscription>,
     _poll_task: Task<()>,
@@ -57,14 +61,22 @@ impl PlayerView {
                 .default_value(100.0)
         });
 
-        let subscriptions = vec![cx.subscribe(&volume, |this, _, event: &SliderEvent, cx| {
-            this.on_volume(event, cx);
-        })];
+        let subscriptions = vec![cx.subscribe_in(
+            &volume,
+            window,
+            |this, _, event: &SliderEvent, window, cx| this.on_volume(event, window, cx),
+        )];
         let volume_popup = cx.new(|cx| VolumePopup::new(volume.clone(), cx));
 
-        let progress_sub = Some(cx.subscribe(&progress, |this, _, event: &SliderEvent, cx| {
-            this.on_progress(event, cx);
-        }));
+        let progress_sub = Some(cx.subscribe_in(
+            &progress,
+            window,
+            |this, _, event: &SliderEvent, window, cx| this.on_progress(event, window, cx),
+        ));
+
+        let focus = cx.focus_handle();
+        let deferred_focus = focus.clone();
+        window.defer(cx, move |window, cx| deferred_focus.focus(window, cx));
 
         let poll_task = cx.spawn_in(window, async move |weak, async_cx| {
             loop {
@@ -100,6 +112,9 @@ impl PlayerView {
             preview_time: None,
             preview_hovered: false,
             progress_bounds: None,
+            focus,
+            muted_volume: None,
+            speed_notice: None,
             _progress_sub: progress_sub,
             _subscriptions: subscriptions,
             _poll_task: poll_task,
@@ -121,6 +136,7 @@ impl PlayerView {
         self.chapters.clear();
         self.previews = None;
         self.preview_time = None;
+        self.speed_notice = None;
         self.progress_max = 0.0;
         self.status = PlayerStatus {
             phase: PlaybackPhase::Loading,
@@ -142,6 +158,64 @@ impl PlayerView {
         let speed = next_speed(self.status.speed);
         self.status.speed = speed;
         self.player.set_speed(speed);
+        self.show_speed_notice(speed);
+        cx.notify();
+    }
+
+    pub(super) fn seek_by(&mut self, delta: f64, cx: &mut Context<Self>) {
+        if self.live || self.status.duration <= 0. {
+            return;
+        }
+        let current = self.seeking.unwrap_or(self.status.time_pos);
+        let target = (current + delta).clamp(0., self.status.duration);
+        self.seeking = None;
+        self.status.time_pos = target;
+        self.player.seek(target);
+        self.last_activity = Instant::now();
+        cx.notify();
+    }
+
+    pub(super) fn adjust_speed(&mut self, faster: bool, cx: &mut Context<Self>) {
+        let current = self.status.speed;
+        let index = SPEEDS
+            .iter()
+            .position(|speed| (speed - current).abs() < 1e-3)
+            .unwrap_or(SPEEDS.len() - 1);
+        let next = if faster {
+            (index + 1).min(SPEEDS.len() - 1)
+        } else {
+            index.saturating_sub(1)
+        };
+        let speed = SPEEDS[next];
+        if (speed - current).abs() > 1e-3 {
+            self.status.speed = speed;
+            self.player.set_speed(speed);
+            self.last_activity = Instant::now();
+            self.show_speed_notice(speed);
+            cx.notify();
+        }
+    }
+
+    fn show_speed_notice(&mut self, speed: f64) {
+        self.speed_notice = Some((speed, Instant::now() + SPEED_NOTICE));
+    }
+
+    pub(super) fn toggle_mute(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.muted_volume.take() {
+            Some(volume) => self.set_volume(volume, window, cx),
+            None => {
+                let volume = self.status.volume.max(1.0);
+                self.muted_volume = Some(volume);
+                self.set_volume(0., window, cx);
+            }
+        }
+    }
+
+    fn set_volume(&mut self, volume: f64, window: &mut Window, cx: &mut Context<Self>) {
+        self.status.volume = volume;
+        self.player.set_volume(volume);
+        self.volume
+            .update(cx, |slider, cx| slider.set_value(volume as f32, window, cx));
         cx.notify();
     }
 
@@ -313,7 +387,7 @@ impl PlayerView {
             && self.last_activity.elapsed() >= CONTROLS_IDLE
     }
 
-    fn on_progress(&mut self, event: &SliderEvent, cx: &mut Context<Self>) {
+    fn on_progress(&mut self, event: &SliderEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.last_activity = Instant::now();
         match event {
             SliderEvent::Change(SliderValue::Single(value)) => {
@@ -328,22 +402,25 @@ impl PlayerView {
                 if !self.preview_hovered {
                     self.preview_time = None;
                 }
+                self.focus.focus(window, cx);
                 cx.notify();
             }
             _ => {}
         }
     }
 
-    fn on_volume(&mut self, event: &SliderEvent, _: &mut Context<Self>) {
+    fn on_volume(&mut self, event: &SliderEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.last_activity = Instant::now();
         match event {
             SliderEvent::Change(SliderValue::Single(value)) => {
                 self.volume_dragging = true;
+                self.muted_volume = None;
                 self.status.volume = *value as f64;
                 self.player.set_volume(*value as f64);
             }
             SliderEvent::Release(_) => {
                 self.volume_dragging = false;
+                self.focus.focus(window, cx);
             }
             _ => {}
         }
@@ -355,6 +432,13 @@ impl PlayerView {
         }
 
         let mut changed = false;
+        if notice_expired(
+            self.speed_notice.map(|(_, deadline)| deadline),
+            Instant::now(),
+        ) {
+            self.speed_notice = None;
+            changed = true;
+        }
         if let Some(frame) = self.player.take_frame()
             && let Some(image) = to_render_image(frame)
         {
@@ -367,7 +451,7 @@ impl PlayerView {
         let status = self.player.status();
         if status != self.status {
             if status.duration > 0.0 && (status.duration - self.progress_max).abs() > 0.5 {
-                self.rebuild_progress(status.duration, status.time_pos, cx);
+                self.rebuild_progress(status.duration, status.time_pos, window, cx);
             }
             if self.seeking.is_none() {
                 self.progress.update(cx, |state, cx| {
@@ -395,7 +479,13 @@ impl PlayerView {
         }
     }
 
-    fn rebuild_progress(&mut self, duration: f64, time_pos: f64, cx: &mut Context<Self>) {
+    fn rebuild_progress(
+        &mut self,
+        duration: f64,
+        time_pos: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.progress_max = duration;
         let max = duration.max(1.0) as f32;
         let value = time_pos.clamp(0.0, duration) as f32;
@@ -406,11 +496,11 @@ impl PlayerView {
                 .step(0.1)
                 .default_value(value)
         });
-        self._progress_sub = Some(
-            cx.subscribe(&self.progress, |this, _, event: &SliderEvent, cx| {
-                this.on_progress(event, cx)
-            }),
-        );
+        self._progress_sub = Some(cx.subscribe_in(
+            &self.progress,
+            window,
+            |this, _, event: &SliderEvent, window, cx| this.on_progress(event, window, cx),
+        ));
     }
 }
 
@@ -430,6 +520,8 @@ impl Render for PlayerView {
             self.status.phase,
             PlaybackPhase::Buffering | PlaybackPhase::Loading
         );
+        let speed_notice = self.speed_notice.map(|(speed, _)| speed_label(speed));
+        let paused = self.status.paused && !self.controls_visible;
         let frame = self.frame.clone();
         let player = self.player.clone();
         let controls = self.controls_visible.then(|| {
@@ -486,6 +578,14 @@ impl Render for PlayerView {
                 .absolute()
                 .size_full(),
             )
+            .child(
+                div()
+                    .id("player-video-focus")
+                    .absolute()
+                    .size_full()
+                    .track_focus(&self.focus)
+                    .key_context(crate::shortcuts::VIDEO),
+            )
             .when_some(controls, |this, controls| this.child(controls))
             .when(buffering, |this| {
                 this.child(
@@ -519,6 +619,43 @@ impl Render for PlayerView {
                                 .child(error),
                         ),
                 )
+            })
+            .when(paused, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .right_3()
+                        .bottom_3()
+                        .p_2()
+                        .rounded_full()
+                        .bg(hsla(0., 0., 0., 0.55))
+                        .child(
+                            Icon::new(IconName::Pause)
+                                .size(px(18.))
+                                .text_color(Hsla::white()),
+                        ),
+                )
+            })
+            .when_some(speed_notice, |this, label| {
+                this.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            div()
+                                .px_4()
+                                .py_2()
+                                .rounded(radius)
+                                .bg(hsla(0., 0., 0., 0.62))
+                                .text_xl()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(Hsla::white())
+                                .child(label),
+                        ),
+                )
             });
 
         v_flex()
@@ -527,6 +664,10 @@ impl Render for PlayerView {
             .text_color(foreground)
             .child(video)
     }
+}
+
+fn notice_expired(deadline: Option<Instant>, now: Instant) -> bool {
+    deadline.is_some_and(|deadline| deadline <= now)
 }
 
 fn to_render_image(frame: VideoFrame) -> Option<Arc<RenderImage>> {
@@ -544,13 +685,25 @@ fn next_speed(current: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::next_speed;
+    use std::time::{Duration, Instant};
+
+    use super::{next_speed, notice_expired};
 
     #[test]
     fn cycles_playback_speeds() {
         assert_eq!(next_speed(0.5), 0.75);
         assert_eq!(next_speed(1.0), 1.25);
-        assert_eq!(next_speed(2.0), 0.5);
+        assert_eq!(next_speed(2.0), 2.5);
+        assert_eq!(next_speed(3.0), 3.5);
+        assert_eq!(next_speed(4.0), 0.5);
         assert_eq!(next_speed(9.0), 0.5);
+    }
+
+    #[test]
+    fn notices_expire_after_their_deadline() {
+        let now = Instant::now();
+        assert!(!notice_expired(None, now));
+        assert!(!notice_expired(Some(now + Duration::from_secs(1)), now));
+        assert!(notice_expired(Some(now), now));
     }
 }

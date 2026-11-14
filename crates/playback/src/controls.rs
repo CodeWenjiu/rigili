@@ -11,6 +11,7 @@ use rigili_bilibili::Chapter;
 use rigili_player::{BufferedRange, PlayerStatus};
 
 use super::surface::PlayerView;
+use crate::shortcuts::{ToggleFullscreen, TogglePlayback};
 use gpui_kit::base::{Slider as BaseSlider, SliderIndicator, SliderThumb, SliderTrack};
 use rigili_core::format_clock;
 
@@ -313,12 +314,13 @@ impl Transport<'_> {
                                 IconName::Pause
                             })
                             .accessibility_label(if paused { "播放" } else { "暂停" })
-                            .tooltip(if paused { "播放" } else { "暂停" })
-                            .on_click({
-                                let weak = weak.clone();
-                                move |_, _, cx| {
-                                    let _ = weak.update(cx, |this, cx| this.toggle_pause(cx));
-                                }
+                            .tooltip_with_action(
+                                if paused { "播放" } else { "暂停" },
+                                &TogglePlayback,
+                                Some(crate::shortcuts::VIDEO),
+                            )
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(TogglePlayback), cx);
                             }),
                     )
                     .when(!self.live, |this| {
@@ -386,21 +388,20 @@ impl Transport<'_> {
                                 IconName::Maximize
                             })
                             .accessibility_label(if fullscreen { "退出全屏" } else { "全屏" })
-                            .tooltip(if fullscreen { "退出全屏" } else { "全屏" })
-                            .on_click({
-                                let weak = weak.clone();
-                                move |_, window, cx| {
-                                    let _ = weak.update(cx, |this, cx| {
-                                        this.toggle_fullscreen(window, cx);
-                                    });
-                                }
+                            .tooltip_with_action(
+                                if fullscreen { "退出全屏" } else { "全屏" },
+                                &ToggleFullscreen,
+                                Some(crate::shortcuts::PLAYER),
+                            )
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(ToggleFullscreen), cx);
                             }),
                     ),
             )
     }
 }
 
-fn speed_label(speed: f64) -> String {
+pub(super) fn speed_label(speed: f64) -> String {
     let text = format!("{speed:.2}");
     let text = text.trim_end_matches('0').trim_end_matches('.');
     format!("{text}x")

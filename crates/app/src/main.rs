@@ -29,6 +29,7 @@ fn main() {
         .with_assets(AppAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            rigili_playback::shortcuts::bind(cx);
             rigili_core::cursor::init(cx, platform.clone());
             cx.set_global(rigili_core::login::LoginState::default());
             platform::init(cx);

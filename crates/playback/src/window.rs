@@ -5,9 +5,13 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use super::info::{InfoEvent, InfoPanel};
+use super::info::{InfoEvent, InfoPanel, InfoTab};
 use super::request::{PlaybackRequest, PlaybackSource, resolve, resolve_streams};
 use super::surface::PlayerView;
+use crate::shortcuts::{
+    Reload, SeekBack, SeekForward, SpeedDown, SpeedUp, ToggleComments, ToggleFullscreen,
+    ToggleInfo, ToggleMute, TogglePlayback,
+};
 use rigili_core::api_error_message;
 use rigili_core::api_task_error_message;
 use rigili_core::backend::{self, Backend};
@@ -71,8 +75,12 @@ impl PlayerWindow {
         self.start(request, cx);
     }
 
-    pub fn toggle_info(&mut self, cx: &mut Context<Self>) {
-        self.show_info = !self.show_info;
+    pub(crate) fn toggle_panel(&mut self, tab: InfoTab, cx: &mut Context<Self>) {
+        let current = self.info.read(cx).tab();
+        self.show_info = panel_visibility(self.show_info, current, tab);
+        if self.show_info {
+            self.info.update(cx, |info, cx| info.show_tab(tab, cx));
+        }
         cx.notify();
     }
 
@@ -467,6 +475,41 @@ impl Render for PlayerWindow {
             .size_full()
             .bg(background)
             .text_color(foreground)
+            .key_context(crate::shortcuts::PLAYER)
+            .on_action(cx.listener(|this, _: &TogglePlayback, _, cx| {
+                this.player.update(cx, |player, cx| player.toggle_pause(cx));
+            }))
+            .on_action(cx.listener(|this, _: &SeekBack, _, cx| {
+                this.player.update(cx, |player, cx| player.seek_by(-5., cx));
+            }))
+            .on_action(cx.listener(|this, _: &SeekForward, _, cx| {
+                this.player.update(cx, |player, cx| player.seek_by(5., cx));
+            }))
+            .on_action(cx.listener(|this, _: &SpeedDown, _, cx| {
+                this.player
+                    .update(cx, |player, cx| player.adjust_speed(false, cx));
+            }))
+            .on_action(cx.listener(|this, _: &SpeedUp, _, cx| {
+                this.player
+                    .update(cx, |player, cx| player.adjust_speed(true, cx));
+            }))
+            .on_action(cx.listener(|this, _: &ToggleMute, window, cx| {
+                this.player
+                    .update(cx, |player, cx| player.toggle_mute(window, cx));
+            }))
+            .on_action(cx.listener(|this, _: &ToggleFullscreen, window, cx| {
+                this.player
+                    .update(cx, |player, cx| player.toggle_fullscreen(window, cx));
+            }))
+            .on_action(cx.listener(|this, _: &ToggleInfo, _, cx| {
+                this.toggle_panel(InfoTab::Info, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ToggleComments, _, cx| {
+                this.toggle_panel(InfoTab::Comments, cx);
+            }))
+            .on_action(cx.listener(|this, _: &Reload, _, cx| {
+                this.info.update(cx, |info, cx| info.reload_current(cx));
+            }))
             .when(!fullscreen, |this| {
                 this.child(TitleBar::new().child(
                     h_flex().w_full().items_center().justify_end().pr_6().when(
@@ -558,6 +601,10 @@ fn overlay(content: impl IntoElement, cx: &App) -> impl IntoElement {
         )
 }
 
+fn panel_visibility(visible: bool, current: InfoTab, target: InfoTab) -> bool {
+    !(visible && current == target)
+}
+
 pub fn open(
     request: PlaybackRequest,
     cx: &mut App,
@@ -577,4 +624,30 @@ pub fn open(
     gpui_kit::open_window(options, cx, |window, cx| {
         cx.new(|cx| PlayerWindow::new(window, cx, request.clone()))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{InfoTab, panel_visibility};
+
+    #[test]
+    fn toggles_only_the_active_panel_tab() {
+        assert!(panel_visibility(false, InfoTab::Info, InfoTab::Info));
+        assert!(panel_visibility(false, InfoTab::Comments, InfoTab::Info));
+        assert!(!panel_visibility(true, InfoTab::Info, InfoTab::Info));
+        assert!(panel_visibility(true, InfoTab::Comments, InfoTab::Info));
+
+        assert!(panel_visibility(false, InfoTab::Info, InfoTab::Comments));
+        assert!(panel_visibility(
+            false,
+            InfoTab::Comments,
+            InfoTab::Comments
+        ));
+        assert!(panel_visibility(true, InfoTab::Info, InfoTab::Comments));
+        assert!(!panel_visibility(
+            true,
+            InfoTab::Comments,
+            InfoTab::Comments
+        ));
+    }
 }
