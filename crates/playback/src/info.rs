@@ -3,7 +3,9 @@ use std::sync::Arc;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
+use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
 use gpui_kit::component::list::ListItem;
+use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tab::{Tab, TabBar};
@@ -32,6 +34,7 @@ const RELATED_THUMB_HEIGHT: Pixels = px(68.);
 const COMMENT_AVATAR: Pixels = px(28.);
 const NESTED_COMMENT_AVATAR: Pixels = px(20.);
 const NESTED_COMMENT_LIMIT: usize = 2;
+const COMMENT_MAX_LEN: usize = 1000;
 
 pub(super) enum InfoEvent {
     SelectPage(u64),
@@ -143,6 +146,10 @@ pub(super) struct InfoPanel {
     comments_error: Option<String>,
     comments_more_loading: bool,
     comments_more_error: Option<String>,
+    draft: Option<Entity<TextareaState>>,
+    _draft_sub: Option<Subscription>,
+    comment_sending: bool,
+    comment_error: Option<String>,
     watch_later: bool,
     watch_later_busy: bool,
     watch_later_touched: bool,
@@ -190,6 +197,10 @@ impl InfoPanel {
             comments_error: None,
             comments_more_loading: false,
             comments_more_error: None,
+            draft: None,
+            _draft_sub: None,
+            comment_sending: false,
+            comment_error: None,
             watch_later: false,
             watch_later_busy: false,
             watch_later_touched: false,
@@ -1078,21 +1089,195 @@ impl InfoPanel {
             .into_any_element()
     }
 
-    fn render_comments_tab(&self, cx: &mut Context<Self>) -> AnyElement {
-        div()
-            .relative()
+    fn render_comments_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let draft = self.comment_draft(window, cx);
+        v_flex()
             .flex_1()
             .min_h_0()
+            .child(self.render_comment_composer(&draft, cx))
             .child(
                 div()
-                    .id("player-comments-scroll")
-                    .size_full()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.comments_scroll)
-                    .child(self.render_comments(cx)),
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                        div()
+                            .id("player-comments-scroll")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.comments_scroll)
+                            .child(self.render_comments(cx)),
+                    )
+                    .child(Scrollbar::vertical(&self.comments_scroll)),
             )
-            .child(Scrollbar::vertical(&self.comments_scroll))
             .into_any_element()
+    }
+
+    fn comment_draft(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<TextareaState> {
+        if let Some(draft) = &self.draft {
+            return draft.clone();
+        }
+        let draft = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .auto_grow(2, 6)
+                .submit_on_enter(true)
+                .placeholder("发一条友善的评论")
+        });
+        let sub =
+            cx.subscribe_in(
+                &draft,
+                window,
+                |this, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::Change => {
+                        if this.comment_error.is_some() {
+                            this.comment_error = None;
+                        }
+                        cx.notify();
+                    }
+                    InputEvent::PressEnter { shift: false, .. } => this.submit_comment(window, cx),
+                    _ => {}
+                },
+            );
+        self.draft = Some(draft.clone());
+        self._draft_sub = Some(sub);
+        draft
+    }
+
+    fn render_comment_composer(
+        &self,
+        draft: &Entity<TextareaState>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let muted = cx.theme().muted_foreground;
+        let danger = cx.theme().danger;
+        let border = cx.theme().border;
+        let logged_in = backend::get(cx).is_ok_and(|backend| backend.has_session());
+
+        if !logged_in {
+            return div()
+                .flex_shrink_0()
+                .px_4()
+                .py_3()
+                .border_b_1()
+                .border_color(border)
+                .text_xs()
+                .text_color(muted)
+                .child("登录后可发表评论")
+                .into_any_element();
+        }
+
+        let content = draft.read(cx).value();
+        let count = content.chars().count();
+        let over = count > COMMENT_MAX_LEN;
+
+        v_flex()
+            .flex_shrink_0()
+            .gap_2()
+            .px_4()
+            .py_3()
+            .border_b_1()
+            .border_color(border)
+            .child(Textarea::new(draft).w_full())
+            .when_some(self.comment_error.clone(), |this, error| {
+                this.child(div().text_xs().text_color(danger).child(error))
+            })
+            .child(
+                h_flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(if over { danger } else { muted })
+                            .child(if count == 0 {
+                                "Enter 发布，Shift+Enter 换行".to_owned()
+                            } else {
+                                format!("{count}/{COMMENT_MAX_LEN}")
+                            }),
+                    )
+                    .child(
+                        Button::new("comment-submit")
+                            .small()
+                            .primary()
+                            .disabled(self.comment_sending || content.trim().is_empty() || over)
+                            .label(if self.comment_sending {
+                                "发布中…"
+                            } else {
+                                "发布"
+                            })
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.submit_comment(window, cx)),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn submit_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.comment_sending {
+            return;
+        }
+        let Some(draft) = self.draft.clone() else {
+            return;
+        };
+        let content = draft.read(cx).value().trim().to_owned();
+        if content.is_empty() {
+            self.comment_error = Some("请输入评论内容".into());
+            cx.notify();
+            return;
+        }
+        if content.chars().count() > COMMENT_MAX_LEN {
+            self.comment_error = Some(format!("评论不能超过 {COMMENT_MAX_LEN} 字"));
+            cx.notify();
+            return;
+        }
+        let Some(details) = self.details.clone() else {
+            return;
+        };
+        let backend = match backend::get(cx) {
+            Ok(backend) => backend,
+            Err(error) => {
+                self.comment_error = Some(api_error_message(error));
+                cx.notify();
+                return;
+            }
+        };
+
+        let aid = details.aid;
+        let window_handle = window.window_handle();
+        self.comment_sending = true;
+        self.comment_error = None;
+        cx.notify();
+
+        spawn_api(
+            cx,
+            async move { backend.add_comment(aid, &content).await },
+            move |this, result, cx| {
+                if this.details.as_ref().map(|details| details.aid) != Some(aid) {
+                    return;
+                }
+                this.comment_sending = false;
+                match result {
+                    Ok(()) => {
+                        let _ = window_handle.update(cx, |_, window, cx| {
+                            draft.update(cx, |state, cx| state.set_value("", window, cx));
+                            window.push_notification(Notification::success("评论已发布"), cx);
+                        });
+                        this.comment_count = this.comment_count.saturating_add(1);
+                        this.load_comments(cx);
+                    }
+                    Err(error) => {
+                        this.comment_error = Some(api_task_error_message(error, cx));
+                        cx.notify();
+                    }
+                }
+            },
+        );
     }
 
     fn render_comments(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1311,7 +1496,7 @@ impl InfoPanel {
 }
 
 impl Render for InfoPanel {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let background = theme.background;
         let foreground = theme.foreground;
@@ -1321,7 +1506,7 @@ impl Render for InfoPanel {
 
         let content = match self.tab {
             InfoTab::Info => self.render_info_tab(&details, cx),
-            InfoTab::Comments => self.render_comments_tab(cx),
+            InfoTab::Comments => self.render_comments_tab(window, cx),
         };
 
         v_flex()

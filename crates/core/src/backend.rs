@@ -214,6 +214,10 @@ impl Backend {
         api::comment::fetch(&self.client, kind, oid, page, sort).await
     }
 
+    pub async fn add_comment(&self, aid: u64, message: &str) -> Result<(), ApiError> {
+        api::comment::add(&self.client, 1, &aid.to_string(), message).await
+    }
+
     pub async fn dynamics(&self, mid: u64, offset: &str) -> Result<Dynamics, ApiError> {
         api::space::dynamics(&self.client, mid, offset).await
     }

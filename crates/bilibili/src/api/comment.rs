@@ -1,6 +1,7 @@
 use crate::{ApiError, Client, CommentPage};
 
 const COMMENTS_URL: &str = "https://api.bilibili.com/x/v2/reply";
+const ADD_URL: &str = "https://api.bilibili.com/x/v2/reply/add";
 const PAGE_SIZE: u32 = 20;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -17,6 +18,21 @@ impl CommentSort {
             Self::Latest => "0",
         }
     }
+}
+
+pub async fn add(client: &Client, kind: u32, oid: &str, message: &str) -> Result<(), ApiError> {
+    client
+        .post_form_ack(
+            ADD_URL,
+            &[
+                ("type", kind.to_string()),
+                ("oid", oid.to_owned()),
+                ("message", message.to_owned()),
+                ("plat", "1".to_owned()),
+                ("csrf", client.csrf()?),
+            ],
+        )
+        .await
 }
 
 pub async fn fetch(
