@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use crate::VideoSize;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -48,6 +50,8 @@ impl Default for PlayerStatus {
         }
     }
 }
+
+pub(super) type StatusSlot = Mutex<Arc<PlayerStatus>>;
 
 #[derive(Clone, Debug)]
 pub struct VideoFrame {

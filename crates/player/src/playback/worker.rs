@@ -12,8 +12,8 @@ use crate::{
 
 use super::{
     handle::{Command, RenderBackend},
-    status::{PlaybackPhase, PlayerStatus, VideoFrame},
-    sync::lock,
+    status::{PlaybackPhase, StatusSlot, VideoFrame},
+    sync::{lock, mutate_status},
 };
 
 const EVENT_NONE: c_int = 0;
@@ -28,17 +28,23 @@ const STATUS_INTERVAL: Duration = Duration::from_millis(100);
 const LOADING_WAIT: Duration = Duration::from_millis(10);
 const IDLE_WAIT: Duration = Duration::from_millis(100);
 
+// Readback and upload cost scales with output pixels, so cap 4K sources
+// before they reach the renderer.
+const MAX_OUTPUT_EDGE: u32 = 2560;
+
 pub(super) fn run_worker(
     receiver: mpsc::Receiver<Command>,
     backend: RenderBackend,
     wake: Arc<RenderWake>,
     frame_slot: Arc<Mutex<Option<VideoFrame>>>,
-    status: Arc<Mutex<PlayerStatus>>,
+    status: Arc<StatusSlot>,
 ) {
     let mpv = match Mpv::new() {
         Ok(mpv) => mpv,
         Err(error) => {
-            lock(&status).error = Some(error.to_string());
+            mutate_status(&status, |status| {
+                status.error = Some(error.to_string());
+            });
             return;
         }
     };
@@ -49,7 +55,9 @@ pub(super) fn run_worker(
     let mut render = match render {
         Ok(render) => render,
         Err(error) => {
-            lock(&status).error = Some(error.to_string());
+            mutate_status(&status, |status| {
+                status.error = Some(error.to_string());
+            });
             return;
         }
     };
@@ -83,7 +91,9 @@ pub(super) fn run_worker(
                     if let Some(audio) = state.pending_audio.take()
                         && let Err(error) = mpv.command(&["audio-add", audio.as_str(), "select"])
                     {
-                        lock(&status).error = Some(error.to_string());
+                        mutate_status(&status, |status| {
+                            status.error = Some(error.to_string());
+                        });
                     }
                     state.needs_redraw = true;
                 }
@@ -91,7 +101,9 @@ pub(super) fn run_worker(
                     state.loading = false;
                     if event.error < 0 {
                         state.pending_audio.take();
-                        lock(&status).error = Some(MpvError::from_code(event.error).to_string());
+                        mutate_status(&status, |status| {
+                            status.error = Some(MpvError::from_code(event.error).to_string());
+                        });
                     }
                 }
                 _ => {}
@@ -142,28 +154,28 @@ impl State {
         command: Command,
         mpv: &Mpv,
         frame_slot: &Mutex<Option<VideoFrame>>,
-        status: &Mutex<PlayerStatus>,
+        status: &StatusSlot,
     ) -> ControlFlow<()> {
         match command {
             Command::Load { video, audio } => {
                 self.pending_audio = audio;
                 self.loading = true;
                 self.has_frame = false;
-                {
-                    let mut status = lock(status);
+                mutate_status(status, |status| {
                     status.phase = PlaybackPhase::Loading;
                     status.time_pos = 0.0;
                     status.duration = 0.0;
                     status.buffered.clear();
                     status.error = None;
-                }
+                });
                 lock(frame_slot).take();
 
                 if let Err(error) = mpv.command(&["loadfile", video.as_str(), "replace"]) {
                     self.loading = false;
-                    let mut status = lock(status);
-                    status.phase = PlaybackPhase::Idle;
-                    status.error = Some(error.to_string());
+                    mutate_status(status, |status| {
+                        status.phase = PlaybackPhase::Idle;
+                        status.error = Some(error.to_string());
+                    });
                     return ControlFlow::Continue(());
                 }
                 let _ = mpv.set_property_flag("pause", false);
@@ -172,29 +184,37 @@ impl State {
             Command::TogglePause => {
                 let paused = mpv.get_property_flag("pause").unwrap_or(false);
                 if let Err(error) = mpv.set_property_flag("pause", !paused) {
-                    lock(status).error = Some(error.to_string());
+                    mutate_status(status, |status| {
+                        status.error = Some(error.to_string());
+                    });
                 } else {
-                    lock(status).paused = !paused;
+                    mutate_status(status, |status| status.paused = !paused);
                 }
             }
             Command::Seek(seconds) => {
                 let target = format!("{seconds:.3}");
                 if let Err(error) = mpv.command(&["seek", &target, "absolute+exact"]) {
-                    lock(status).error = Some(error.to_string());
+                    mutate_status(status, |status| {
+                        status.error = Some(error.to_string());
+                    });
                 }
             }
             Command::SetVolume(volume) => {
                 if let Err(error) = mpv.set_property_double("volume", volume) {
-                    lock(status).error = Some(error.to_string());
+                    mutate_status(status, |status| {
+                        status.error = Some(error.to_string());
+                    });
                 } else {
-                    lock(status).volume = volume;
+                    mutate_status(status, |status| status.volume = volume);
                 }
             }
             Command::SetSpeed(speed) => {
                 if let Err(error) = mpv.set_property_double("speed", speed) {
-                    lock(status).error = Some(error.to_string());
+                    mutate_status(status, |status| {
+                        status.error = Some(error.to_string());
+                    });
                 } else {
-                    lock(status).speed = speed;
+                    mutate_status(status, |status| status.speed = speed);
                 }
             }
             Command::SetViewport(size) => {
@@ -251,6 +271,7 @@ fn target_dimensions(source: VideoSize, viewport: VideoSize) -> VideoSize {
 
     let scale = (viewport.width as f64 / source.width as f64)
         .min(viewport.height as f64 / source.height as f64)
+        .min(MAX_OUTPUT_EDGE as f64 / source.width.max(source.height) as f64)
         .min(1.0);
     VideoSize::new(
         ((source.width as f64 * scale).round() as u32).max(1),
@@ -258,8 +279,8 @@ fn target_dimensions(source: VideoSize, viewport: VideoSize) -> VideoSize {
     )
 }
 
-fn update_status(mpv: &Mpv, status: &Mutex<PlayerStatus>, loading: bool) {
-    let mut next = lock(status).clone();
+fn update_status(mpv: &Mpv, status: &StatusSlot, loading: bool) {
+    let mut next = (**lock(status)).clone();
     let idle = mpv.get_property_flag("idle-active").unwrap_or(false);
     let buffering = mpv.get_property_flag("paused-for-cache").unwrap_or(false);
     let ended = mpv.get_property_flag("eof-reached").unwrap_or(false);
@@ -286,8 +307,8 @@ fn update_status(mpv: &Mpv, status: &Mutex<PlayerStatus>, loading: bool) {
     next.video_size = mpv.video_size();
 
     let mut current = lock(status);
-    if *current != next {
-        *current = next;
+    if **current != next {
+        *current = Arc::new(next);
     }
 }
 
@@ -301,6 +322,9 @@ mod tests {
             (size(1920, 1080), size(1280, 720), size(1280, 720)),
             (size(1920, 1080), size(1000, 1000), size(1000, 563)),
             (size(1280, 720), size(1920, 1080), size(1280, 720)),
+            (size(3840, 2160), size(3840, 2160), size(2560, 1440)),
+            (size(2160, 3840), size(2160, 3840), size(1440, 2560)),
+            (size(3840, 2160), size(1920, 1080), size(1920, 1080)),
             (size(1920, 1080), size(0, 0), size(0, 0)),
             (size(0, 0), size(1280, 720), size(0, 0)),
         ];

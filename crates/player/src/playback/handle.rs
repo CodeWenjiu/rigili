@@ -9,8 +9,8 @@ use std::{
 use crate::{VideoSize, mpv::RenderWake};
 
 use super::{
-    status::{PlayerStatus, VideoFrame},
-    sync::lock,
+    status::{PlayerStatus, StatusSlot, VideoFrame},
+    sync::{lock, mutate_status},
     worker::run_worker,
 };
 
@@ -22,7 +22,7 @@ pub struct Player {
 struct PlayerInner {
     sender: Mutex<Sender<Command>>,
     frame: Arc<Mutex<Option<VideoFrame>>>,
-    status: Arc<Mutex<PlayerStatus>>,
+    status: Arc<StatusSlot>,
     viewport: Mutex<VideoSize>,
     wake: Arc<RenderWake>,
     worker: Mutex<Option<JoinHandle<()>>>,
@@ -60,7 +60,7 @@ impl Player {
     fn spawn(backend: RenderBackend) -> Self {
         let (sender, receiver) = mpsc::channel();
         let frame = Arc::new(Mutex::new(None));
-        let status = Arc::new(Mutex::new(PlayerStatus::default()));
+        let status = Arc::new(StatusSlot::new(Arc::new(PlayerStatus::default())));
         let wake = Arc::new(RenderWake::default());
 
         let worker_frame = Arc::clone(&frame);
@@ -73,7 +73,9 @@ impl Player {
         let worker = match worker {
             Ok(worker) => Some(worker),
             Err(error) => {
-                lock(&status).error = Some(format!("无法启动播放器线程：{error}"));
+                mutate_status(&status, |status| {
+                    status.error = Some(format!("无法启动播放器线程：{error}"));
+                });
                 None
             }
         };
@@ -132,13 +134,15 @@ impl Player {
         lock(&self.inner.frame).take()
     }
 
-    pub fn status(&self) -> PlayerStatus {
+    pub fn status(&self) -> Arc<PlayerStatus> {
         lock(&self.inner.status).clone()
     }
 
     fn send(&self, command: Command) {
         if let Err(error) = lock(&self.inner.sender).send(command) {
-            lock(&self.inner.status).error = Some(format!("播放器线程不可用：{error}"));
+            mutate_status(&self.inner.status, |status| {
+                status.error = Some(format!("播放器线程不可用：{error}"));
+            });
         }
         self.inner.wake.signal();
     }

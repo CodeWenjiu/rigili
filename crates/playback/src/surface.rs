@@ -16,6 +16,8 @@ use rigili_core::{cursor, format_clock};
 const PREVIEW_WIDTH: f32 = 200.;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
+const PAUSED_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const CONTROLS_IDLE: Duration = Duration::from_secs(3);
 const SPEED_NOTICE: Duration = Duration::from_millis(1200);
 const SPEEDS: [f64; 10] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0];
@@ -28,6 +30,7 @@ pub(super) struct PlayerView {
     frame: Option<Arc<RenderImage>>,
     retired_frames: Vec<Arc<RenderImage>>,
     status: PlayerStatus,
+    status_source: Arc<PlayerStatus>,
     seeking: Option<f64>,
     volume_dragging: bool,
     progress_max: f64,
@@ -79,25 +82,33 @@ impl PlayerView {
         window.defer(cx, move |window, cx| deferred_focus.focus(window, cx));
 
         let poll_task = cx.spawn_in(window, async move |weak, async_cx| {
+            let mut interval = POLL_INTERVAL;
             loop {
-                async_cx.background_executor().timer(POLL_INTERVAL).await;
-                if weak
-                    .update_in(async_cx, |this, window, cx| this.pump(window, cx))
-                    .is_err()
-                {
-                    break;
+                async_cx.background_executor().timer(interval).await;
+                let next = weak.update_in(async_cx, |this, window, cx| {
+                    this.pump(window, cx);
+                    this.poll_interval()
+                });
+                match next {
+                    Ok(next) => interval = next,
+                    Err(_) => break,
                 }
             }
         });
 
+        let player = Player::new();
+        let status_source = player.status();
+        let status = (*status_source).clone();
+
         Self {
-            player: Player::new(),
+            player,
             progress,
             volume,
             volume_popup,
             frame: None,
             retired_frames: Vec::new(),
-            status: PlayerStatus::default(),
+            status,
+            status_source,
             seeking: None,
             volume_dragging: false,
             progress_max: 0.0,
@@ -426,6 +437,10 @@ impl PlayerView {
         }
     }
 
+    fn poll_interval(&self) -> Duration {
+        poll_interval(self.status.phase, self.status.paused)
+    }
+
     fn pump(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         for frame in self.retired_frames.drain(..) {
             let _ = window.drop_image(frame);
@@ -449,21 +464,23 @@ impl PlayerView {
         }
 
         let status = self.player.status();
-        if status != self.status {
-            if status.duration > 0.0 && (status.duration - self.progress_max).abs() > 0.5 {
-                self.rebuild_progress(status.duration, status.time_pos, window, cx);
+        if !Arc::ptr_eq(&status, &self.status_source) {
+            let next = (*status).clone();
+            if next.duration > 0.0 && (next.duration - self.progress_max).abs() > 0.5 {
+                self.rebuild_progress(next.duration, next.time_pos, window, cx);
             }
             if self.seeking.is_none() {
                 self.progress.update(cx, |state, cx| {
-                    state.set_value(status.time_pos as f32, window, cx);
+                    state.set_value(next.time_pos as f32, window, cx);
                 });
             }
             if !self.volume_dragging {
                 self.volume.update(cx, |state, cx| {
-                    state.set_value(status.volume as f32, window, cx);
+                    state.set_value(next.volume as f32, window, cx);
                 });
             }
-            self.status = status;
+            self.status = next;
+            self.status_source = status;
             changed = true;
         }
 
@@ -670,6 +687,14 @@ fn notice_expired(deadline: Option<Instant>, now: Instant) -> bool {
     deadline.is_some_and(|deadline| deadline <= now)
 }
 
+fn poll_interval(phase: PlaybackPhase, paused: bool) -> Duration {
+    match phase {
+        PlaybackPhase::Idle | PlaybackPhase::Ended => IDLE_POLL_INTERVAL,
+        _ if paused => PAUSED_POLL_INTERVAL,
+        _ => POLL_INTERVAL,
+    }
+}
+
 fn to_render_image(frame: VideoFrame) -> Option<Arc<RenderImage>> {
     let buffer = RgbaImage::from_raw(frame.width, frame.height, frame.data)?;
     Some(Arc::new(RenderImage::new([image::Frame::new(buffer)])))
@@ -687,7 +712,11 @@ fn next_speed(current: f64) -> f64 {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{next_speed, notice_expired};
+    use super::{
+        IDLE_POLL_INTERVAL, PAUSED_POLL_INTERVAL, POLL_INTERVAL, next_speed, notice_expired,
+        poll_interval,
+    };
+    use rigili_player::PlaybackPhase;
 
     #[test]
     fn cycles_playback_speeds() {
@@ -705,5 +734,23 @@ mod tests {
         assert!(!notice_expired(None, now));
         assert!(!notice_expired(Some(now + Duration::from_secs(1)), now));
         assert!(notice_expired(Some(now), now));
+    }
+
+    #[test]
+    fn polls_slowly_when_idle_or_paused() {
+        assert_eq!(poll_interval(PlaybackPhase::Playing, false), POLL_INTERVAL);
+        assert_eq!(
+            poll_interval(PlaybackPhase::Buffering, false),
+            POLL_INTERVAL
+        );
+        assert_eq!(
+            poll_interval(PlaybackPhase::Playing, true),
+            PAUSED_POLL_INTERVAL
+        );
+        assert_eq!(poll_interval(PlaybackPhase::Idle, true), IDLE_POLL_INTERVAL);
+        assert_eq!(
+            poll_interval(PlaybackPhase::Ended, false),
+            IDLE_POLL_INTERVAL
+        );
     }
 }
