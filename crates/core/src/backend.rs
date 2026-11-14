@@ -2,12 +2,12 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use gpui_kit::*;
 use rigili_bilibili::{
-    ApiError, ArticleSearch, BangumiFollows, Client, CommentPage, CreatedFolder, Dynamics,
-    FavFolders, FavItems, HistoryPage, HotWords, LiveRoom, LiveSearch, MediaSearch, MessageCursor,
-    MessageFeed, MessageSessions, MessageUserInfo, Nav, NavStat, PgcIndex, PgcSeason, PlayUrl,
-    Popular, QrCode, QrPoll, Recommend, SearchAll, SearchSuggestions, SessionError,
-    SpaceCollections, SpaceProfile, SpaceRelationStatus, SpaceVideos, UserSearch, VideoInfo,
-    VideoSearch, WatchLater, api,
+    ApiError, ArchiveRelation, ArticleSearch, BangumiFollows, Chapter, Client, CommentPage,
+    CreatedFolder, Dynamics, FavFolders, FavItems, HistoryPage, HotWords, LiveRoom, LiveSearch,
+    MediaSearch, MessageCursor, MessageFeed, MessageSessions, MessageUserInfo, Nav, NavStat,
+    PgcIndex, PgcSeason, PlayUrl, Popular, QrCode, QrPoll, Recommend, SearchAll, SearchSuggestions,
+    SessionError, SpaceCollections, SpaceProfile, SpaceRelationStatus, SpaceVideos, UserSearch,
+    VideoDetail, VideoInfo, VideoSearch, VideoShot, WatchLater, api,
     api::comment::CommentSort,
     api::message::MessageFeedKind,
     api::search::{SearchOrder, SearchType},
@@ -156,6 +156,10 @@ impl Backend {
         api::mine::fav_folders(&self.client, mid).await
     }
 
+    pub async fn fav_folders_with_state(&self, mid: u64, rid: u64) -> Result<FavFolders, ApiError> {
+        api::mine::fav_folders_with_state(&self.client, mid, rid).await
+    }
+
     pub async fn collected_folders(&self, mid: u64) -> Result<FavFolders, ApiError> {
         api::mine::collected_folders(&self.client, mid).await
     }
@@ -187,6 +191,10 @@ impl Backend {
 
     pub async fn modify_relation(&self, mid: u64, follow: bool) -> Result<(), ApiError> {
         api::space::modify_relation(&self.client, mid, follow).await
+    }
+
+    pub async fn relation_status(&self, mid: u64) -> Result<SpaceRelationStatus, ApiError> {
+        api::space::relation_status(&self.client, mid).await
     }
 
     pub async fn relation_statuses(
@@ -278,6 +286,39 @@ impl Backend {
 
     pub async fn view(&self, bvid: &str) -> Result<VideoInfo, ApiError> {
         api::view::fetch(&self.client, bvid).await
+    }
+
+    pub async fn videoshot(&self, bvid: &str, cid: u64) -> Result<VideoShot, ApiError> {
+        api::view::videoshot(&self.client, bvid, cid).await
+    }
+
+    pub async fn video_detail(&self, bvid: &str) -> Result<VideoDetail, ApiError> {
+        api::view::detail(&self.client, bvid).await
+    }
+
+    pub async fn archive_relation(&self, aid: u64) -> Result<ArchiveRelation, ApiError> {
+        api::interact::relation(&self.client, aid).await
+    }
+
+    pub async fn set_like(&self, aid: u64, like: bool) -> Result<(), ApiError> {
+        api::interact::set_like(&self.client, aid, like).await
+    }
+
+    pub async fn add_coin(&self, aid: u64) -> Result<(), ApiError> {
+        api::interact::add_coin(&self.client, aid).await
+    }
+
+    pub async fn set_favorite(
+        &self,
+        aid: u64,
+        folder_id: u64,
+        favorite: bool,
+    ) -> Result<(), ApiError> {
+        api::interact::set_favorite(&self.client, aid, folder_id, favorite).await
+    }
+
+    pub async fn chapters(&self, bvid: &str, cid: u64) -> Result<Vec<Chapter>, ApiError> {
+        api::view::chapters(&self.client, bvid, cid).await
     }
 
     pub async fn playurl(&self, bvid: &str, cid: u64) -> Result<PlayUrl, ApiError> {

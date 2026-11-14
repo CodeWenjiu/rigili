@@ -30,6 +30,8 @@ pub struct FavFolder {
     #[serde(default)]
     pub state: u64,
     #[serde(default)]
+    pub fav_state: u64,
+    #[serde(default)]
     pub upper: FavUpper,
 }
 
@@ -44,6 +46,10 @@ impl FavFolder {
 
     pub fn is_valid(&self) -> bool {
         self.state == 0
+    }
+
+    pub fn is_favorited(&self) -> bool {
+        self.fav_state == 1
     }
 
     pub fn owner(&self) -> &str {
@@ -66,7 +72,7 @@ mod tests {
             r#"{"count":2,"has_more":false,"list":[
                 {"id":1,"title":"默认收藏夹","media_count":42,"attr":0,"state":0},
                 {"id":2,"title":"私密收藏夹","media_count":7,"attr":23,"state":0,
-                 "cover":"https://example.com/cover.jpg","ctime":1762646400,
+                 "fav_state":1,"cover":"https://example.com/cover.jpg","ctime":1762646400,
                  "upper":{"mid":0,"name":"","face":""}}
             ]}"#,
         )
@@ -80,6 +86,8 @@ mod tests {
         assert!(!folders[0].is_private());
         assert!(!folders[1].is_default());
         assert!(folders[1].is_private());
+        assert!(!folders[0].is_favorited());
+        assert!(folders[1].is_favorited());
         assert_eq!(folders[1].cover, "https://example.com/cover.jpg");
         assert_eq!(folders[1].ctime, 1_762_646_400);
 

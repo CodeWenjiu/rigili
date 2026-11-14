@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -22,7 +24,7 @@ pub struct PopularVideo {
     #[serde(default)]
     pub stat: Stat,
 }
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct VideoInfo {
     pub bvid: String,
     pub aid: u64,
@@ -37,7 +39,33 @@ pub struct VideoInfo {
     #[serde(default)]
     pub stat: Stat,
     #[serde(default)]
+    pub rights: VideoRights,
+    #[serde(default)]
     pub pages: Vec<VideoPage>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct VideoRights {
+    #[serde(default)]
+    pub no_reprint: u32,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct VideoDetail {
+    #[serde(default, rename = "View")]
+    pub view: VideoInfo,
+    #[serde(default, rename = "Card")]
+    pub card: VideoCard,
+    #[serde(default, rename = "Related")]
+    pub related: Vec<RecommendVideo>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct VideoCard {
+    #[serde(default)]
+    pub follower: u64,
+    #[serde(default)]
+    pub like_num: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -47,6 +75,113 @@ pub struct VideoPage {
     #[serde(default)]
     pub part: String,
     pub duration: u64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct PlayerInfo {
+    #[serde(default)]
+    pub view_points: Vec<ViewPoint>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct ViewPoint {
+    #[serde(default, rename = "type")]
+    pub kind: i32,
+    #[serde(default)]
+    pub from: Option<f64>,
+    #[serde(default)]
+    pub to: Option<f64>,
+    #[serde(default)]
+    pub content: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Chapter {
+    pub start: f64,
+    pub end: f64,
+    pub title: String,
+}
+
+impl PlayerInfo {
+    pub fn chapters(&self) -> Vec<Chapter> {
+        let mut points = self
+            .view_points
+            .iter()
+            .filter(|point| point.kind == 2)
+            .collect::<Vec<_>>();
+        points.sort_by(|a, b| a.from.unwrap_or(0.0).total_cmp(&b.from.unwrap_or(0.0)));
+        points
+            .into_iter()
+            .filter_map(|point| {
+                let start = point.from.unwrap_or(0.0);
+                let end = point.to.unwrap_or(f64::INFINITY);
+                (end > start).then(|| Chapter {
+                    start,
+                    end,
+                    title: point.content.clone(),
+                })
+            })
+            .collect()
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct VideoShot {
+    #[serde(default, rename = "img_x_len")]
+    pub columns: u32,
+    #[serde(default, rename = "img_y_len")]
+    pub rows: u32,
+    #[serde(default, rename = "img_x_size")]
+    pub frame_width: u32,
+    #[serde(default, rename = "img_y_size")]
+    pub frame_height: u32,
+    #[serde(default)]
+    pub image: Vec<String>,
+    #[serde(default)]
+    pub index: Vec<f64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VideoShotFrame<'a> {
+    pub image: &'a str,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub sprite_width: u32,
+    pub sprite_height: u32,
+}
+
+impl VideoShot {
+    pub fn frame_at(&self, time: f64) -> Option<VideoShotFrame<'_>> {
+        let columns = self.columns as usize;
+        let per_sheet = columns.checked_mul(self.rows as usize)?;
+        let capacity = self.image.len().checked_mul(per_sheet)?;
+        if per_sheet == 0 || capacity == 0 || self.index.is_empty() {
+            return None;
+        }
+        let frame = match self
+            .index
+            .binary_search_by(|value| value.partial_cmp(&time).unwrap_or(Ordering::Equal))
+        {
+            Ok(index) => index,
+            Err(0) => 0,
+            Err(index) => index - 1,
+        }
+        .min(capacity - 1);
+        let image = self.image.get(frame / per_sheet)?;
+        let slot = frame % per_sheet;
+
+        Some(VideoShotFrame {
+            image,
+            x: (slot % columns) as u32 * self.frame_width,
+            y: (slot / columns) as u32 * self.frame_height,
+            width: self.frame_width,
+            height: self.frame_height,
+            sprite_width: self.columns * self.frame_width,
+            sprite_height: self.rows * self.frame_height,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -181,6 +316,26 @@ pub struct Stat {
     pub danmaku: u64,
     #[serde(default)]
     pub like: u64,
+    #[serde(default)]
+    pub coin: u64,
+    #[serde(default)]
+    pub favorite: u64,
+    #[serde(default)]
+    pub share: u64,
+    #[serde(default)]
+    pub reply: u64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct ArchiveRelation {
+    #[serde(default)]
+    pub attention: bool,
+    #[serde(default)]
+    pub favorite: bool,
+    #[serde(default)]
+    pub like: bool,
+    #[serde(default)]
+    pub coin: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -218,7 +373,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{Dash, DashAudio, DashVideo};
+    use super::{
+        ArchiveRelation, Dash, DashAudio, DashVideo, PlayerInfo, RecommendVideo, VideoDetail,
+        VideoShot,
+    };
 
     fn video(codecid: u32, bandwidth: u64) -> DashVideo {
         DashVideo {
@@ -304,5 +462,134 @@ mod tests {
             codecs: String::new(),
             codecid,
         }
+    }
+
+    #[test]
+    fn parses_video_detail_with_owner_card_and_related() {
+        let detail: VideoDetail = serde_json::from_str(
+            r#"{
+                "View":{
+                    "bvid":"BV1xx","aid":1,"cid":2,"pic":"//i0.hdslb.com/a.jpg",
+                    "title":"t","duration":10,"pubdate":0,
+                    "owner":{"mid":3,"name":"up","face":""},
+                    "stat":{"view":10,"danmaku":1,"like":2,"coin":3,"favorite":4,"share":5,"reply":1931},
+                    "rights":{"no_reprint":1}
+                },
+                "Card":{"follower":100,"like_num":200},
+                "Related":[{
+                    "aid":4,"bvid":"BV1yy","cid":5,"pic":"//i0.hdslb.com/b.jpg",
+                    "title":"r","duration":6,"pubdate":0,
+                    "owner":{"mid":6,"name":"up2","face":""},
+                    "stat":{"view":7,"danmaku":8}
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!((detail.view.aid, detail.view.cid), (1, 2));
+        assert_eq!(detail.view.stat.favorite, 4);
+        assert_eq!(detail.view.stat.reply, 1931);
+        assert_eq!(detail.view.rights.no_reprint, 1);
+        assert_eq!((detail.card.follower, detail.card.like_num), (100, 200));
+        assert_eq!(detail.related.len(), 1);
+        assert_eq!(detail.related[0].cid, 5);
+    }
+
+    #[test]
+    fn parses_related_videos() {
+        let related: Vec<RecommendVideo> = serde_json::from_str(
+            r#"[{
+                "aid":1,"bvid":"BV1xx","cid":2,"pic":"//i0.hdslb.com/a.jpg",
+                "title":"related","duration":32,"pubdate":0,
+                "owner":{"mid":3,"name":"up","face":""},
+                "stat":{"view":100,"danmaku":2,"like":1}
+            }]"#,
+        )
+        .unwrap();
+
+        assert_eq!(related.len(), 1);
+        assert_eq!(related[0].cid, 2);
+        assert_eq!(related[0].owner.name, "up");
+        assert_eq!(related[0].stat.view, 100);
+    }
+
+    #[test]
+    fn parses_archive_relation() {
+        let relation: ArchiveRelation =
+            serde_json::from_str(r#"{"attention":false,"favorite":true,"like":true,"coin":2}"#)
+                .unwrap();
+
+        assert!(relation.like);
+        assert!(relation.favorite);
+        assert!(!relation.attention);
+        assert_eq!(relation.coin, 2);
+    }
+
+    #[test]
+    fn extracts_chapters_from_view_points() {
+        let info: PlayerInfo = serde_json::from_str(
+            r#"{"view_points":[
+                {"type":1,"from":10,"to":20,"content":"看点"},
+                {"type":2,"from":null,"to":30,"content":"开场"},
+                {"type":2,"from":30,"to":60,"content":"正片"},
+                {"type":2,"from":60,"to":null,"content":"尾声"},
+                {"type":2,"from":60,"to":60,"content":"空"}
+            ]}"#,
+        )
+        .unwrap();
+
+        let chapters = info.chapters();
+        assert_eq!(chapters.len(), 3);
+        assert_eq!(chapters[0].title, "开场");
+        assert_eq!((chapters[0].start, chapters[0].end), (0., 30.));
+        assert_eq!((chapters[1].start, chapters[1].end), (30., 60.));
+        assert_eq!((chapters[2].start, chapters[2].end), (60., f64::INFINITY));
+    }
+
+    #[test]
+    fn maps_time_to_storyboard_frame() {
+        let shot = VideoShot {
+            columns: 2,
+            rows: 2,
+            frame_width: 160,
+            frame_height: 90,
+            image: vec!["//i0.hdslb.com/a.jpg".into(), "//i0.hdslb.com/b.jpg".into()],
+            index: vec![0., 10., 20., 30., 40.],
+        };
+
+        let frame = shot.frame_at(-5.).unwrap();
+        assert_eq!(frame.image, "//i0.hdslb.com/a.jpg");
+        assert_eq!((frame.x, frame.y), (0, 0));
+
+        let frame = shot.frame_at(25.).unwrap();
+        assert_eq!((frame.x, frame.y), (0, 90));
+
+        let frame = shot.frame_at(45.).unwrap();
+        assert_eq!(frame.image, "//i0.hdslb.com/b.jpg");
+        assert_eq!((frame.x, frame.y), (0, 0));
+        assert_eq!((frame.sprite_width, frame.sprite_height), (320, 180));
+
+        assert!(VideoShot::default().frame_at(0.).is_none());
+    }
+
+    #[test]
+    fn parses_storyboard_payload() {
+        let shot: VideoShot = serde_json::from_str(
+            r#"{
+                "pvdata": "//i0.hdslb.com/bfs/videoshot/1.bin",
+                "img_x_len": 10,
+                "img_y_len": 10,
+                "img_x_size": 160,
+                "img_y_size": 90,
+                "image": ["//i0.hdslb.com/bfs/videoshot/1.jpg"],
+                "index": [0, 0, 5, 11]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!((shot.columns, shot.rows), (10, 10));
+        assert_eq!((shot.frame_width, shot.frame_height), (160, 90));
+        assert_eq!(shot.index, [0., 0., 5., 11.]);
+        assert_eq!(shot.frame_at(6.).unwrap().x, 160 * 2);
     }
 }

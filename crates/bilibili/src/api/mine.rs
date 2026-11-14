@@ -5,6 +5,8 @@ use crate::{
 
 const NAV_STAT_URL: &str = "https://api.bilibili.com/x/web-interface/nav/stat";
 const FAV_FOLDERS_URL: &str = "https://api.bilibili.com/x/v3/fav/folder/created/list";
+const FAV_FOLDERS_WITH_STATE_URL: &str =
+    "https://api.bilibili.com/x/v3/fav/folder/created/list-all";
 const COLLECTED_FOLDERS_URL: &str = "https://api.bilibili.com/x/v3/fav/folder/collected/list";
 const FAV_ITEMS_URL: &str = "https://api.bilibili.com/x/v3/fav/resource/list";
 const FOLDER_ADD_URL: &str = "https://api.bilibili.com/x/v3/fav/folder/add";
@@ -30,6 +32,19 @@ pub async fn fav_folders(client: &Client, mid: u64) -> Result<FavFolders, ApiErr
                 ("pn", 1.to_string()),
                 ("ps", FOLDER_LIMIT.to_string()),
             ],
+        )
+        .await
+}
+
+pub async fn fav_folders_with_state(
+    client: &Client,
+    mid: u64,
+    rid: u64,
+) -> Result<FavFolders, ApiError> {
+    client
+        .get_json(
+            FAV_FOLDERS_WITH_STATE_URL,
+            &[("up_mid", mid.to_string()), ("rid", rid.to_string())],
         )
         .await
 }
