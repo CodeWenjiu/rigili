@@ -24,16 +24,20 @@ use crate::platform::assets::AppAssets;
 
 fn main() {
     platform::gpu::prefer_vulkan();
-    gpui_kit::application().with_assets(AppAssets).run(|cx| {
-        gpui_kit::init(cx);
-        cx.set_global(rigili_core::login::LoginState::default());
-        platform::init(cx);
-        rigili_core::backend::init(cx);
-        watch_later::init(cx);
-        preview::init(cx);
+    let platform = gpui_kit::platform::current_platform(false);
+    gpui_kit::Application::with_platform(platform.clone())
+        .with_assets(AppAssets)
+        .run(move |cx| {
+            gpui_kit::init(cx);
+            rigili_core::cursor::init(cx, platform.clone());
+            cx.set_global(rigili_core::login::LoginState::default());
+            platform::init(cx);
+            rigili_core::backend::init(cx);
+            watch_later::init(cx);
+            preview::init(cx);
 
-        if let Err(error) = shell::open_main(cx) {
-            eprintln!("failed to open window: {error}");
-        }
-    });
+            if let Err(error) = shell::open_main(cx) {
+                eprintln!("failed to open window: {error}");
+            }
+        });
 }

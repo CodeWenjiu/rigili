@@ -8,12 +8,8 @@ pub(super) struct Playback {
 }
 
 impl Playback {
-    pub(super) fn open(
-        request: PlaybackRequest,
-        main_window: AnyWindowHandle,
-        cx: &mut App,
-    ) -> Result<Self> {
-        let (handle, view) = rigili_playback::open(request, Some(main_window), cx)?;
+    pub(super) fn open(request: PlaybackRequest, cx: &mut App) -> Result<Self> {
+        let (handle, view) = rigili_playback::open(request, cx)?;
         Ok(Self { handle, view })
     }
 

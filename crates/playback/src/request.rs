@@ -1,4 +1,4 @@
-use rigili_bilibili::{ApiError, Dash, VideoInfo};
+use rigili_bilibili::{ApiError, Dash, RecommendVideo, VideoInfo};
 
 use rigili_core::backend::Backend;
 
@@ -32,6 +32,9 @@ impl PlaybackRequest {
 
 pub(super) struct Resolved {
     pub(super) info: VideoInfo,
+    pub(super) related: Vec<RecommendVideo>,
+    pub(super) followers: u64,
+    pub(super) owner_likes: u64,
     pub(super) cid: u64,
     pub(super) streams: Streams,
 }
@@ -46,10 +49,18 @@ pub(super) async fn resolve(
     bvid: String,
     cid: Option<u64>,
 ) -> Result<Resolved, ApiError> {
-    let info = backend.view(&bvid).await?;
+    let detail = backend.video_detail(&bvid).await?;
+    let info = detail.view;
     let cid = cid.unwrap_or(info.cid);
     let streams = resolve_streams(&backend, &bvid, cid).await?;
-    Ok(Resolved { info, cid, streams })
+    Ok(Resolved {
+        info,
+        related: detail.related,
+        followers: detail.card.follower,
+        owner_likes: detail.card.like_num,
+        cid,
+        streams,
+    })
 }
 
 pub(super) async fn resolve_streams(

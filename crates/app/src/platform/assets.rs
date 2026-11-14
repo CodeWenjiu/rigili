@@ -5,7 +5,24 @@ use gpui_kit::{AssetSource, Result, SharedString};
 
 icon_assets!(
     ExtraIcons,
-    [Clock, Flame, Mail, MessageCircle, House, Share, ListVideo]
+    [
+        Clock,
+        Coins,
+        Download,
+        Flame,
+        House,
+        ListFilter,
+        ListVideo,
+        Lock,
+        Mail,
+        MessageCircle,
+        MonitorPlay,
+        Radio,
+        Share,
+        Share2,
+        Tv,
+        Volume
+    ]
 );
 
 pub(crate) struct AppAssets;
@@ -40,5 +57,36 @@ mod tests {
         assert!(AppAssets.load("icons/share.svg").unwrap().is_some());
         assert!(AppAssets.load("icons/list-video.svg").unwrap().is_some());
         assert!(AppAssets.load("icons/zoom-in.svg").unwrap().is_none());
+    }
+
+    #[test]
+    fn serves_every_icon_the_app_draws() {
+        use gpui_kit::assets::IconName;
+
+        for icon in [
+            IconName::Ban,
+            IconName::Calendar,
+            IconName::Check,
+            IconName::ChevronDown,
+            IconName::ChevronUp,
+            IconName::CircleAlert,
+            IconName::Clock,
+            IconName::Coins,
+            IconName::Download,
+            IconName::ListFilter,
+            IconName::Lock,
+            IconName::MonitorPlay,
+            IconName::Radio,
+            IconName::RefreshCw,
+            IconName::Share2,
+            IconName::Tv,
+            IconName::Volume,
+        ] {
+            assert!(
+                AppAssets.load(&icon.path()).unwrap().is_some(),
+                "missing {}",
+                icon.path()
+            );
+        }
     }
 }

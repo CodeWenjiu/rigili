@@ -201,8 +201,8 @@ impl MainView {
     where
         T: EventEmitter<OpenVideo> + 'static,
     {
-        cx.subscribe_in(page, window, |this, _, event: &OpenVideo, window, cx| {
-            this.play(event.clone(), window, cx);
+        cx.subscribe_in(page, window, |this, _, event: &OpenVideo, _window, cx| {
+            this.play(event.clone(), cx);
         })
         .detach();
     }
@@ -211,8 +211,8 @@ impl MainView {
     where
         T: EventEmitter<OpenLive> + 'static,
     {
-        cx.subscribe_in(page, window, |this, _, event: &OpenLive, window, cx| {
-            this.play_live(event.clone(), window, cx);
+        cx.subscribe_in(page, window, |this, _, event: &OpenLive, _window, cx| {
+            this.play_live(event.clone(), cx);
         })
         .detach();
     }
@@ -605,24 +605,18 @@ impl MainView {
         }
     }
 
-    fn play(&mut self, video: OpenVideo, window: &mut Window, cx: &mut Context<Self>) {
+    fn play(&mut self, video: OpenVideo, cx: &mut Context<Self>) {
         self.open_playback(
             PlaybackRequest::video(video.title, video.bvid, video.cid),
-            window,
             cx,
         );
     }
 
-    fn play_live(&mut self, live: OpenLive, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_playback(PlaybackRequest::live(live.title, live.room_id), window, cx);
+    fn play_live(&mut self, live: OpenLive, cx: &mut Context<Self>) {
+        self.open_playback(PlaybackRequest::live(live.title, live.room_id), cx);
     }
 
-    fn open_playback(
-        &mut self,
-        request: PlaybackRequest,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn open_playback(&mut self, request: PlaybackRequest, cx: &mut Context<Self>) {
         if let Some(playback) = self.playback.as_ref() {
             if playback.load(request.clone(), cx).is_ok() {
                 return;
@@ -630,8 +624,7 @@ impl MainView {
             self.playback = None;
         }
 
-        let main_window = window.window_handle();
-        match Playback::open(request, main_window, cx) {
+        match Playback::open(request, cx) {
             Ok(playback) => self.playback = Some(playback),
             Err(error) => eprintln!("failed to open player window: {error}"),
         }

@@ -9,6 +9,7 @@ use super::info::{InfoEvent, InfoPanel};
 use super::request::{PlaybackRequest, PlaybackSource, resolve, resolve_streams};
 use super::surface::PlayerView;
 use rigili_core::api_error_message;
+use rigili_core::api_task_error_message;
 use rigili_core::backend::{self, Backend};
 use rigili_core::runtime::{ApiTaskError, spawn_api};
 
@@ -18,7 +19,6 @@ pub struct PlayerWindow {
     player: Entity<PlayerView>,
     info: Entity<InfoPanel>,
     title: SharedString,
-    main_window: Option<AnyWindowHandle>,
     backend: Option<Backend>,
     request: Option<PlaybackRequest>,
     loading: bool,
@@ -30,17 +30,19 @@ pub struct PlayerWindow {
 }
 
 impl PlayerWindow {
-    fn new(
-        window: &mut Window,
-        cx: &mut Context<Self>,
-        request: PlaybackRequest,
-        main_window: Option<AnyWindowHandle>,
-    ) -> Self {
+    fn new(window: &mut Window, cx: &mut Context<Self>, request: PlaybackRequest) -> Self {
         let player = cx.new(|cx| PlayerView::new(window, cx));
         let info = cx.new(|_| InfoPanel::new());
-        let info_sub = cx.subscribe(&info, |this, _, event: &InfoEvent, cx| {
-            let InfoEvent::SelectPage(cid) = event;
-            this.select_page(*cid, cx);
+        let info_sub = cx.subscribe(&info, |this, _, event: &InfoEvent, cx| match event {
+            InfoEvent::SelectPage(cid) => this.select_page(*cid, cx),
+            InfoEvent::PlayRelated { bvid, cid, title } => this.start(
+                PlaybackRequest::video(title.clone(), bvid.clone(), Some(*cid)),
+                cx,
+            ),
+            InfoEvent::ToggleFollow { mid, follow } => this.set_follow(*mid, *follow, cx),
+            InfoEvent::ToggleLike { aid, like } => this.set_like(*aid, *like, cx),
+            InfoEvent::AddCoin { aid } => this.add_coin(*aid, cx),
+            InfoEvent::Reload => this.refresh_info(cx),
         });
         let (backend, error) = match backend::get(cx) {
             Ok(backend) => (Some(backend), None),
@@ -50,7 +52,6 @@ impl PlayerWindow {
             player,
             info,
             title: request.title.clone().into(),
-            main_window,
             backend,
             request: None,
             loading: false,
@@ -70,6 +71,11 @@ impl PlayerWindow {
         self.start(request, cx);
     }
 
+    pub fn toggle_info(&mut self, cx: &mut Context<Self>) {
+        self.show_info = !self.show_info;
+        cx.notify();
+    }
+
     fn start(&mut self, request: PlaybackRequest, cx: &mut Context<Self>) {
         let Some(backend) = self.backend.clone() else {
             return;
@@ -80,6 +86,9 @@ impl PlayerWindow {
         let source = request.source.clone();
         self.is_live = matches!(source, PlaybackSource::Live { .. });
         self.title = request.title.clone().into();
+        let title = self.title.clone();
+        self.player
+            .update(cx, |player, cx| player.set_title(title, cx));
         self.request = Some(request);
         self.loading = true;
         self.error = None;
@@ -99,7 +108,16 @@ impl PlayerWindow {
                     match result {
                         Ok(resolved) => {
                             let cid = resolved.cid;
-                            this.title = resolved.info.title.clone().into();
+                            let bvid = resolved.info.bvid.clone();
+                            let aid = resolved.info.aid;
+                            let owner_mid = resolved.info.owner.mid;
+                            let followers = resolved.followers;
+                            let owner_likes = resolved.owner_likes;
+                            let related = resolved.related;
+                            let title: SharedString = resolved.info.title.clone().into();
+                            this.title = title.clone();
+                            this.player
+                                .update(cx, |player, cx| player.set_title(title, cx));
                             if let Some(PlaybackRequest {
                                 source:
                                     PlaybackSource::Video {
@@ -110,8 +128,11 @@ impl PlayerWindow {
                             {
                                 *request_cid = Some(cid);
                             }
-                            this.info
-                                .update(cx, |info, cx| info.set(resolved.info, cid, cx));
+                            this.info.update(cx, |info, cx| {
+                                info.set(resolved.info, cid, cx);
+                                info.set_owner_counts(followers, owner_likes, cx);
+                                info.set_related(related, cx);
+                            });
                             this.player.update(cx, |player, cx| {
                                 player.load_urls(
                                     resolved.streams.video,
@@ -120,6 +141,11 @@ impl PlayerWindow {
                                     cx,
                                 )
                             });
+                            this.load_previews(bvid.clone(), cid, cx);
+                            this.load_chapters(bvid.clone(), cid, cx);
+                            this.load_follow_status(owner_mid, cx);
+                            this.load_interactions(aid, cx);
+                            this.load_watch_later(aid, cx);
                         }
                         Err(error) => {
                             this.info.update(cx, |info, cx| info.set_busy(false, cx));
@@ -185,6 +211,8 @@ impl PlayerWindow {
         self.info.update(cx, |info, cx| info.set_busy(true, cx));
         cx.notify();
 
+        let preview_bvid = bvid.clone();
+        let chapters_bvid = bvid.clone();
         spawn_api(
             cx,
             async move { resolve_streams(&backend, &bvid, cid).await },
@@ -199,6 +227,8 @@ impl PlayerWindow {
                         this.player.update(cx, |player, cx| {
                             player.load_urls(streams.video, streams.audio, false, cx)
                         });
+                        this.load_previews(preview_bvid, cid, cx);
+                        this.load_chapters(chapters_bvid, cid, cx);
                     }
                     Err(error) => {
                         this.info.update(cx, |info, cx| info.set_busy(false, cx));
@@ -206,6 +236,200 @@ impl PlayerWindow {
                     }
                 }
                 cx.notify();
+            },
+        );
+    }
+
+    fn load_follow_status(&self, mid: u64, cx: &mut Context<Self>) {
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let generation = self.generation;
+        let info = self.info.clone();
+        spawn_api(
+            cx,
+            async move { backend.relation_status(mid).await },
+            move |this, result, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                if let Ok(status) = result {
+                    info.update(cx, |info, cx| {
+                        info.set_follow_status(status.is_followed(), cx)
+                    });
+                }
+            },
+        );
+    }
+
+    fn load_interactions(&self, aid: u64, cx: &mut Context<Self>) {
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let generation = self.generation;
+        let info = self.info.clone();
+        spawn_api(
+            cx,
+            async move { backend.archive_relation(aid).await },
+            move |this, result, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                if let Ok(relation) = result {
+                    info.update(cx, |info, cx| info.set_interactions(relation, cx));
+                }
+            },
+        );
+    }
+
+    fn load_watch_later(&self, aid: u64, cx: &mut Context<Self>) {
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let generation = self.generation;
+        let info = self.info.clone();
+        spawn_api(
+            cx,
+            async move { backend.watch_later().await },
+            move |this, result, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                if let Ok(later) = result {
+                    let added = later.into_items().iter().any(|item| item.aid == aid);
+                    info.update(cx, |info, cx| info.set_watch_later(added, cx));
+                }
+            },
+        );
+    }
+
+    fn refresh_info(&mut self, cx: &mut Context<Self>) {
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let Some(PlaybackSource::Video { bvid, .. }) =
+            self.request.as_ref().map(|request| request.source.clone())
+        else {
+            return;
+        };
+        let generation = self.generation;
+        let info = self.info.clone();
+        spawn_api(
+            cx,
+            async move { backend.video_detail(&bvid).await },
+            move |this, result, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                match result {
+                    Ok(detail) => info.update(cx, |info, cx| {
+                        info.refresh(
+                            detail.view,
+                            detail.related,
+                            detail.card.follower,
+                            detail.card.like_num,
+                            cx,
+                        )
+                    }),
+                    Err(error) => {
+                        let message = api_task_error_message(error, cx);
+                        info.update(cx, |info, cx| info.set_refresh_error(message, cx));
+                    }
+                }
+            },
+        );
+    }
+
+    fn set_follow(&mut self, mid: u64, follow: bool, cx: &mut Context<Self>) {
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let info = self.info.clone();
+        info.update(cx, |info, cx| info.set_follow_busy(true, cx));
+        spawn_api(
+            cx,
+            async move { backend.modify_relation(mid, follow).await },
+            move |_, result, cx| {
+                info.update(cx, |info, cx| match result {
+                    Ok(()) => info.set_followed(follow, cx),
+                    Err(_) => info.set_follow_busy(false, cx),
+                });
+            },
+        );
+    }
+
+    fn set_like(&mut self, aid: u64, like: bool, cx: &mut Context<Self>) {
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let info = self.info.clone();
+        info.update(cx, |info, cx| info.set_like_busy(true, cx));
+        spawn_api(
+            cx,
+            async move { backend.set_like(aid, like).await },
+            move |_, result, cx| {
+                info.update(cx, |info, cx| match result {
+                    Ok(()) => info.set_liked(like, cx),
+                    Err(_) => info.set_like_busy(false, cx),
+                });
+            },
+        );
+    }
+
+    fn add_coin(&mut self, aid: u64, cx: &mut Context<Self>) {
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let info = self.info.clone();
+        info.update(cx, |info, cx| info.set_coin_busy(true, cx));
+        spawn_api(
+            cx,
+            async move { backend.add_coin(aid).await },
+            move |_, result, cx| {
+                info.update(cx, |info, cx| match result {
+                    Ok(()) => info.grant_coin(cx),
+                    Err(_) => info.set_coin_busy(false, cx),
+                });
+            },
+        );
+    }
+
+    fn load_previews(&self, bvid: String, cid: u64, cx: &mut Context<Self>) {
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let generation = self.generation;
+        spawn_api(
+            cx,
+            async move { backend.videoshot(&bvid, cid).await },
+            move |this, result, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                if let Ok(previews) = result {
+                    this.player
+                        .update(cx, |player, cx| player.set_previews(previews, cx));
+                }
+            },
+        );
+    }
+
+    fn load_chapters(&self, bvid: String, cid: u64, cx: &mut Context<Self>) {
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let generation = self.generation;
+        spawn_api(
+            cx,
+            async move { backend.chapters(&bvid, cid).await },
+            move |this, result, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                if let Ok(chapters) = result {
+                    this.player
+                        .update(cx, |player, cx| player.set_chapters(chapters, cx));
+                }
             },
         );
     }
@@ -228,21 +452,10 @@ impl Render for PlayerWindow {
         let muted = cx.theme().muted_foreground;
         let danger = cx.theme().danger;
         let fullscreen = window.is_fullscreen();
+        let client_decorated = matches!(window.window_decorations(), Decorations::Client { .. });
         let info_loaded = !self.is_live && self.info.read(cx).is_loaded();
         let wide_enough = window.viewport_size().width >= INFO_MIN_WINDOW;
         let show_info = self.show_info && !fullscreen && info_loaded && wide_enough;
-        let info_hint = if self.is_live {
-            "直播不提供视频信息"
-        } else if !info_loaded {
-            "视频信息加载中"
-        } else if !wide_enough {
-            "窗口加宽后可显示视频信息"
-        } else if self.show_info {
-            "隐藏视频信息"
-        } else {
-            "显示视频信息"
-        };
-        let main_window = self.main_window;
         let title = self.title.clone();
         let weak = cx.entity().downgrade();
 
@@ -250,55 +463,27 @@ impl Render for PlayerWindow {
             window.set_window_title(&title);
         }
 
-        let toggle_info = Button::new("toggle-info")
-            .ghost()
-            .xsmall()
-            .icon(IconName::Info)
-            .accessibility_label("视频信息")
-            .tooltip(info_hint)
-            .selected(self.show_info)
-            .disabled(!info_loaded || !wide_enough)
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.show_info = !this.show_info;
-                cx.notify();
-            }));
-
         v_flex()
             .size_full()
             .bg(background)
             .text_color(foreground)
-            .child(
-                TitleBar::new().child(
-                    h_flex()
-                        .w_full()
-                        .items_center()
-                        .gap_3()
-                        .when_some(main_window, |this, main| {
+            .when(!fullscreen, |this| {
+                this.child(TitleBar::new().child(
+                    h_flex().w_full().items_center().justify_end().pr_6().when(
+                        !client_decorated,
+                        |this| {
                             this.child(
-                                Button::new("back-to-main")
+                                Button::new("window-close")
                                     .ghost()
-                                    .xsmall()
-                                    .icon(IconName::ArrowLeft)
-                                    .label("回到主界面")
-                                    .tooltip("回到主界面")
-                                    .on_click(move |_, _, cx| {
-                                        let _ = main
-                                            .update(cx, |_, window, _| window.activate_window());
-                                    }),
+                                    .icon(IconName::Close)
+                                    .accessibility_label("关闭窗口")
+                                    .tooltip("关闭")
+                                    .on_click(|_, window, _| window.remove_window()),
                             )
-                        })
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_sm()
-                                .text_color(muted)
-                                .truncate()
-                                .child(title),
-                        )
-                        .when(!fullscreen, |this| this.child(toggle_info)),
-                ),
-            )
+                        },
+                    ),
+                ))
+            })
             .child(
                 h_flex()
                     .items_stretch()
@@ -323,6 +508,7 @@ impl Render for PlayerWindow {
                                                 .text_color(muted)
                                                 .child("正在获取视频流…"),
                                         ),
+                                    cx,
                                 ))
                             })
                             .children(self.error.clone().map(|error| {
@@ -343,6 +529,7 @@ impl Render for PlayerWindow {
                                                     }
                                                 }),
                                         ),
+                                    cx,
                                 )
                             })),
                     )
@@ -351,19 +538,28 @@ impl Render for PlayerWindow {
     }
 }
 
-fn overlay(content: impl IntoElement) -> impl IntoElement {
+fn overlay(content: impl IntoElement, cx: &App) -> impl IntoElement {
+    let theme = cx.theme();
     div()
         .absolute()
         .size_full()
         .flex()
         .items_center()
         .justify_center()
-        .child(content)
+        .child(
+            div()
+                .p_6()
+                .rounded(theme.radius_lg)
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.popover)
+                .text_color(theme.popover_foreground)
+                .child(content),
+        )
 }
 
 pub fn open(
     request: PlaybackRequest,
-    main_window: Option<AnyWindowHandle>,
     cx: &mut App,
 ) -> Result<(AnyWindowHandle, Entity<PlayerWindow>)> {
     let title = request.title.clone();
@@ -379,6 +575,6 @@ pub fn open(
     options.window_min_size = Some(size(px(640.), px(360.)));
 
     gpui_kit::open_window(options, cx, |window, cx| {
-        cx.new(|cx| PlayerWindow::new(window, cx, request.clone(), main_window))
+        cx.new(|cx| PlayerWindow::new(window, cx, request.clone()))
     })
 }
