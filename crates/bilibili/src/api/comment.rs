@@ -1,8 +1,9 @@
-use crate::{ApiError, Client, CommentPage};
+use crate::{ApiError, Client, CommentPage, EmotePanel};
 
 const COMMENTS_URL: &str = "https://api.bilibili.com/x/v2/reply";
 const REPLIES_URL: &str = "https://api.bilibili.com/x/v2/reply/reply";
 const ADD_URL: &str = "https://api.bilibili.com/x/v2/reply/add";
+const EMOTE_PANEL_URL: &str = "https://api.bilibili.com/x/emote/user/panel/web";
 const PAGE_SIZE: u32 = 20;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -65,6 +66,11 @@ impl Client {
             ],
         )
         .await
+    }
+
+    pub async fn comment_emotes(&self) -> Result<EmotePanel, ApiError> {
+        self.get_json(EMOTE_PANEL_URL, &[("business", "reply".to_owned())])
+            .await
     }
 
     pub async fn add_comment(

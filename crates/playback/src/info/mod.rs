@@ -16,10 +16,12 @@ use gpui_kit::base::{TextSelection, TextSelectionHandle};
 use gpui_kit::component::input::TextareaState;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_bilibili::{ArchiveRelation, Comment, RecommendVideo, VideoInfo, VideoPage};
+use rigili_bilibili::{
+    ArchiveRelation, Comment, EmotePackage, RecommendVideo, VideoInfo, VideoPage,
+};
 use rigili_core::{format_count, format_datetime};
 
-use comments::{ReplyTarget, ReplyThread};
+use comments::{EmoteTarget, ReplyTarget, ReplyThread};
 use interaction::{CoinState, FlagState, ToggleState};
 
 const INFO_WIDTH: Pixels = px(340.);
@@ -142,6 +144,11 @@ pub(super) struct InfoPanel {
     _reply_draft_sub: Option<Subscription>,
     reply_sending: bool,
     reply_error: Option<String>,
+    emotes: Option<Vec<EmotePackage>>,
+    emotes_loading: bool,
+    emotes_error: Option<String>,
+    emote_target: Option<EmoteTarget>,
+    emote_package: usize,
     watch_later: FlagState,
     refresh_busy: bool,
     refresh_error: Option<String>,
@@ -251,6 +258,11 @@ impl InfoPanel {
             _reply_draft_sub: None,
             reply_sending: false,
             reply_error: None,
+            emotes: None,
+            emotes_loading: false,
+            emotes_error: None,
+            emote_target: None,
+            emote_package: 0,
             watch_later: FlagState::default(),
             refresh_busy: false,
             refresh_error: None,
@@ -258,7 +270,9 @@ impl InfoPanel {
     }
 
     pub(super) fn clear(&mut self, cx: &mut Context<Self>) {
+        let emotes = self.emotes.take();
         *self = Self::new(self.selections.clone());
+        self.emotes = emotes;
         cx.notify();
     }
 

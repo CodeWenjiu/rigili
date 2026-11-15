@@ -113,6 +113,30 @@ pub struct CommentEmote {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct EmotePanel {
+    #[serde(default)]
+    pub packages: Option<Vec<EmotePackage>>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct EmotePackage {
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub emote: Option<Vec<EmoteItem>>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct EmoteItem {
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub url: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct CommentControl {
     #[serde(default)]
     pub time_desc: String,
@@ -122,7 +146,7 @@ pub struct CommentControl {
 
 #[cfg(test)]
 mod tests {
-    use super::CommentPage;
+    use super::{CommentPage, EmotePanel};
 
     #[test]
     fn parses_comments_and_tolerates_missing_replies() {
@@ -180,5 +204,33 @@ mod tests {
         let empty: CommentPage =
             serde_json::from_str(r#"{"page": {"count": 0}}"#).expect("empty comment fixture");
         assert!(empty.into_replies().is_empty());
+    }
+
+    #[test]
+    fn parses_emote_packages_and_tolerates_null_packages() {
+        let panel: EmotePanel = serde_json::from_str(
+            r#"{
+                "packages": [{
+                    "text": "小黄脸",
+                    "url": "//i0.hdslb.com/bfs/emote/package.png",
+                    "emote": [{
+                        "text": "[doge]",
+                        "url": "//i0.hdslb.com/bfs/emote/doge.png"
+                    }]
+                }]
+            }"#,
+        )
+        .expect("emote panel fixture");
+
+        let packages = panel.packages.expect("emote packages");
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].text, "小黄脸");
+        let emotes = packages[0].emote.as_ref().expect("package emotes");
+        assert_eq!(emotes[0].text, "[doge]");
+        assert_eq!(emotes[0].url, "//i0.hdslb.com/bfs/emote/doge.png");
+
+        let empty: EmotePanel =
+            serde_json::from_str(r#"{"packages": null}"#).expect("null panel fixture");
+        assert!(empty.packages.is_none());
     }
 }

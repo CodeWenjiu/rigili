@@ -11,7 +11,7 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::api::comment::{CommentReply, CommentSort};
-use rigili_bilibili::{Comment, CommentPage};
+use rigili_bilibili::{Comment, CommentPage, normalize_url};
 use rigili_core::client;
 use rigili_core::runtime::spawn_api;
 use rigili_core::{
@@ -40,6 +40,21 @@ pub(super) struct ReplyTarget {
     pub(super) uname: SharedString,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum EmoteTarget {
+    Comment,
+    Reply,
+}
+
+impl EmoteTarget {
+    fn key(self) -> (&'static str, u64) {
+        match self {
+            Self::Comment => ("comment-emote", 0),
+            Self::Reply => ("comment-emote", 1),
+        }
+    }
+}
+
 impl InfoPanel {
     pub(super) fn reset_comments(&mut self) {
         self.comments.clear();
@@ -57,6 +72,7 @@ impl InfoPanel {
         self._reply_draft_sub = None;
         self.reply_sending = false;
         self.reply_error = None;
+        self.emote_target = None;
         self.comments_scroll.set_offset(point(px(0.), px(0.)));
     }
 
@@ -86,6 +102,7 @@ impl InfoPanel {
         self.reply_threads.clear();
         self.reply_target = None;
         self.reply_error = None;
+        self.emote_target = None;
         self.comments_scroll.set_offset(point(px(0.), px(0.)));
         cx.notify();
 
@@ -252,6 +269,7 @@ impl InfoPanel {
         {
             self.reply_target = None;
             self.reply_error = None;
+            self.close_emote_picker(EmoteTarget::Reply);
         }
         cx.notify();
     }
@@ -378,6 +396,7 @@ impl InfoPanel {
                             window.push_notification(Notification::success("回复已发布"), cx);
                         });
                         this.reply_target = None;
+                        this.close_emote_picker(EmoteTarget::Reply);
                         if let Some(comment) = this
                             .comments
                             .iter_mut()
@@ -394,6 +413,239 @@ impl InfoPanel {
                 }
             },
         );
+    }
+
+    fn load_emotes(&mut self, cx: &mut Context<Self>) {
+        if self.emotes_loading {
+            return;
+        }
+        let client = match client::get(cx) {
+            Ok(client) => client,
+            Err(error) => {
+                self.emotes_error = Some(api_error_message(error));
+                cx.notify();
+                return;
+            }
+        };
+        self.emotes_loading = true;
+        self.emotes_error = None;
+        cx.notify();
+
+        spawn_api(
+            cx,
+            async move { client.comment_emotes().await },
+            move |this, result, cx| {
+                this.emotes_loading = false;
+                match result {
+                    Ok(panel) => {
+                        this.emotes = Some(
+                            panel
+                                .packages
+                                .unwrap_or_default()
+                                .into_iter()
+                                .filter(|package| {
+                                    package.emote.as_ref().is_some_and(|emotes| {
+                                        emotes.iter().any(|emote| {
+                                            !emote.text.is_empty() && !emote.url.is_empty()
+                                        })
+                                    })
+                                })
+                                .collect(),
+                        );
+                        this.emote_package = 0;
+                    }
+                    Err(error) => this.emotes_error = Some(api_task_error_message(error, cx)),
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    fn toggle_emote_picker(&mut self, target: EmoteTarget, cx: &mut Context<Self>) {
+        self.emote_target = (self.emote_target != Some(target)).then_some(target);
+        if self.emote_target.is_some() && self.emotes.is_none() && !self.emotes_loading {
+            self.load_emotes(cx);
+        }
+        cx.notify();
+    }
+
+    fn close_emote_picker(&mut self, target: EmoteTarget) {
+        if self.emote_target == Some(target) {
+            self.emote_target = None;
+        }
+    }
+
+    fn insert_emote(
+        &mut self,
+        target: EmoteTarget,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let draft = match target {
+            EmoteTarget::Comment => self.comment_draft(window, cx),
+            EmoteTarget::Reply => {
+                let Some(draft) = self.reply_draft.clone() else {
+                    return;
+                };
+                draft
+            }
+        };
+        draft.update(cx, |state, cx| {
+            state.insert(text, window, cx);
+            state.focus(window, cx);
+        });
+        match target {
+            EmoteTarget::Comment => self.comment_error = None,
+            EmoteTarget::Reply => self.reply_error = None,
+        }
+        cx.notify();
+    }
+
+    fn render_emote_button(&self, target: EmoteTarget, cx: &mut Context<Self>) -> AnyElement {
+        Button::new(target.key())
+            .ghost()
+            .small()
+            .icon(IconName::Sticker)
+            .accessibility_label("表情")
+            .tooltip("表情")
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle_emote_picker(target, cx)))
+            .into_any_element()
+    }
+
+    fn render_emote_picker(&self, target: EmoteTarget, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let danger = theme.danger;
+        let border = theme.border;
+        let accent = theme.accent;
+        let radius = theme.radius;
+
+        let body: AnyElement = if self.emotes_loading {
+            h_flex()
+                .py_4()
+                .justify_center()
+                .child(Spinner::new().small())
+                .into_any_element()
+        } else if let Some(error) = self.emotes_error.clone() {
+            v_flex()
+                .items_center()
+                .gap_2()
+                .py_3()
+                .child(div().text_xs().text_color(danger).child(error))
+                .child(
+                    Button::new("emote-retry")
+                        .small()
+                        .label("重试")
+                        .on_click(cx.listener(|this, _, _, cx| this.load_emotes(cx))),
+                )
+                .into_any_element()
+        } else {
+            let packages = self.emotes.as_deref().unwrap_or_default();
+            if packages.is_empty() {
+                div()
+                    .py_4()
+                    .text_xs()
+                    .text_color(muted)
+                    .text_center()
+                    .child("暂无可用表情")
+                    .into_any_element()
+            } else {
+                let selected = self.emote_package.min(packages.len() - 1);
+                let package = &packages[selected];
+                let emotes = package.emote.as_deref().unwrap_or_default();
+
+                v_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(package.text.clone()),
+                    )
+                    .child(
+                        h_flex()
+                            .id("comment-emote-grid")
+                            .flex_wrap()
+                            .gap_1()
+                            .max_h(px(176.))
+                            .overflow_y_scroll()
+                            .children(emotes.iter().enumerate().filter_map(|(index, emote)| {
+                                if emote.text.is_empty() || emote.url.is_empty() {
+                                    return None;
+                                }
+                                let text = emote.text.clone();
+                                Some(
+                                    div()
+                                        .id((
+                                            "comment-emote-item",
+                                            (selected as u64) * 1000 + index as u64,
+                                        ))
+                                        .size(px(32.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded(px(4.))
+                                        .cursor_pointer()
+                                        .hover(move |this| this.bg(accent))
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.insert_emote(target, text.clone(), window, cx);
+                                        }))
+                                        .child(
+                                            img(normalize_url(&emote.url))
+                                                .size(px(26.))
+                                                .object_fit(ObjectFit::Contain),
+                                        ),
+                                )
+                            })),
+                    )
+                    .child(
+                        h_flex()
+                            .id("comment-emote-packages")
+                            .gap_1()
+                            .overflow_x_scroll()
+                            .children(packages.iter().enumerate().map(|(index, package)| {
+                                let icon = normalize_url(&package.url);
+                                div()
+                                    .id(("comment-emote-package", index as u64))
+                                    .size(px(28.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(4.))
+                                    .cursor_pointer()
+                                    .when(index == selected, |this| this.bg(accent))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.emote_package = index;
+                                        cx.notify();
+                                    }))
+                                    .child(if icon.is_empty() {
+                                        div()
+                                            .text_xs()
+                                            .text_color(muted)
+                                            .child(package.text.clone())
+                                            .into_any_element()
+                                    } else {
+                                        img(icon)
+                                            .size(px(24.))
+                                            .object_fit(ObjectFit::Contain)
+                                            .into_any_element()
+                                    })
+                            })),
+                    )
+                    .into_any_element()
+            }
+        };
+
+        v_flex()
+            .gap_2()
+            .p_2()
+            .rounded(radius)
+            .border_1()
+            .border_color(border)
+            .bg(theme.popover)
+            .child(body)
+            .into_any_element()
     }
 
     pub(super) fn render_comments_tab(
@@ -502,13 +754,17 @@ impl InfoPanel {
                     .justify_between()
                     .gap_3()
                     .child(
-                        div()
-                            .text_xs()
-                            .text_color(if over { danger } else { muted })
-                            .child(if count == 0 {
-                                "Enter 发布，Shift+Enter 换行".to_owned()
-                            } else {
-                                format!("{count}/{COMMENT_MAX_LEN}")
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(self.render_emote_button(EmoteTarget::Comment, cx))
+                            .when(count > 0, |this| {
+                                this.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(if over { danger } else { muted })
+                                        .child(format!("{count}/{COMMENT_MAX_LEN}")),
+                                )
                             }),
                     )
                     .child(
@@ -526,6 +782,9 @@ impl InfoPanel {
                             ),
                     ),
             )
+            .when(self.emote_target == Some(EmoteTarget::Comment), |this| {
+                this.child(self.render_emote_picker(EmoteTarget::Comment, cx))
+            })
             .into_any_element()
     }
 
@@ -712,12 +971,19 @@ impl InfoPanel {
                     .justify_between()
                     .gap_2()
                     .child(
-                        div()
+                        h_flex()
+                            .items_center()
+                            .gap_1()
                             .min_w_0()
-                            .truncate()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(format!("回复 @{}", target.uname)),
+                            .child(self.render_emote_button(EmoteTarget::Reply, cx))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(format!("回复 @{}", target.uname)),
+                            ),
                     )
                     .child(
                         h_flex()
@@ -731,6 +997,7 @@ impl InfoPanel {
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.reply_target = None;
                                         this.reply_error = None;
+                                        this.close_emote_picker(EmoteTarget::Reply);
                                         cx.notify();
                                     })),
                             )
@@ -750,6 +1017,9 @@ impl InfoPanel {
                             ),
                     ),
             )
+            .when(self.emote_target == Some(EmoteTarget::Reply), |this| {
+                this.child(self.render_emote_picker(EmoteTarget::Reply, cx))
+            })
             .into_any_element()
     }
 
@@ -1009,5 +1279,55 @@ impl InfoPanel {
                 this.child(div().pl(px(36.)).child(control))
             })
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EmoteTarget;
+    use crate::info::{InfoPanel, InfoSelections};
+    use gpui_kit::prelude::*;
+    use gpui_kit::{Bounds, TestAppContext, WindowBounds, WindowOptions, px, size};
+
+    #[gpui_kit::test]
+    fn opens_one_emote_picker_at_a_time(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (_, panel) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Default::default(),
+                        size(px(500.), px(300.)),
+                    ))),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| {
+                    let selections = InfoSelections::new(window, cx);
+                    cx.new(|_| InfoPanel::new(selections))
+                },
+            )
+            .expect("open info panel window")
+        });
+
+        panel.update(cx, |panel, cx| {
+            panel.emotes = Some(Vec::new());
+
+            panel.toggle_emote_picker(EmoteTarget::Comment, cx);
+            assert_eq!(panel.emote_target, Some(EmoteTarget::Comment));
+
+            panel.toggle_emote_picker(EmoteTarget::Reply, cx);
+            assert_eq!(panel.emote_target, Some(EmoteTarget::Reply));
+
+            panel.toggle_emote_picker(EmoteTarget::Reply, cx);
+            assert_eq!(panel.emote_target, None);
+
+            panel.toggle_emote_picker(EmoteTarget::Comment, cx);
+            panel.close_emote_picker(EmoteTarget::Reply);
+            assert_eq!(panel.emote_target, Some(EmoteTarget::Comment));
+
+            panel.close_emote_picker(EmoteTarget::Comment);
+            assert_eq!(panel.emote_target, None);
+        });
     }
 }
