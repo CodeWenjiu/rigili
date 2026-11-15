@@ -63,7 +63,7 @@ pub async fn send_message(client: &Client, receiver: u64, content: &str) -> Resu
     let sender = client.account_uid()?;
     let csrf = client.csrf()?;
     let dev_id = client.dev_id().to_owned();
-    let timestamp = crate::client::unix_timestamp();
+    let timestamp = crate::http::unix_timestamp();
     let content = serde_json::json!({ "content": content }).to_string();
 
     let form = [

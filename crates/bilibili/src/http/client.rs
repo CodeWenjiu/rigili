@@ -13,7 +13,9 @@ use reqwest::{
 use serde::{Deserialize, de::DeserializeOwned};
 use tokio::sync::{Mutex, OnceCell, Semaphore};
 
-use crate::{ApiError, Session, SessionError, WbiSigner, session};
+use super::error::ApiError;
+use super::session::{self, Session, SessionError};
+use super::wbi::WbiSigner;
 
 const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const API_REFERER: &str = "https://www.bilibili.com/";
@@ -435,9 +437,9 @@ mod tests {
     use crate::{PlayUrl, Popular, Session, SpaceRelationStatus, VideoInfo};
     use std::{collections::BTreeMap, fs, path::PathBuf};
 
-    const POPULAR_FIXTURE: &str = include_str!("../fixtures/popular.json");
-    const VIEW_FIXTURE: &str = include_str!("../fixtures/view.json");
-    const PLAYURL_FIXTURE: &str = include_str!("../fixtures/playurl.json");
+    const POPULAR_FIXTURE: &str = include_str!("../../fixtures/popular.json");
+    const VIEW_FIXTURE: &str = include_str!("../../fixtures/view.json");
+    const PLAYURL_FIXTURE: &str = include_str!("../../fixtures/playurl.json");
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("rigili-client-{}-{name}", std::process::id()));

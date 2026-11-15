@@ -500,36 +500,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_related_videos() {
-        let related: Vec<RecommendVideo> = serde_json::from_str(
-            r#"[{
-                "aid":1,"bvid":"BV1xx","cid":2,"pic":"//i0.hdslb.com/a.jpg",
-                "title":"related","duration":32,"pubdate":0,
-                "owner":{"mid":3,"name":"up","face":""},
-                "stat":{"view":100,"danmaku":2,"like":1}
-            }]"#,
-        )
-        .unwrap();
-
-        assert_eq!(related.len(), 1);
-        assert_eq!(related[0].cid, 2);
-        assert_eq!(related[0].owner.name, "up");
-        assert_eq!(related[0].stat.view, 100);
-    }
-
-    #[test]
-    fn parses_archive_relation() {
-        let relation: ArchiveRelation =
-            serde_json::from_str(r#"{"attention":false,"favorite":true,"like":true,"coin":2}"#)
-                .unwrap();
-
-        assert!(relation.like);
-        assert!(relation.favorite);
-        assert!(!relation.attention);
-        assert_eq!(relation.coin, 2);
-    }
-
-    #[test]
     fn extracts_chapters_from_view_points() {
         let info: PlayerInfo = serde_json::from_str(
             r#"{"view_points":[
@@ -577,7 +547,29 @@ mod tests {
     }
 
     #[test]
-    fn parses_storyboard_payload() {
+    fn parses_video_payloads() {
+        let related: Vec<RecommendVideo> = serde_json::from_str(
+            r#"[{
+                "aid":1,"bvid":"BV1xx","cid":2,"pic":"//i0.hdslb.com/a.jpg",
+                "title":"related","duration":32,"pubdate":0,
+                "owner":{"mid":3,"name":"up","face":""},
+                "stat":{"view":100,"danmaku":2,"like":1}
+            }]"#,
+        )
+        .unwrap();
+        assert_eq!(related.len(), 1);
+        assert_eq!(related[0].cid, 2);
+        assert_eq!(related[0].owner.name, "up");
+        assert_eq!(related[0].stat.view, 100);
+
+        let relation: ArchiveRelation =
+            serde_json::from_str(r#"{"attention":false,"favorite":true,"like":true,"coin":2}"#)
+                .unwrap();
+        assert!(relation.like);
+        assert!(relation.favorite);
+        assert!(!relation.attention);
+        assert_eq!(relation.coin, 2);
+
         let shot: VideoShot = serde_json::from_str(
             r#"{
                 "pvdata": "//i0.hdslb.com/bfs/videoshot/1.bin",
@@ -590,7 +582,6 @@ mod tests {
             }"#,
         )
         .unwrap();
-
         assert_eq!((shot.columns, shot.rows), (10, 10));
         assert_eq!((shot.frame_width, shot.frame_height), (160, 90));
         assert_eq!(shot.index, [0., 0., 5., 11.]);
