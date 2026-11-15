@@ -12,7 +12,7 @@ use gpui_kit::*;
 use rigili_bilibili::Chapter;
 use rigili_player::{BufferedRange, PlayerStatus};
 
-use super::request::VideoQuality;
+use crate::request::VideoQuality;
 use super::surface::PlayerView;
 use crate::shortcuts::{ToggleFullscreen, TogglePlayback};
 use gpui_kit::base::{Slider as BaseSlider, SliderIndicator, SliderThumb, SliderTrack};

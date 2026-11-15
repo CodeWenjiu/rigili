@@ -1,4 +1,3 @@
-rigili_macro::mod_prv!(controls, favorite, info, native, surface);
+rigili_macro::mod_prv!(info, native);
+rigili_macro::mod_flat!(player, request);
 rigili_macro::mod_pub!(shortcuts);
-rigili_macro::mod_flat!(request);
-rigili_macro::mod_flat!(window);

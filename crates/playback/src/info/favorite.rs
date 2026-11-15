@@ -14,7 +14,7 @@ use rigili_core::backend::{self, Backend};
 use rigili_core::runtime::spawn_api;
 use rigili_core::{api_error_message, api_task_error_message};
 
-use crate::info::InfoPanel;
+use super::InfoPanel;
 
 const LIST_MAX_HEIGHT: Pixels = px(320.);
 

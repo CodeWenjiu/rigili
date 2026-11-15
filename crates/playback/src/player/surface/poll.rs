@@ -1,0 +1,149 @@
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use gpui_kit::component::slider::*;
+use gpui_kit::prelude::*;
+use gpui_kit::*;
+use image::RgbaImage;
+use rigili_core::cursor;
+use rigili_player::{PlaybackPhase, VideoFrame};
+
+use super::{IDLE_POLL_INTERVAL, PAUSED_POLL_INTERVAL, POLL_INTERVAL, PlayerView};
+
+impl PlayerView {
+    pub(super) fn poll_interval(&self) -> Duration {
+        poll_interval(self.status.phase, self.status.paused)
+    }
+
+    pub(super) fn pump(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for frame in self.retired_frames.drain(..) {
+            let _ = window.drop_image(frame);
+        }
+
+        self.sync_native_bounds(window, cx);
+        let mut changed = self.pump_native();
+        if notice_expired(self.notice.map(|(_, deadline)| deadline), Instant::now()) {
+            self.notice = None;
+            changed = true;
+        }
+        if let Some(frame) = self.player.take_frame()
+            && let Some(image) = to_render_image(frame)
+        {
+            if let Some(previous) = self.frame.replace(image) {
+                let _ = window.drop_image(previous);
+            }
+            changed = true;
+        }
+
+        let status = self.player.status();
+        if !Arc::ptr_eq(&status, &self.status_source) {
+            let next = (*status).clone();
+            if next.duration > 0.0 && (next.duration - self.progress_max).abs() > 0.5 {
+                self.rebuild_progress(next.duration, next.time_pos, window, cx);
+            }
+            if self.seeking.is_none() {
+                self.progress.update(cx, |state, cx| {
+                    state.set_value(next.time_pos as f32, window, cx);
+                });
+            }
+            if !self.volume_dragging {
+                self.volume.update(cx, |state, cx| {
+                    state.set_value(next.volume as f32, window, cx);
+                });
+            }
+            self.status = next;
+            self.status_source = status;
+            changed = true;
+        }
+
+        if self.controls_idle() {
+            self.controls_visible = false;
+            self.preview_time = None;
+            cursor::hide_until_mouse_moves(cx);
+            changed = true;
+        }
+
+        self.sync_native_bounds(window, cx);
+
+        if changed {
+            cx.notify();
+        }
+    }
+
+    fn rebuild_progress(
+        &mut self,
+        duration: f64,
+        time_pos: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.progress_max = duration;
+        let max = duration.max(1.0) as f32;
+        let value = time_pos.clamp(0.0, duration) as f32;
+        self.progress = cx.new(|_| {
+            SliderState::new()
+                .min(0.0)
+                .max(max)
+                .step(0.1)
+                .default_value(value)
+        });
+        self._progress_sub = Some(cx.subscribe_in(
+            &self.progress,
+            window,
+            |this, _, event: &SliderEvent, window, cx| this.on_progress(event, window, cx),
+        ));
+    }
+}
+
+fn notice_expired(deadline: Option<Instant>, now: Instant) -> bool {
+    deadline.is_some_and(|deadline| deadline <= now)
+}
+
+fn poll_interval(phase: PlaybackPhase, paused: bool) -> Duration {
+    match phase {
+        PlaybackPhase::Idle | PlaybackPhase::Ended => IDLE_POLL_INTERVAL,
+        _ if paused => PAUSED_POLL_INTERVAL,
+        _ => POLL_INTERVAL,
+    }
+}
+
+fn to_render_image(frame: VideoFrame) -> Option<Arc<RenderImage>> {
+    let buffer = RgbaImage::from_raw(frame.width, frame.height, frame.data)?;
+    Some(Arc::new(RenderImage::new([image::Frame::new(buffer)])))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::{
+        IDLE_POLL_INTERVAL, PAUSED_POLL_INTERVAL, POLL_INTERVAL, notice_expired, poll_interval,
+    };
+    use rigili_player::PlaybackPhase;
+
+    #[test]
+    fn notices_expire_after_their_deadline() {
+        let now = Instant::now();
+        assert!(!notice_expired(None, now));
+        assert!(!notice_expired(Some(now + Duration::from_secs(1)), now));
+        assert!(notice_expired(Some(now), now));
+    }
+
+    #[test]
+    fn polls_slowly_when_idle_or_paused() {
+        assert_eq!(poll_interval(PlaybackPhase::Playing, false), POLL_INTERVAL);
+        assert_eq!(
+            poll_interval(PlaybackPhase::Buffering, false),
+            POLL_INTERVAL
+        );
+        assert_eq!(
+            poll_interval(PlaybackPhase::Playing, true),
+            PAUSED_POLL_INTERVAL
+        );
+        assert_eq!(poll_interval(PlaybackPhase::Idle, true), IDLE_POLL_INTERVAL);
+        assert_eq!(
+            poll_interval(PlaybackPhase::Ended, false),
+            IDLE_POLL_INTERVAL
+        );
+    }
+}
