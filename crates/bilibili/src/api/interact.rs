@@ -23,13 +23,13 @@ impl Client {
         .await
     }
 
-    pub async fn add_coin(&self, aid: u64) -> Result<(), ApiError> {
+    pub async fn add_coin(&self, aid: u64, count: u32, also_like: bool) -> Result<(), ApiError> {
         self.post_form_ack(
             COIN_URL,
             &[
                 ("aid", aid.to_string()),
-                ("multiply", "1".to_owned()),
-                ("select_like", "0".to_owned()),
+                ("multiply", count.to_string()),
+                ("select_like", if also_like { "1" } else { "0" }.to_owned()),
                 ("csrf", self.csrf()?),
             ],
         )

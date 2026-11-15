@@ -2,6 +2,24 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
+fn deserialize_id<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Id {
+        Number(u64),
+        Text(String),
+    }
+
+    Ok(match Option::<Id>::deserialize(deserializer)? {
+        Some(Id::Number(value)) => value,
+        Some(Id::Text(text)) => text.trim().parse().unwrap_or_default(),
+        None => 0,
+    })
+}
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct CommentPage {
     #[serde(default)]
@@ -30,7 +48,7 @@ pub struct CommentPageInfo {
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct Comment {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_id")]
     pub rpid: u64,
     #[serde(default)]
     pub member: CommentMember,
@@ -56,6 +74,8 @@ impl Comment {
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct CommentMember {
+    #[serde(default, deserialize_with = "deserialize_id")]
+    pub mid: u64,
     #[serde(default)]
     pub uname: String,
     #[serde(default)]
@@ -110,8 +130,9 @@ mod tests {
             r#"{
                 "page": {"acount": 2, "count": 2, "num": 1, "size": 20},
                 "replies": [{
-                    "rpid": 1,
+                    "rpid": "3546918709889670",
                     "member": {
+                        "mid": "100",
                         "uname": "测试用户",
                         "avatar": "http://i0.hdslb.com/face.jpg",
                         "level_info": {"current_level": 5}
@@ -135,6 +156,8 @@ mod tests {
         assert_eq!(page.page.count, 2);
         let items = page.into_replies();
         assert_eq!(items.len(), 1);
+        assert_eq!(items[0].rpid, 3546918709889670);
+        assert_eq!(items[0].member.mid, 100);
         assert_eq!(items[0].member.uname, "测试用户");
         assert_eq!(items[0].member.level_info.current_level, 5);
         assert_eq!(
@@ -151,6 +174,7 @@ mod tests {
         assert_eq!(emote.url, "https://i0.hdslb.com/bfs/emote/doge.png");
         assert_eq!(items[0].reply_control.time_desc, "1天前发布");
         assert_eq!(items[0].replies().len(), 1);
+        assert_eq!(items[0].replies()[0].rpid, 2);
         assert_eq!(items[0].replies()[0].content.message, "回复内容");
 
         let empty: CommentPage =

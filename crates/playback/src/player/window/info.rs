@@ -141,22 +141,4 @@ impl PlayerWindow {
             },
         );
     }
-
-    pub(super) fn add_coin(&mut self, aid: u64, cx: &mut Context<Self>) {
-        let Some(client) = self.client.clone() else {
-            return;
-        };
-        let info = self.info.clone();
-        info.update(cx, |info, cx| info.set_coin_busy(true, cx));
-        spawn_api(
-            cx,
-            async move { client.add_coin(aid).await },
-            move |_, result, cx| {
-                info.update(cx, |info, cx| match result {
-                    Ok(()) => info.grant_coin(cx),
-                    Err(_) => info.set_coin_busy(false, cx),
-                });
-            },
-        );
-    }
 }

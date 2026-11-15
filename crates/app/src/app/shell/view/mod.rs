@@ -31,6 +31,7 @@ pub struct MainView {
     page: Page,
     spaces: Vec<SpaceRoute>,
     playback: Option<Playback>,
+    window_handle: AnyWindowHandle,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -150,6 +151,7 @@ impl MainView {
             page: Page::default(),
             spaces: Vec::new(),
             playback: None,
+            window_handle: window.window_handle(),
         }
     }
 
@@ -187,7 +189,12 @@ impl MainView {
         cx.notify();
     }
 
-    fn open_space(&mut self, request: OpenSpace, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_space(
+        &mut self,
+        request: OpenSpace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         preview::stop_all(cx);
         self.messages_open = false;
         if self
@@ -273,7 +280,7 @@ impl MainView {
             self.playback = None;
         }
 
-        match Playback::open(request, cx) {
+        match Playback::open(request, self.window_handle, cx.entity().downgrade(), cx) {
             Ok(playback) => self.playback = Some(playback),
             Err(error) => eprintln!("failed to open player window: {error}"),
         }

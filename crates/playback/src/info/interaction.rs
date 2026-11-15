@@ -49,7 +49,6 @@ impl ToggleState {
 pub(super) struct CoinState {
     pub(super) given: u32,
     pub(super) count: u64,
-    pub(super) busy: bool,
     touched: bool,
 }
 
@@ -73,18 +72,11 @@ impl CoinState {
         }
     }
 
-    pub(super) fn set_busy(&mut self, busy: bool) {
-        self.busy = busy;
-        self.touched |= busy;
-    }
-
-    pub(super) fn grant(&mut self) {
-        if self.given < 2 {
-            self.given += 1;
-            self.count = self.count.saturating_add(1);
-        }
+    pub(super) fn grant(&mut self, count: u32) {
+        let granted = count.min(2u32.saturating_sub(self.given));
+        self.given += granted;
+        self.count = self.count.saturating_add(granted as u64);
         self.touched = true;
-        self.busy = false;
     }
 }
 
@@ -148,14 +140,11 @@ mod tests {
         coin.accept(1);
         assert_eq!(coin.given, 1);
 
-        coin.grant();
+        coin.grant(2);
         assert_eq!((coin.given, coin.count), (2, 6));
-        coin.grant();
+        coin.grant(2);
         assert_eq!((coin.given, coin.count), (2, 6));
 
-        coin.set_busy(true);
-        coin.grant();
-        assert!(!coin.busy);
         coin.accept(0);
         assert_eq!(coin.given, 2);
     }

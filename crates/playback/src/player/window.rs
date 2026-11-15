@@ -10,13 +10,14 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::surface::PlayerView;
-use crate::info::{InfoEvent, InfoPanel, InfoTab};
+use crate::info::{InfoEvent, InfoPanel, InfoSelections, InfoTab};
 use crate::request::{PlaybackRequest, PlaybackSource, Streams, resolve, resolve_streams};
 use crate::shortcuts::{
     Reload, SeekBack, SeekForward, SpeedDown, SpeedUp, ToggleComments, ToggleFullscreen,
     ToggleInfo, ToggleMute, TogglePlayback,
 };
 use rigili_bilibili::Client;
+use rigili_core::OpenSpace;
 use rigili_core::api_error_message;
 use rigili_core::client;
 use rigili_core::runtime::{ApiTaskError, spawn_api};
@@ -38,10 +39,13 @@ pub struct PlayerWindow {
     _info_sub: Subscription,
 }
 
+impl EventEmitter<OpenSpace> for PlayerWindow {}
+
 impl PlayerWindow {
     fn new(window: &mut Window, cx: &mut Context<Self>, request: PlaybackRequest) -> Self {
         let player = cx.new(|cx| PlayerView::new(window, cx));
-        let info = cx.new(|_| InfoPanel::new());
+        let selections = InfoSelections::new(window, cx);
+        let info = cx.new(|_| InfoPanel::new(selections));
         let info_sub = cx.subscribe(&info, |this, _, event: &InfoEvent, cx| match event {
             InfoEvent::SelectPage(cid) => this.select_page(*cid, cx),
             InfoEvent::PlayRelated { bvid, cid, title } => this.start(
@@ -50,7 +54,10 @@ impl PlayerWindow {
             ),
             InfoEvent::ToggleFollow { mid, follow } => this.set_follow(*mid, *follow, cx),
             InfoEvent::ToggleLike { aid, like } => this.set_like(*aid, *like, cx),
-            InfoEvent::AddCoin { aid } => this.add_coin(*aid, cx),
+            InfoEvent::OpenSpace { mid, name } => cx.emit(OpenSpace {
+                mid: *mid,
+                name: name.clone(),
+            }),
             InfoEvent::Reload => this.refresh_info(cx),
         });
         let (client, error) = match client::get(cx) {
@@ -273,14 +280,13 @@ impl Render for PlayerWindow {
         let danger = cx.theme().danger;
         let fullscreen = window.is_fullscreen();
         let client_decorated = matches!(window.window_decorations(), Decorations::Client { .. });
-        let info_loaded = !self.is_live && self.info.read(cx).is_loaded();
         let wide_enough = window.viewport_size().width >= INFO_MIN_WINDOW;
         let panel_open = if fullscreen {
             self.fullscreen_info
         } else {
             self.show_info
         };
-        let show_info = panel_open && info_loaded && (fullscreen || wide_enough);
+        let show_info = panel_open && !self.is_live && (fullscreen || wide_enough);
         let title = self.title.clone();
         let weak = cx.entity().downgrade();
 
@@ -289,10 +295,19 @@ impl Render for PlayerWindow {
         }
 
         v_flex()
+            .id("player-window")
             .size_full()
             .bg(background)
             .text_color(foreground)
             .key_context(crate::shortcuts::PLAYER)
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.info.update(cx, |info, cx| {
+                        info.clear_spanning_selection(window, cx);
+                    });
+                }),
+            )
             .on_action(cx.listener(|this, _: &TogglePlayback, _, cx| {
                 this.player.update(cx, |player, cx| player.toggle_pause(cx));
             }))

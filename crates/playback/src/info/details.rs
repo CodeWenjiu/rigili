@@ -1,4 +1,5 @@
 use gpui_kit::assets::IconName;
+use gpui_kit::base::SelectableText;
 use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
 use gpui_kit::component::list::ListItem;
@@ -7,10 +8,14 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::{RecommendVideo, VideoPage, thumbnail};
+use rigili_core::video::{VideoCard, video_meta, video_title};
 use rigili_core::{format_count, format_duration};
 
+use super::coin::CoinDialog;
 use super::favorite::FavoriteDialog;
-use super::{InfoEvent, InfoPanel, RELATED_THUMB_HEIGHT, RELATED_THUMB_WIDTH, VideoDetails};
+use super::{
+    InfoEvent, InfoPanel, RELATED_THUMB_HEIGHT, RELATED_THUMB_WIDTH, VideoDetails, dialog,
+};
 
 impl InfoPanel {
     fn toggle_description(&mut self, cx: &mut Context<Self>) {
@@ -96,7 +101,6 @@ impl InfoPanel {
         let liked = self.like.active;
         let like_busy = self.like.busy;
         let coins_given = self.coin.given;
-        let coin_busy = self.coin.busy;
         let favorited = self.favorite.active;
         let share_url = format!("https://www.bilibili.com/video/{}", details.bvid);
 
@@ -145,17 +149,36 @@ impl InfoPanel {
                         .gap_2()
                         .text_xs()
                         .text_color(muted)
-                        .child(details.bvid.clone())
+                        .child(
+                            div()
+                                .cursor(CursorStyle::IBeam)
+                                .child(SelectableText::with_handle(
+                                    ("info-bvid", aid),
+                                    self.selections.bvid.clone(),
+                                    details.bvid.clone(),
+                                )),
+                        )
                         .when(details.no_reprint, |this| {
                             this.child(Icon::new(IconName::Ban).size(px(12.)).text_color(danger))
-                                .child("未经作者授权，禁止转载")
+                                .child(div().cursor(CursorStyle::IBeam).child(
+                                    SelectableText::with_handle(
+                                        ("info-no-reprint", aid),
+                                        self.selections.no_reprint.clone(),
+                                        "未经作者授权，禁止转载",
+                                    ),
+                                ))
                         }),
                 )
                 .child(
                     div()
                         .text_sm()
                         .text_color(muted)
-                        .child(details.description.clone()),
+                        .cursor(CursorStyle::IBeam)
+                        .child(SelectableText::with_handle(
+                            ("info-description", aid),
+                            self.selections.description.clone(),
+                            details.description.clone(),
+                        )),
                 )
         });
 
@@ -168,16 +191,32 @@ impl InfoPanel {
                     let bvid = video.bvid.clone();
                     let cid = video.cid;
                     let title = video.title.clone();
-                    let weak = weak.clone();
-                    related_row(index, video, cx, move |_, _, cx| {
-                        let _ = weak.update(cx, |_, cx| {
-                            cx.emit(InfoEvent::PlayRelated {
-                                bvid: bvid.clone(),
-                                cid,
-                                title: title.clone(),
+                    let owner_mid = video.owner.mid;
+                    let owner_name = video.owner.name.clone();
+                    let play_weak = weak.clone();
+                    let space_weak = weak.clone();
+                    related_row(
+                        index,
+                        video,
+                        cx,
+                        move |_, _, cx| {
+                            let _ = play_weak.update(cx, |_, cx| {
+                                cx.emit(InfoEvent::PlayRelated {
+                                    bvid: bvid.clone(),
+                                    cid,
+                                    title: title.clone(),
+                                });
                             });
-                        });
-                    })
+                        },
+                        move |_, _, cx| {
+                            let _ = space_weak.update(cx, |_, cx| {
+                                cx.emit(InfoEvent::OpenSpace {
+                                    mid: owner_mid,
+                                    name: owner_name.clone(),
+                                });
+                            });
+                        },
+                    )
                 }))
         });
 
@@ -213,9 +252,24 @@ impl InfoPanel {
                                             .gap_1()
                                             .child(
                                                 div()
+                                                    .id(("info-owner", aid))
                                                     .text_sm()
                                                     .font_weight(FontWeight::MEDIUM)
                                                     .truncate()
+                                                    .cursor_pointer()
+                                                    .hover(move |this| this.text_color(link_hover))
+                                                    .on_click({
+                                                        let weak = weak.clone();
+                                                        let name = details.owner.to_string();
+                                                        move |_, _, cx| {
+                                                            let _ = weak.update(cx, |_, cx| {
+                                                                cx.emit(InfoEvent::OpenSpace {
+                                                                    mid: owner_mid,
+                                                                    name: name.clone(),
+                                                                });
+                                                            });
+                                                        }
+                                                    })
                                                     .child(details.owner.clone()),
                                             )
                                             .child(
@@ -239,7 +293,12 @@ impl InfoPanel {
                                             .text_base()
                                             .font_weight(FontWeight::MEDIUM)
                                             .line_clamp(2)
-                                            .child(details.title.clone()),
+                                            .cursor(CursorStyle::IBeam)
+                                            .child(SelectableText::with_handle(
+                                                ("info-title", aid),
+                                                self.selections.title.clone(),
+                                                details.title.clone(),
+                                            )),
                                     )
                                     .when(has_description, |this| {
                                         this.child(
@@ -282,9 +341,12 @@ impl InfoPanel {
                                     .gap_4()
                                     .text_xs()
                                     .text_color(muted)
-                                    .child(stat(IconName::Play, details.views.clone()))
-                                    .child(stat(IconName::MessageCircle, details.danmaku.clone()))
-                                    .child(stat(IconName::Calendar, details.pubdate.clone())),
+                                    .child(plain_stat(IconName::Play, details.views.clone()))
+                                    .child(plain_stat(
+                                        IconName::MessageCircle,
+                                        details.danmaku.clone(),
+                                    ))
+                                    .child(plain_stat(IconName::Calendar, details.pubdate.clone())),
                             )
                             .when_some(expanded, |this, expanded| this.child(expanded))
                             .when_some(self.refresh_error.clone(), |this, error| {
@@ -324,17 +386,32 @@ impl InfoPanel {
                                             IconName::Coins,
                                             format_count(self.coin.count).into(),
                                             coins_given > 0,
-                                            self.coin.busy,
+                                            coins_given >= 2,
                                             cx,
                                         )
                                         .on_click({
                                             let weak = weak.clone();
-                                            move |_, _, cx| {
-                                                if coins_given >= 2 || coin_busy {
+                                            move |_, window, cx| {
+                                                if coins_given >= 2 {
                                                     return;
                                                 }
-                                                let _ = weak.update(cx, |_, cx| {
-                                                    cx.emit(InfoEvent::AddCoin { aid });
+                                                let _ = weak.update(cx, |this, cx| {
+                                                    let Some(details) = this.details.clone() else {
+                                                        return;
+                                                    };
+                                                    let panel = cx.entity();
+                                                    let given = this.coin.given;
+                                                    let liked = this.like.active;
+                                                    let content = cx.new(|_| {
+                                                        CoinDialog::new(
+                                                            window,
+                                                            details.aid,
+                                                            panel,
+                                                            given,
+                                                            liked,
+                                                        )
+                                                    });
+                                                    dialog::open(window, cx, "投币", content);
                                                 });
                                             }
                                         }),
@@ -364,12 +441,7 @@ impl InfoPanel {
                                                             panel,
                                                         )
                                                     });
-                                                    window.open_dialog(cx, move |dialog, _, _| {
-                                                        dialog
-                                                            .w(px(360.))
-                                                            .title("选择收藏夹")
-                                                            .child(content.clone())
-                                                    });
+                                                    dialog::open(window, cx, "选择收藏夹", content);
                                                 });
                                             }
                                         }),
@@ -411,7 +483,7 @@ impl InfoPanel {
     }
 }
 
-fn stat(icon: IconName, value: SharedString) -> impl IntoElement {
+fn plain_stat(icon: IconName, value: SharedString) -> impl IntoElement {
     h_flex()
         .items_center()
         .gap_1()
@@ -454,17 +526,34 @@ fn related_row(
     video: &RecommendVideo,
     cx: &App,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_author_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let theme = cx.theme();
     let radius = theme.radius;
     let muted = theme.muted_foreground;
     let accent = theme.accent;
-    let cover = thumbnail(&video.pic, 240);
-    let title: SharedString = video.title.clone().into();
-    let owner: SharedString = video.owner.name.clone().into();
-    let views: SharedString = format_count(video.stat.view).into();
-    let danmaku: SharedString = format_count(video.stat.danmaku).into();
-    let duration = format_duration(video.duration);
+    let primary = theme.primary;
+    let card = VideoCard::from(video.clone());
+    let cover = thumbnail(card.cover(), 240);
+    let title = card.title().to_owned();
+    let author = card.author().to_owned();
+    let author_mid = card.author_mid();
+    let duration = card.duration().to_owned();
+    let views = card.views().to_owned();
+    let danmaku = card.danmaku().to_owned();
+
+    let author_meta = video_meta(("related-author", index as u64), author, None).text_color(muted);
+    let author_meta = if author_mid.is_some() {
+        author_meta
+            .cursor_pointer()
+            .hover(move |this| this.text_color(primary))
+            .on_click(move |event, window, cx| {
+                cx.stop_propagation();
+                on_author_click(event, window, cx);
+            })
+    } else {
+        author_meta
+    };
 
     h_flex()
         .id(("related", index))
@@ -504,7 +593,11 @@ fn related_row(
                 .flex_1()
                 .min_w_0()
                 .gap_1()
-                .child(div().text_sm().line_clamp(2).child(title))
+                .child(
+                    video_title(("related-title", index as u64), title, 2)
+                        .text_color(theme.foreground)
+                        .hover(move |this| this.text_color(primary)),
+                )
                 .child(
                     h_flex()
                         .items_center()
@@ -520,7 +613,7 @@ fn related_row(
                                 .text_size(px(9.))
                                 .child("UP"),
                         )
-                        .child(div().min_w_0().truncate().child(owner)),
+                        .child(author_meta),
                 )
                 .child(
                     h_flex()
@@ -528,8 +621,8 @@ fn related_row(
                         .gap_2()
                         .text_xs()
                         .text_color(muted)
-                        .child(stat(IconName::Play, views))
-                        .child(stat(IconName::MessageCircle, danmaku)),
+                        .child(plain_stat(IconName::Play, views.into()))
+                        .child(plain_stat(IconName::MessageCircle, danmaku.into())),
                 ),
         )
 }
@@ -544,8 +637,41 @@ fn short_label(page: &VideoPage) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::short_label;
+    use super::{SelectableText, short_label};
+    use crate::info::InfoSelections;
+    use gpui_kit::base::{TextSelection, TextSelectionHandle};
+    use gpui_kit::component::*;
+    use gpui_kit::prelude::*;
+    use gpui_kit::test::TestWindowExt;
+    use gpui_kit::{
+        Bounds, Context, CursorStyle, IntoElement, MouseButton, Render, TestAppContext,
+        TestSupportExt as _, Window, WindowBounds, WindowOptions, div, point, px, size,
+    };
     use rigili_bilibili::VideoPage;
+
+    const BVID: &str = "BV1TgWp6MEHJ";
+
+    struct Fixture {
+        selection: TextSelectionHandle,
+    }
+
+    impl Render for Fixture {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            v_flex().p_4().gap_2().child(
+                h_flex().text_xs().child(
+                    div()
+                        .id("bvid-wrap")
+                        .cursor(CursorStyle::IBeam)
+                        .test_support()
+                        .child(SelectableText::with_handle(
+                            "bvid",
+                            self.selection.clone(),
+                            BVID,
+                        )),
+                ),
+            )
+        }
+    }
 
     fn page(number: u32, part: &str) -> VideoPage {
         VideoPage {
@@ -556,9 +682,145 @@ mod tests {
         }
     }
 
+    struct GuardFixture {
+        selections: InfoSelections,
+    }
+
+    impl Render for GuardFixture {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            v_flex()
+                .id("guard-root")
+                .p_4()
+                .gap_2()
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _, window, cx| {
+                        this.selections.clear_spanning_in(window, cx);
+                    }),
+                )
+                .child(
+                    div()
+                        .id("guard-first")
+                        .test_support()
+                        .child(SelectableText::with_handle(
+                            "guard-title-text",
+                            self.selections.title.clone(),
+                            "alpha",
+                        )),
+                )
+                .child(
+                    div()
+                        .id("guard-second")
+                        .test_support()
+                        .child(SelectableText::with_handle(
+                            "guard-description-text",
+                            self.selections.description.clone(),
+                            "beta",
+                        )),
+                )
+        }
+    }
+
+    #[gpui_kit::test]
+    fn clears_selections_that_span_blocks(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (window, _) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Default::default(),
+                        size(px(400.), px(200.)),
+                    ))),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| {
+                    let selections = InfoSelections::new(window, cx);
+                    cx.new(|_| GuardFixture { selections })
+                },
+            )
+            .expect("open guard window")
+        });
+
+        let (first, second) = cx
+            .update_window(window, |_, window, cx| {
+                window.render_frame(cx);
+                (
+                    window.find("guard-first").bounds(),
+                    window.find("guard-second").bounds(),
+                )
+            })
+            .expect("guard bounds");
+        let start = point(
+            first.origin.x + px(1.),
+            first.origin.y + first.size.height / 2.,
+        );
+        let end = point(
+            second.origin.x + second.size.width - px(1.),
+            second.origin.y + second.size.height / 2.,
+        );
+
+        let selected = cx
+            .update_window(window, |_, window, cx| {
+                window.drag(start, end, cx);
+                TextSelection::selected_text(window, cx)
+            })
+            .expect("guard drag");
+        assert_eq!(selected, "");
+
+        let selected = cx
+            .update_window(window, |_, window, cx| {
+                window.drag(start, point(start.x + px(20.), start.y), cx);
+                TextSelection::selected_text(window, cx)
+            })
+            .expect("inside drag");
+        assert!(!selected.is_empty());
+    }
+
     #[test]
     fn labels_pages() {
         assert_eq!(short_label(&page(2, "第二局")), "P2 · 第二局");
         assert_eq!(short_label(&page(1, "")), "P1");
+    }
+
+    #[gpui_kit::test]
+    fn selects_a_short_text_run(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (window, _) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Default::default(),
+                        size(px(400.), px(200.)),
+                    ))),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| {
+                    let selection = TextSelectionHandle::new("", cx);
+                    selection.refresh_window_on_change(window, cx).detach();
+                    cx.new(|_| Fixture { selection })
+                },
+            )
+            .expect("open selection window")
+        });
+
+        let bounds = cx
+            .update_window(window, |_, window, cx| {
+                window.render_frame(cx);
+                window.find("bvid-wrap").bounds()
+            })
+            .expect("bvid bounds");
+        let y = bounds.origin.y + bounds.size.height / 2.;
+        let start = point(bounds.origin.x + px(1.), y);
+        let end = point(bounds.origin.x + bounds.size.width - px(1.), y);
+
+        let selected = cx
+            .update_window(window, |_, window, cx| {
+                window.drag(start, end, cx);
+                TextSelection::selected_text(window, cx)
+            })
+            .expect("select bvid");
+        assert_eq!(selected, BVID);
     }
 }

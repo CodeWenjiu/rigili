@@ -14,3 +14,6 @@ rigili_player.workspace = true
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client"] }
 image = { version = "0.25", default-features = false }
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }

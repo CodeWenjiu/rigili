@@ -1,4 +1,5 @@
 use gpui_kit::assets::IconName;
+use gpui_kit::base::SelectableText;
 use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
@@ -9,7 +10,7 @@ use gpui_kit::component::text::TextView;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_bilibili::api::comment::CommentSort;
+use rigili_bilibili::api::comment::{CommentReply, CommentSort};
 use rigili_bilibili::{Comment, CommentPage};
 use rigili_core::client;
 use rigili_core::runtime::spawn_api;
@@ -18,8 +19,26 @@ use rigili_core::{
 };
 
 use super::{
-    COMMENT_AVATAR, COMMENT_MAX_LEN, InfoPanel, NESTED_COMMENT_AVATAR, NESTED_COMMENT_LIMIT,
+    COMMENT_AVATAR, COMMENT_MAX_LEN, InfoEvent, InfoPanel, NESTED_COMMENT_AVATAR,
+    NESTED_COMMENT_LIMIT,
 };
+
+#[derive(Default)]
+pub(super) struct ReplyThread {
+    replies: Vec<Comment>,
+    page: u32,
+    total: u64,
+    more: bool,
+    loading: bool,
+    error: Option<String>,
+}
+
+#[derive(Clone)]
+pub(super) struct ReplyTarget {
+    pub(super) root: u64,
+    pub(super) parent: u64,
+    pub(super) uname: SharedString,
+}
 
 impl InfoPanel {
     pub(super) fn reset_comments(&mut self) {
@@ -32,6 +51,12 @@ impl InfoPanel {
         self.comments_error = None;
         self.comments_more_loading = false;
         self.comments_more_error = None;
+        self.reply_threads.clear();
+        self.reply_target = None;
+        self.reply_draft = None;
+        self._reply_draft_sub = None;
+        self.reply_sending = false;
+        self.reply_error = None;
         self.comments_scroll.set_offset(point(px(0.), px(0.)));
     }
 
@@ -58,6 +83,9 @@ impl InfoPanel {
         self.comments_more_error = None;
         self.comments.clear();
         self.comments_more = false;
+        self.reply_threads.clear();
+        self.reply_target = None;
+        self.reply_error = None;
         self.comments_scroll.set_offset(point(px(0.), px(0.)));
         cx.notify();
 
@@ -138,6 +166,232 @@ impl InfoPanel {
                     }
                 }
                 cx.notify();
+            },
+        );
+    }
+
+    fn load_next_replies(&mut self, root: u64, cx: &mut Context<Self>) {
+        let page = self
+            .reply_threads
+            .get(&root)
+            .map_or(1, |thread| thread.page + 1);
+        self.load_replies(root, page, cx);
+    }
+
+    fn load_replies(&mut self, root: u64, page: u32, cx: &mut Context<Self>) {
+        let Some(details) = self.details.clone() else {
+            return;
+        };
+        let thread = self.reply_threads.entry(root).or_default();
+        if thread.loading {
+            return;
+        }
+        if page == 1
+            && thread.replies.is_empty()
+            && let Some(comment) = self.comments.iter().find(|comment| comment.rpid == root)
+        {
+            thread.replies = comment
+                .replies()
+                .iter()
+                .take(NESTED_COMMENT_LIMIT)
+                .cloned()
+                .collect();
+        }
+        let client = match client::get(cx) {
+            Ok(client) => client,
+            Err(error) => {
+                thread.error = Some(api_error_message(error));
+                cx.notify();
+                return;
+            }
+        };
+        let aid = details.aid;
+        thread.loading = true;
+        thread.error = None;
+        cx.notify();
+
+        spawn_api(
+            cx,
+            async move { client.comment_replies(aid, root, page).await },
+            move |this, result, cx| {
+                if this.details.as_ref().map(|details| details.aid) != Some(aid) {
+                    return;
+                }
+                let Some(thread) = this.reply_threads.get_mut(&root) else {
+                    return;
+                };
+                thread.loading = false;
+                match result {
+                    Ok(CommentPage {
+                        page: info,
+                        replies,
+                    }) => {
+                        let replies = replies.unwrap_or_default();
+                        if page > 1 {
+                            thread.replies.extend(replies);
+                        } else {
+                            thread.replies = replies;
+                        }
+                        thread.page = if info.num == 0 { page } else { info.num };
+                        thread.total = info.count.max(info.acount);
+                        thread.more = (thread.replies.len() as u64) < thread.total;
+                    }
+                    Err(error) => thread.error = Some(api_task_error_message(error, cx)),
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    fn collapse_replies(&mut self, root: u64, cx: &mut Context<Self>) {
+        self.reply_threads.remove(&root);
+        if self
+            .reply_target
+            .as_ref()
+            .is_some_and(|target| target.root == root)
+        {
+            self.reply_target = None;
+            self.reply_error = None;
+        }
+        cx.notify();
+    }
+
+    fn reply_draft(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<TextareaState> {
+        if let Some(draft) = &self.reply_draft {
+            return draft.clone();
+        }
+        let draft = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .auto_grow(1, 4)
+                .submit_on_enter(true)
+                .placeholder("回复评论")
+        });
+        let sub =
+            cx.subscribe_in(
+                &draft,
+                window,
+                |this, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::Change => {
+                        if this.reply_error.is_some() {
+                            this.reply_error = None;
+                            cx.notify();
+                        }
+                    }
+                    InputEvent::PressEnter { shift: false, .. } => this.submit_reply(window, cx),
+                    _ => {}
+                },
+            );
+        self.reply_draft = Some(draft.clone());
+        self._reply_draft_sub = Some(sub);
+        draft
+    }
+
+    fn begin_reply(
+        &mut self,
+        root: u64,
+        parent: u64,
+        uname: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let same_target = self
+            .reply_target
+            .as_ref()
+            .is_some_and(|target| target.parent == parent);
+        self.reply_target = Some(ReplyTarget {
+            root,
+            parent,
+            uname,
+        });
+        self.reply_error = None;
+        let draft = self.reply_draft(window, cx);
+        if !same_target {
+            draft.update(cx, |state, cx| state.set_value("", window, cx));
+        }
+        window.defer(cx, move |window, cx| {
+            draft.update(cx, |state, cx| state.focus(window, cx));
+        });
+        cx.notify();
+    }
+
+    fn submit_reply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.reply_sending {
+            return;
+        }
+        let Some(target) = self.reply_target.clone() else {
+            return;
+        };
+        let Some(draft) = self.reply_draft.clone() else {
+            return;
+        };
+        let content = draft.read(cx).value().trim().to_owned();
+        if content.is_empty() {
+            self.reply_error = Some("请输入回复内容".into());
+            cx.notify();
+            return;
+        }
+        if content.chars().count() > COMMENT_MAX_LEN {
+            self.reply_error = Some(format!("回复不能超过 {COMMENT_MAX_LEN} 字"));
+            cx.notify();
+            return;
+        }
+        let Some(details) = self.details.clone() else {
+            return;
+        };
+        let client = match client::get(cx) {
+            Ok(client) => client,
+            Err(error) => {
+                self.reply_error = Some(api_error_message(error));
+                cx.notify();
+                return;
+            }
+        };
+
+        let aid = details.aid;
+        let window_handle = window.window_handle();
+        let reply = CommentReply {
+            root: target.root,
+            parent: target.parent,
+        };
+        self.reply_sending = true;
+        self.reply_error = None;
+        cx.notify();
+
+        spawn_api(
+            cx,
+            async move { client.add_comment(aid, &content, Some(reply)).await },
+            move |this, result, cx| {
+                if this.details.as_ref().map(|details| details.aid) != Some(aid) {
+                    return;
+                }
+                this.reply_sending = false;
+                match result {
+                    Ok(()) => {
+                        let _ = window_handle.update(cx, |_, window, cx| {
+                            if let Some(draft) = this.reply_draft.clone() {
+                                draft.update(cx, |state, cx| state.set_value("", window, cx));
+                            }
+                            window.push_notification(Notification::success("回复已发布"), cx);
+                        });
+                        this.reply_target = None;
+                        if let Some(comment) = this
+                            .comments
+                            .iter_mut()
+                            .find(|comment| comment.rpid == target.root)
+                        {
+                            comment.rcount = comment.rcount.saturating_add(1);
+                        }
+                        this.load_replies(target.root, 1, cx);
+                    }
+                    Err(error) => {
+                        this.reply_error = Some(api_task_error_message(error, cx));
+                        cx.notify();
+                    }
+                }
             },
         );
     }
@@ -313,7 +567,7 @@ impl InfoPanel {
 
         spawn_api(
             cx,
-            async move { client.add_comment(aid, &content).await },
+            async move { client.add_comment(aid, &content, None).await },
             move |this, result, cx| {
                 if this.details.as_ref().map(|details| details.aid) != Some(aid) {
                     return;
@@ -381,7 +635,7 @@ impl InfoPanel {
                     .border_b_1()
                     .border_color(border)
                     .pb_3()
-                    .child(self.render_comment(comment, 0, cx))
+                    .child(self.render_comment(comment, 0, comment.rpid, cx))
             })
             .collect::<Vec<_>>();
 
@@ -437,11 +691,83 @@ impl InfoPanel {
             .into_any_element()
     }
 
-    fn render_comment(&self, comment: &Comment, depth: usize, cx: &App) -> AnyElement {
+    fn render_reply_composer(&self, cx: &mut Context<Self>) -> AnyElement {
+        let (Some(draft), Some(target)) = (self.reply_draft.as_ref(), self.reply_target.as_ref())
+        else {
+            return div().into_any_element();
+        };
+        let muted = cx.theme().muted_foreground;
+        let danger = cx.theme().danger;
+
+        v_flex()
+            .gap_2()
+            .pt_1()
+            .child(Textarea::new(draft).w_full())
+            .when_some(self.reply_error.clone(), |this, error| {
+                this.child(div().text_xs().text_color(danger).child(error))
+            })
+            .child(
+                h_flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(format!("回复 @{}", target.uname)),
+                    )
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                Button::new("reply-cancel")
+                                    .ghost()
+                                    .small()
+                                    .label("取消")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.reply_target = None;
+                                        this.reply_error = None;
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                Button::new("reply-submit")
+                                    .primary()
+                                    .small()
+                                    .disabled(self.reply_sending)
+                                    .label(if self.reply_sending {
+                                        "回复中…"
+                                    } else {
+                                        "回复"
+                                    })
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.submit_reply(window, cx)
+                                    })),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_comment(
+        &self,
+        comment: &Comment,
+        depth: usize,
+        root: u64,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let primary = cx.theme().primary;
+        let link_hover = cx.theme().link_hover;
         let foreground = cx.theme().foreground;
         let muted = cx.theme().muted_foreground;
+        let danger = cx.theme().danger;
         let member = &comment.member;
+        let mid = member.mid;
+        let uname: SharedString = member.uname.clone().into();
         let level = member.level_info.current_level;
         let time = if comment.reply_control.time_desc.is_empty() {
             format_date(comment.ctime)
@@ -459,28 +785,108 @@ impl InfoPanel {
             .as_ref()
             .is_some_and(|emotes| !emotes.is_empty());
         let message = if has_emotes {
-            TextView::markdown(
-                ("comment-message", comment.rpid),
-                message_markdown(&comment.content),
-            )
-            .text_sm()
-            .line_height(relative(1.5))
-            .text_color(foreground)
-            .selectable(false)
-            .into_any_element()
+            div()
+                .cursor(CursorStyle::IBeam)
+                .child(
+                    TextView::markdown(
+                        ("comment-message", comment.rpid),
+                        message_markdown(&comment.content),
+                    )
+                    .text_sm()
+                    .line_height(relative(1.5))
+                    .text_color(foreground),
+                )
+                .into_any_element()
         } else {
             div()
                 .text_sm()
                 .line_height(relative(1.5))
-                .child(comment.content.message.clone())
+                .cursor(CursorStyle::IBeam)
+                .child(SelectableText::new(
+                    ("comment-message", comment.rpid),
+                    comment.content.message.clone(),
+                ))
                 .into_any_element()
         };
-        let nested = comment
-            .replies()
+
+        let thread = (depth == 0)
+            .then(|| self.reply_threads.get(&comment.rpid))
+            .flatten();
+        let preview = comment.replies();
+        let nested_source: &[Comment] = match thread {
+            Some(thread) => &thread.replies,
+            None => &preview[..preview.len().min(NESTED_COMMENT_LIMIT)],
+        };
+        let nested = nested_source
             .iter()
-            .take(NESTED_COMMENT_LIMIT)
-            .map(|reply| self.render_comment(reply, depth + 1, cx))
+            .map(|reply| self.render_comment(reply, depth + 1, root, cx))
             .collect::<Vec<_>>();
+
+        let thread_control: Option<AnyElement> = if depth != 0 {
+            None
+        } else if let Some(thread) = thread {
+            Some(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .when(thread.loading, |this| this.child(Spinner::new().small()))
+                    .when_some(thread.error.clone(), |this, error| {
+                        this.child(div().text_xs().text_color(danger).child(error))
+                            .child(
+                                Button::new(("comment-replies-retry", comment.rpid))
+                                    .small()
+                                    .label("重试")
+                                    .on_click(cx.listener({
+                                        let rpid = comment.rpid;
+                                        move |this, _, _, cx| this.load_next_replies(rpid, cx)
+                                    })),
+                            )
+                    })
+                    .when(thread.more && !thread.loading, |this| {
+                        this.child(
+                            Button::new(("comment-replies-more", comment.rpid))
+                                .small()
+                                .ghost()
+                                .label("展开更多回复")
+                                .on_click(cx.listener({
+                                    let rpid = comment.rpid;
+                                    move |this, _, _, cx| this.load_next_replies(rpid, cx)
+                                })),
+                        )
+                    })
+                    .child(
+                        Button::new(("comment-replies-collapse", comment.rpid))
+                            .small()
+                            .ghost()
+                            .label("收起回复")
+                            .on_click(cx.listener({
+                                let rpid = comment.rpid;
+                                move |this, _, _, cx| this.collapse_replies(rpid, cx)
+                            })),
+                    )
+                    .into_any_element(),
+            )
+        } else if comment.rcount as usize > nested_source.len() {
+            Some(
+                Button::new(("comment-replies-expand", comment.rpid))
+                    .small()
+                    .ghost()
+                    .label("展开回复")
+                    .on_click(cx.listener({
+                        let rpid = comment.rpid;
+                        move |this, _, _, cx| this.load_next_replies(rpid, cx)
+                    }))
+                    .into_any_element(),
+            )
+        } else {
+            None
+        };
+
+        let replying = self
+            .reply_target
+            .as_ref()
+            .is_some_and(|target| target.parent == comment.rpid);
+        let logged_in = client::get(cx).is_ok_and(|client| client.has_session());
 
         v_flex()
             .gap_2()
@@ -489,10 +895,25 @@ impl InfoPanel {
                     .items_start()
                     .gap_2()
                     .child(
-                        Avatar::new()
-                            .src(member.avatar_url())
-                            .name(member.uname.clone())
-                            .size(avatar),
+                        div()
+                            .id(("comment-avatar", comment.rpid))
+                            .when(mid > 0, |this| {
+                                this.cursor_pointer().on_click(cx.listener({
+                                    let uname = uname.clone();
+                                    move |_, _, _, cx| {
+                                        cx.emit(InfoEvent::OpenSpace {
+                                            mid,
+                                            name: uname.to_string(),
+                                        });
+                                    }
+                                }))
+                            })
+                            .child(
+                                Avatar::new()
+                                    .src(member.avatar_url())
+                                    .name(member.uname.clone())
+                                    .size(avatar),
+                            ),
                     )
                     .child(
                         v_flex()
@@ -505,8 +926,22 @@ impl InfoPanel {
                                     .gap_2()
                                     .child(
                                         div()
+                                            .id(("comment-author", comment.rpid))
                                             .text_sm()
                                             .text_color(primary)
+                                            .when(mid > 0, |this| {
+                                                this.cursor_pointer()
+                                                    .hover(move |this| this.text_color(link_hover))
+                                                    .on_click(cx.listener({
+                                                        let uname = uname.clone();
+                                                        move |_, _, _, cx| {
+                                                            cx.emit(InfoEvent::OpenSpace {
+                                                                mid,
+                                                                name: uname.to_string(),
+                                                            });
+                                                        }
+                                                    }))
+                                            })
                                             .child(member.uname.clone()),
                                     )
                                     .when(level > 0, |this| {
@@ -541,12 +976,37 @@ impl InfoPanel {
                                             "{} 条回复",
                                             format_count(comment.rcount)
                                         ))
+                                    })
+                                    .when(logged_in, |this| {
+                                        this.child(
+                                            Button::new(("comment-reply-button", comment.rpid))
+                                                .text()
+                                                .small()
+                                                .label("回复")
+                                                .on_click(cx.listener({
+                                                    let uname = uname.clone();
+                                                    let rpid = comment.rpid;
+                                                    move |this, _, window, cx| {
+                                                        this.begin_reply(
+                                                            root,
+                                                            rpid,
+                                                            uname.clone(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    }
+                                                })),
+                                        )
                                     }),
-                            ),
+                            )
+                            .when(replying, |this| this.child(self.render_reply_composer(cx))),
                     ),
             )
             .when(!nested.is_empty(), |this| {
                 this.child(v_flex().gap_2().pl(px(36.)).children(nested))
+            })
+            .when_some(thread_control, |this, control| {
+                this.child(div().pl(px(36.)).child(control))
             })
             .into_any_element()
     }

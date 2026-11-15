@@ -1,13 +1,25 @@
-rigili_macro::mod_prv!(comments, details, favorite, header, interaction, render);
+rigili_macro::mod_prv!(
+    coin,
+    comments,
+    details,
+    dialog,
+    favorite,
+    header,
+    interaction,
+    render
+);
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use gpui_kit::base::{TextSelection, TextSelectionHandle};
 use gpui_kit::component::input::TextareaState;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::{ArchiveRelation, Comment, RecommendVideo, VideoInfo, VideoPage};
 use rigili_core::{format_count, format_datetime};
 
+use comments::{ReplyTarget, ReplyThread};
 use interaction::{CoinState, FlagState, ToggleState};
 
 const INFO_WIDTH: Pixels = px(340.);
@@ -34,8 +46,9 @@ pub(super) enum InfoEvent {
         aid: u64,
         like: bool,
     },
-    AddCoin {
-        aid: u64,
+    OpenSpace {
+        mid: u64,
+        name: String,
     },
     Reload,
 }
@@ -123,16 +136,86 @@ pub(super) struct InfoPanel {
     _draft_sub: Option<Subscription>,
     comment_sending: bool,
     comment_error: Option<String>,
+    reply_threads: HashMap<u64, ReplyThread>,
+    reply_target: Option<ReplyTarget>,
+    reply_draft: Option<Entity<TextareaState>>,
+    _reply_draft_sub: Option<Subscription>,
+    reply_sending: bool,
+    reply_error: Option<String>,
     watch_later: FlagState,
     refresh_busy: bool,
     refresh_error: Option<String>,
+    selections: InfoSelections,
+}
+
+#[derive(Clone)]
+pub(super) struct InfoSelections {
+    pub(super) title: TextSelectionHandle,
+    pub(super) bvid: TextSelectionHandle,
+    pub(super) no_reprint: TextSelectionHandle,
+    pub(super) description: TextSelectionHandle,
+}
+
+impl InfoSelections {
+    pub(super) fn new(window: &Window, cx: &mut App) -> Self {
+        fn selection(window: &Window, cx: &mut App) -> TextSelectionHandle {
+            let handle = TextSelectionHandle::new("", cx);
+            handle.refresh_window_on_change(window, cx).detach();
+            handle
+        }
+
+        let selections = Self {
+            title: selection(window, cx),
+            bvid: selection(window, cx),
+            no_reprint: selection(window, cx),
+            description: selection(window, cx),
+        };
+        let window_handle = window.window_handle();
+        for handle in [
+            &selections.title,
+            &selections.bvid,
+            &selections.no_reprint,
+            &selections.description,
+        ] {
+            let selections = selections.clone();
+            handle
+                .subscribe(
+                    move |_, cx| selections.clear_spanning(window_handle, cx),
+                    cx,
+                )
+                .detach();
+        }
+        selections
+    }
+
+    fn spans_blocks(&self, cx: &App) -> bool {
+        let selected = [
+            self.title.snapshot(cx).is_some(),
+            self.bvid.snapshot(cx).is_some() || self.no_reprint.snapshot(cx).is_some(),
+            self.description.snapshot(cx).is_some(),
+        ];
+        selected.into_iter().filter(|selected| *selected).count() > 1
+    }
+
+    fn clear_spanning(&self, window: AnyWindowHandle, cx: &mut App) {
+        if self.spans_blocks(cx) {
+            let _ = window.update(cx, |_, window, cx| self.clear_spanning_in(window, cx));
+        }
+    }
+
+    pub(super) fn clear_spanning_in(&self, window: &mut Window, cx: &mut App) {
+        if self.spans_blocks(cx) {
+            TextSelection::clear(window, cx);
+        }
+    }
 }
 
 impl EventEmitter<InfoEvent> for InfoPanel {}
 
 impl InfoPanel {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(selections: InfoSelections) -> Self {
         Self {
+            selections,
             details: None,
             selected_cid: None,
             busy: false,
@@ -162,18 +245,20 @@ impl InfoPanel {
             _draft_sub: None,
             comment_sending: false,
             comment_error: None,
+            reply_threads: HashMap::new(),
+            reply_target: None,
+            reply_draft: None,
+            _reply_draft_sub: None,
+            reply_sending: false,
+            reply_error: None,
             watch_later: FlagState::default(),
             refresh_busy: false,
             refresh_error: None,
         }
     }
 
-    pub(super) fn is_loaded(&self) -> bool {
-        self.details.is_some()
-    }
-
     pub(super) fn clear(&mut self, cx: &mut Context<Self>) {
-        *self = Self::new();
+        *self = Self::new(self.selections.clone());
         cx.notify();
     }
 
@@ -271,6 +356,10 @@ impl InfoPanel {
         cx.notify();
     }
 
+    pub(super) fn clear_spanning_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.selections.clear_spanning_in(window, cx);
+    }
+
     pub(super) fn set_follow_busy(&mut self, busy: bool, cx: &mut Context<Self>) {
         self.follow.set_busy(busy);
         cx.notify();
@@ -300,13 +389,8 @@ impl InfoPanel {
         cx.notify();
     }
 
-    pub(super) fn set_coin_busy(&mut self, busy: bool, cx: &mut Context<Self>) {
-        self.coin.set_busy(busy);
-        cx.notify();
-    }
-
-    pub(super) fn grant_coin(&mut self, cx: &mut Context<Self>) {
-        self.coin.grant();
+    pub(super) fn grant_coins(&mut self, count: u32, cx: &mut Context<Self>) {
+        self.coin.grant(count);
         cx.notify();
     }
 

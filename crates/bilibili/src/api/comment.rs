@@ -1,6 +1,7 @@
 use crate::{ApiError, Client, CommentPage};
 
 const COMMENTS_URL: &str = "https://api.bilibili.com/x/v2/reply";
+const REPLIES_URL: &str = "https://api.bilibili.com/x/v2/reply/reply";
 const ADD_URL: &str = "https://api.bilibili.com/x/v2/reply/add";
 const PAGE_SIZE: u32 = 20;
 
@@ -18,6 +19,12 @@ impl CommentSort {
             Self::Latest => "0",
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CommentReply {
+    pub root: u64,
+    pub parent: u64,
 }
 
 impl Client {
@@ -41,17 +48,42 @@ impl Client {
         .await
     }
 
-    pub async fn add_comment(&self, aid: u64, message: &str) -> Result<(), ApiError> {
-        self.post_form_ack(
-            ADD_URL,
+    pub async fn comment_replies(
+        &self,
+        aid: u64,
+        root: u64,
+        page: u32,
+    ) -> Result<CommentPage, ApiError> {
+        self.get_json(
+            REPLIES_URL,
             &[
                 ("type", "1".to_owned()),
                 ("oid", aid.to_string()),
-                ("message", message.to_owned()),
-                ("plat", "1".to_owned()),
-                ("csrf", self.csrf()?),
+                ("root", root.to_string()),
+                ("ps", PAGE_SIZE.to_string()),
+                ("pn", page.max(1).to_string()),
             ],
         )
         .await
+    }
+
+    pub async fn add_comment(
+        &self,
+        aid: u64,
+        message: &str,
+        reply: Option<CommentReply>,
+    ) -> Result<(), ApiError> {
+        let mut form = vec![
+            ("type", "1".to_owned()),
+            ("oid", aid.to_string()),
+            ("message", message.to_owned()),
+            ("plat", "1".to_owned()),
+        ];
+        if let Some(reply) = reply {
+            form.push(("root", reply.root.to_string()));
+            form.push(("parent", reply.parent.to_string()));
+        }
+        form.push(("csrf", self.csrf()?));
+        self.post_form_ack(ADD_URL, &form).await
     }
 }
