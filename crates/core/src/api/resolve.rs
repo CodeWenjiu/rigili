@@ -1,7 +1,7 @@
 use rigili_bilibili::ApiError;
 
-use crate::backend::Backend;
-use crate::event::OpenVideo;
+use super::backend::Backend;
+use crate::ui::OpenVideo;
 
 pub async fn resolve_season(
     backend: Backend,

@@ -1,8 +1,8 @@
 use gpui_kit::App;
 
-use crate::format::api_error_message;
+use super::runtime::ApiTaskError;
 use crate::login::expire;
-use crate::runtime::ApiTaskError;
+use crate::text::api_error_message;
 
 pub fn api_task_error_message(error: ApiTaskError, cx: &mut App) -> String {
     match error {
