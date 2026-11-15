@@ -16,3 +16,6 @@ pub struct OpenSpace {
     pub mid: u64,
     pub name: String,
 }
+
+#[derive(Clone)]
+pub struct FocusMain;

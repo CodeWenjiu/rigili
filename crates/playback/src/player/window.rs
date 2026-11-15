@@ -9,18 +9,21 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
+use super::history::History;
 use super::surface::PlayerView;
 use crate::info::{InfoEvent, InfoPanel, InfoSelections, InfoTab};
-use crate::request::{PlaybackRequest, PlaybackSource, Streams, resolve, resolve_streams};
+use crate::request::{
+    PlaybackRequest, PlaybackSource, Streams, resolve, resolve_streams, resolve_streams_at,
+};
 use crate::shortcuts::{
-    Reload, SeekBack, SpeedDown, SpeedUp, ToggleComments, ToggleFullscreen, ToggleInfo, ToggleMute,
-    TogglePlayback,
+    HistoryBack, HistoryForward, Reload, SeekBack, SpeedDown, SpeedUp, SwitchToMain,
+    ToggleComments, ToggleFullscreen, ToggleInfo, ToggleMute, TogglePlayback,
 };
 use rigili_bilibili::Client;
-use rigili_core::OpenSpace;
 use rigili_core::api_error_message;
 use rigili_core::client;
 use rigili_core::runtime::{ApiTaskError, spawn_api};
+use rigili_core::{FocusMain, OpenSpace};
 
 const INFO_MIN_WINDOW: Pixels = px(1000.);
 
@@ -30,6 +33,7 @@ pub struct PlayerWindow {
     title: SharedString,
     client: Option<Arc<Client>>,
     request: Option<PlaybackRequest>,
+    history: History,
     loading: bool,
     is_live: bool,
     error: Option<String>,
@@ -40,6 +44,7 @@ pub struct PlayerWindow {
 }
 
 impl EventEmitter<OpenSpace> for PlayerWindow {}
+impl EventEmitter<FocusMain> for PlayerWindow {}
 
 impl PlayerWindow {
     fn new(window: &mut Window, cx: &mut Context<Self>, request: PlaybackRequest) -> Self {
@@ -48,7 +53,7 @@ impl PlayerWindow {
         let info = cx.new(|_| InfoPanel::new(selections));
         let info_sub = cx.subscribe(&info, |this, _, event: &InfoEvent, cx| match event {
             InfoEvent::SelectPage(cid) => this.select_page(*cid, cx),
-            InfoEvent::PlayRelated { bvid, cid, title } => this.start(
+            InfoEvent::PlayRelated { bvid, cid, title } => this.navigate(
                 PlaybackRequest::video(title.clone(), bvid.clone(), Some(*cid)),
                 cx,
             ),
@@ -70,6 +75,7 @@ impl PlayerWindow {
             title: request.title.clone().into(),
             client,
             request: None,
+            history: History::default(),
             loading: false,
             is_live: false,
             error,
@@ -79,12 +85,46 @@ impl PlayerWindow {
             _info_sub: info_sub,
         };
         if view.client.is_some() {
+            view.history.open(request.source.clone());
             view.start(request, cx);
         }
         view
     }
 
     pub fn play(&mut self, request: PlaybackRequest, cx: &mut Context<Self>) {
+        self.navigate(request, cx);
+    }
+
+    fn navigate(&mut self, request: PlaybackRequest, cx: &mut Context<Self>) {
+        self.history.open(request.source.clone());
+        self.start(request, cx);
+    }
+
+    fn go_back(&mut self, cx: &mut Context<Self>) {
+        if self.client.is_none() {
+            return;
+        }
+        if let Some(source) = self.history.back() {
+            self.start_source(source, cx);
+        }
+    }
+
+    fn go_forward(&mut self, cx: &mut Context<Self>) {
+        if self.client.is_none() {
+            return;
+        }
+        if let Some(source) = self.history.forward() {
+            self.start_source(source, cx);
+        }
+    }
+
+    fn start_source(&mut self, source: PlaybackSource, cx: &mut Context<Self>) {
+        let request = match source {
+            PlaybackSource::Video { bvid, cid } => PlaybackRequest::video(String::new(), bvid, cid),
+            PlaybackSource::Live { room_id } => {
+                PlaybackRequest::live(format!("直播间 {room_id}"), room_id)
+            }
+        };
         self.start(request, cx);
     }
 
@@ -111,10 +151,12 @@ impl PlayerWindow {
         let generation = self.generation;
         let source = request.source.clone();
         self.is_live = matches!(source, PlaybackSource::Live { .. });
-        self.title = request.title.clone().into();
-        let title = self.title.clone();
-        self.player
-            .update(cx, |player, cx| player.set_title(title, cx));
+        if !request.title.is_empty() {
+            self.title = request.title.clone().into();
+            let title = self.title.clone();
+            self.player
+                .update(cx, |player, cx| player.set_title(title, cx));
+        }
         self.request = Some(request);
         self.loading = true;
         self.error = None;
@@ -245,6 +287,7 @@ impl PlayerWindow {
                 this.loading = false;
                 match result {
                     Ok(streams) => {
+                        this.history.remember_cid(cid);
                         this.info.update(cx, |info, cx| info.select(cid, cx));
                         this.player
                             .update(cx, |player, cx| player.load_streams(streams, false, cx));
@@ -270,6 +313,60 @@ impl PlayerWindow {
             self.start(request, cx);
         }
     }
+
+    fn reload(&mut self, cx: &mut Context<Self>) {
+        if self.loading {
+            return;
+        }
+        let Some(source) = self.request.as_ref().map(|request| request.source.clone()) else {
+            return;
+        };
+        if matches!(source, PlaybackSource::Live { .. }) {
+            if let Some(request) = self.request.clone() {
+                self.start(request, cx);
+            }
+            return;
+        }
+        self.info.update(cx, |info, cx| info.reload_current(cx));
+        self.reload_stream(cx);
+    }
+
+    fn reload_stream(&mut self, cx: &mut Context<Self>) {
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        let Some(PlaybackSource::Video { bvid, cid }) =
+            self.request.as_ref().map(|request| request.source.clone())
+        else {
+            return;
+        };
+        let Some(cid) = cid else {
+            return;
+        };
+        let preferred = self.player.read(cx).selected_quality();
+        let generation = self.generation;
+        self.loading = true;
+        self.error = None;
+        cx.notify();
+
+        spawn_api(
+            cx,
+            async move { resolve_streams_at(&client, &bvid, cid, Some(preferred)).await },
+            move |this, result, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                this.loading = false;
+                match result {
+                    Ok(streams) => this
+                        .player
+                        .update(cx, |player, cx| player.reload_streams(streams, cx)),
+                    Err(error) => this.handle_error(error, cx),
+                }
+                cx.notify();
+            },
+        );
+    }
 }
 
 impl Render for PlayerWindow {
@@ -289,6 +386,8 @@ impl Render for PlayerWindow {
         let show_info = panel_open && !self.is_live && (fullscreen || wide_enough);
         let title = self.title.clone();
         let weak = cx.entity().downgrade();
+        let can_go_back = self.history.can_back();
+        let can_go_forward = self.history.can_forward();
 
         if window.window_title() != title.as_ref() {
             window.set_window_title(&title);
@@ -314,6 +413,12 @@ impl Render for PlayerWindow {
             .on_action(cx.listener(|this, _: &SeekBack, _, cx| {
                 this.player.update(cx, |player, cx| player.seek_by(-5., cx));
             }))
+            .on_action(cx.listener(|this, _: &HistoryBack, _, cx| {
+                this.go_back(cx);
+            }))
+            .on_action(cx.listener(|this, _: &HistoryForward, _, cx| {
+                this.go_forward(cx);
+            }))
             .on_action(cx.listener(|this, _: &SpeedDown, _, cx| {
                 this.player
                     .update(cx, |player, cx| player.adjust_speed(false, cx));
@@ -336,24 +441,58 @@ impl Render for PlayerWindow {
                 this.toggle_panel(InfoTab::Comments, window, cx);
             }))
             .on_action(cx.listener(|this, _: &Reload, _, cx| {
-                this.info.update(cx, |info, cx| info.reload_current(cx));
+                this.reload(cx);
+            }))
+            .on_action(cx.listener(|_, _: &SwitchToMain, _, cx| {
+                cx.emit(FocusMain);
             }))
             .when(!fullscreen, |this| {
-                this.child(TitleBar::new().child(
-                    h_flex().w_full().items_center().justify_end().pr_6().when(
-                        !client_decorated,
-                        |this| {
-                            this.child(
-                                Button::new("window-close")
-                                    .ghost()
-                                    .icon(IconName::Close)
-                                    .accessibility_label("关闭窗口")
-                                    .tooltip("关闭")
-                                    .on_click(|_, window, _| window.remove_window()),
+                this.child(
+                    TitleBar::new().child(
+                        h_flex()
+                            .w_full()
+                            .items_center()
+                            .justify_between()
+                            .pr_6()
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        Button::new("player-back")
+                                            .ghost()
+                                            .icon(IconName::ChevronLeft)
+                                            .accessibility_label("上一个视频")
+                                            .tooltip("上一个视频")
+                                            .disabled(!can_go_back)
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| this.go_back(cx)),
+                                            ),
+                                    )
+                                    .child(
+                                        Button::new("player-forward")
+                                            .ghost()
+                                            .icon(IconName::ChevronRight)
+                                            .accessibility_label("下一个视频")
+                                            .tooltip("下一个视频")
+                                            .disabled(!can_go_forward)
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| this.go_forward(cx)),
+                                            ),
+                                    ),
                             )
-                        },
+                            .when(!client_decorated, |this| {
+                                this.child(
+                                    Button::new("window-close")
+                                        .ghost()
+                                        .icon(IconName::Close)
+                                        .accessibility_label("关闭窗口")
+                                        .tooltip("关闭")
+                                        .on_click(|_, window, _| window.remove_window()),
+                                )
+                            }),
                     ),
-                ))
+                )
             })
             .child(
                 h_flex()

@@ -166,6 +166,7 @@ impl PlayerView {
             || self.volume_dragging
             || self.volume_popup_open
             || self.quality_popover_open
+            || self.speed_popover_open
     }
 
     pub(super) fn controls_idle(&self) -> bool {

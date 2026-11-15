@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use rigili_bilibili::{ApiError, Client, Dash, PlayUrl, RecommendVideo, VideoInfo};
+use rigili_bilibili::{ApiError, Client, Dash, DashVideo, PlayUrl, RecommendVideo, VideoInfo};
 use tokio::task::JoinSet;
 
 const PROBE_FAST_ENOUGH: Duration = Duration::from_millis(500);
@@ -13,7 +13,7 @@ pub struct PlaybackRequest {
     pub source: PlaybackSource,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlaybackSource {
     Video { bvid: String, cid: Option<u64> },
     Live { room_id: u64 },
@@ -101,6 +101,15 @@ pub(super) async fn resolve_streams(
     bvid: &str,
     cid: u64,
 ) -> Result<Streams, ApiError> {
+    resolve_streams_at(client, bvid, cid, None).await
+}
+
+pub(super) async fn resolve_streams_at(
+    client: &Arc<Client>,
+    bvid: &str,
+    cid: u64,
+    preferred_quality: Option<u32>,
+) -> Result<Streams, ApiError> {
     let playurl = client.playurl(bvid, cid).await?;
     let Some(dash) = playurl.dash.as_ref() else {
         rigili_monitor::monitor!("stream", "playurl {bvid}/{cid} returned no DASH manifest");
@@ -112,7 +121,8 @@ pub(super) async fn resolve_streams(
         dash.video.len(),
         dash.audio.len()
     );
-    let Some((mut streams, video_urls, audio_urls)) = select_streams(&playurl) else {
+    let Some((mut streams, video_urls, audio_urls)) = select_streams(&playurl, preferred_quality)
+    else {
         return Err(ApiError::InvalidResponse("没有可用的视频流".into()));
     };
 
@@ -161,9 +171,14 @@ pub async fn resolve_preview(
         .ok_or_else(|| ApiError::InvalidResponse("没有可用的预览流".into()))
 }
 
-fn select_streams(playurl: &PlayUrl) -> Option<(Streams, Vec<String>, Vec<String>)> {
+fn select_streams(
+    playurl: &PlayUrl,
+    preferred_quality: Option<u32>,
+) -> Option<(Streams, Vec<String>, Vec<String>)> {
     let dash = playurl.dash.as_ref()?;
-    let video = dash.best_video()?;
+    let video = preferred_quality
+        .and_then(|id| video_track(dash, id))
+        .or_else(|| dash.best_video())?;
     let audio = dash.best_audio();
     rigili_monitor::monitor!(
         "stream",
@@ -200,6 +215,15 @@ fn select_streams(playurl: &PlayUrl) -> Option<(Streams, Vec<String>, Vec<String
         video_urls,
         audio_urls,
     ))
+}
+
+fn video_track(dash: &Dash, id: u32) -> Option<&DashVideo> {
+    dash.video
+        .iter()
+        .filter(|video| {
+            video.id == id && !video.base_url.is_empty() && video.width > 0 && video.height > 0
+        })
+        .max_by_key(|video| (video.codecid == 7, video.bandwidth))
 }
 
 fn candidates(primary: &str, backups: &[String]) -> Vec<String> {
@@ -290,16 +314,7 @@ fn quality_tracks(playurl: &PlayUrl, dash: &Dash) -> Vec<VideoQuality> {
 
     ids.into_iter()
         .filter_map(|id| {
-            let video = dash
-                .video
-                .iter()
-                .filter(|video| {
-                    video.id == id
-                        && !video.base_url.is_empty()
-                        && video.width > 0
-                        && video.height > 0
-                })
-                .max_by_key(|video| (video.codecid == 7, video.bandwidth))?;
+            let video = video_track(dash, id)?;
             let description = playurl
                 .accept_quality
                 .iter()
@@ -434,7 +449,7 @@ mod tests {
             accept_description: vec!["1080P 高清".into()],
         };
 
-        let streams = select_streams(&playurl).expect("streams").0;
+        let streams = select_streams(&playurl, None).expect("streams").0;
         assert_eq!(streams.video, "https://example.invalid/avc.m4s");
         assert_eq!(
             streams.audio.as_deref(),
@@ -471,7 +486,7 @@ mod tests {
             accept_description: Vec::new(),
         };
 
-        let streams = select_streams(&playurl).expect("streams").0;
+        let streams = select_streams(&playurl, None).expect("streams").0;
         assert_eq!(streams.video, "avc");
         assert_eq!(streams.video_id, 80);
         let qualities: Vec<_> = streams
@@ -486,5 +501,35 @@ mod tests {
             })
             .collect();
         assert_eq!(qualities, [(80, "avc", "1080P"), (64, "720p", "720P")]);
+    }
+
+    #[test]
+    fn keeps_the_requested_quality_when_reloading() {
+        let video = |id, url: &str, bandwidth| DashVideo {
+            id,
+            base_url: url.into(),
+            backup_urls: Vec::new(),
+            bandwidth,
+            width: 1920,
+            height: 1080,
+            codecs: String::new(),
+            codecid: 7,
+        };
+        let playurl = PlayUrl {
+            dash: Some(Dash {
+                video: vec![video(80, "1080p", 600_000), video(64, "720p", 300_000)],
+                audio: Vec::new(),
+            }),
+            accept_quality: vec![80, 64],
+            accept_description: Vec::new(),
+        };
+
+        let streams = select_streams(&playurl, Some(64)).expect("streams").0;
+        assert_eq!(streams.video, "720p");
+        assert_eq!(streams.video_id, 64);
+
+        let fallback = select_streams(&playurl, Some(32)).expect("streams").0;
+        assert_eq!(fallback.video, "1080p");
+        assert_eq!(fallback.video_id, 80);
     }
 }

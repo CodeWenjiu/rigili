@@ -365,6 +365,9 @@ impl State {
                         status.error = Some(error.to_string());
                     });
                 } else {
+                    if self.loading {
+                        self.pending_pause = !paused;
+                    }
                     mutate_status(status, |status| status.paused = !paused);
                 }
             }

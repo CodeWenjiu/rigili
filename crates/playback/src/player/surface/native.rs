@@ -1,10 +1,10 @@
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use raw_window_handle::{HasDisplayHandle, RawDisplayHandle, RawWindowHandle};
-use rigili_player::VideoSize;
+use rigili_player::{PlaybackPhase, VideoSize};
 
-use crate::native::WaylandOutput;
 use super::PlayerView;
+use crate::native::WaylandOutput;
 
 pub(super) struct NativeSurface {
     pub(super) composition: WindowCompositionSurface,
@@ -13,7 +13,7 @@ pub(super) struct NativeSurface {
 }
 
 impl PlayerView {
-    pub(super) fn pump_native(&mut self) -> bool {
+    pub(super) fn pump_native(&mut self, window: &Window) -> bool {
         let Some(mut native) = self.native.take() else {
             return false;
         };
@@ -32,13 +32,26 @@ impl PlayerView {
 
             if failure.is_none() {
                 let frames = self.player.take_native_frames();
-                if let Some((frame, skipped)) = frames.split_last() {
+                if !native.visible && self.status.phase == PlaybackPhase::Loading {
+                    for frame in &frames {
+                        self.player.native_frame_released(frame.slot);
+                    }
+                } else if let Some((frame, skipped)) = frames.split_last() {
                     for skipped in skipped {
                         self.player.native_frame_released(skipped.slot);
                     }
                     match native.output.present(frame) {
                         Ok(()) => {
                             if !native.visible {
+                                if let Some(bounds) = self.video_bounds.get().map(|area| {
+                                    contain_rect(area, VideoSize::new(frame.width, frame.height))
+                                        .to_device_pixels(window.scale_factor())
+                                }) {
+                                    if let Ok(surface) = native.composition.platform_surface() {
+                                        let _ = surface.set_bounds(bounds);
+                                    }
+                                    self.native_bounds = Some(bounds);
+                                }
                                 let _ = native
                                     .composition
                                     .platform_surface()
@@ -81,7 +94,10 @@ impl PlayerView {
         let Some(area) = self.video_bounds.get() else {
             return;
         };
-        let rect = contain_rect(area, self.status.video_size);
+        let Some(video_size) = self.status.video_size else {
+            return;
+        };
+        let rect = contain_rect(area, video_size);
         let bounds = rect.to_device_pixels(window.scale_factor());
         if self.native_bounds == Some(bounds) {
             return;
@@ -131,10 +147,7 @@ pub(super) fn create_native_surface(window: &mut Window) -> Option<NativeSurface
     })
 }
 
-fn contain_rect(area: Bounds<Pixels>, source: Option<VideoSize>) -> Bounds<Pixels> {
-    let Some(source) = source.filter(|size| size.width > 0 && size.height > 0) else {
-        return area;
-    };
+fn contain_rect(area: Bounds<Pixels>, source: VideoSize) -> Bounds<Pixels> {
     let area_width = f32::from(area.size.width);
     let area_height = f32::from(area.size.height);
     let scale = (area_width / source.width as f32).min(area_height / source.height as f32);

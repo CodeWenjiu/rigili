@@ -3,13 +3,14 @@ use std::rc::Rc;
 use gpui_kit::*;
 
 pub(crate) const PLAYER: &str = "Player";
-pub(crate) const VIDEO: &str = "PlayerVideo";
 
 actions!(
     player,
     [
         TogglePlayback,
         SeekBack,
+        HistoryBack,
+        HistoryForward,
         SpeedDown,
         SpeedUp,
         ToggleMute,
@@ -17,6 +18,7 @@ actions!(
         ToggleInfo,
         ToggleComments,
         Reload,
+        SwitchToMain,
     ]
 );
 
@@ -29,7 +31,7 @@ struct Command {
 const COMMANDS: &[Command] = &[
     Command {
         keys: "space",
-        context: VIDEO,
+        context: PLAYER,
         action: || Box::new(TogglePlayback),
     },
     Command {
@@ -46,6 +48,16 @@ const COMMANDS: &[Command] = &[
         keys: "shift-right",
         context: PLAYER,
         action: || Box::new(SpeedUp),
+    },
+    Command {
+        keys: "<",
+        context: PLAYER,
+        action: || Box::new(HistoryBack),
+    },
+    Command {
+        keys: ">",
+        context: PLAYER,
+        action: || Box::new(HistoryForward),
     },
     Command {
         keys: "m",
@@ -71,6 +83,11 @@ const COMMANDS: &[Command] = &[
         keys: "r",
         context: PLAYER,
         action: || Box::new(Reload),
+    },
+    Command {
+        keys: "s",
+        context: PLAYER,
+        action: || Box::new(SwitchToMain),
     },
 ];
 
@@ -100,7 +117,7 @@ mod tests {
 
     use gpui_kit::{KeyBindingContextPredicate, Keystroke};
 
-    use super::{COMMANDS, PLAYER, VIDEO};
+    use super::{COMMANDS, PLAYER};
 
     #[test]
     fn commands_parse_and_do_not_conflict() {
@@ -125,11 +142,6 @@ mod tests {
             );
         }
 
-        assert!(COMMANDS.iter().any(|command| command.context == VIDEO));
-        assert!(
-            COMMANDS
-                .iter()
-                .all(|command| command.context == PLAYER || command.context == VIDEO)
-        );
+        assert!(COMMANDS.iter().all(|command| command.context == PLAYER));
     }
 }

@@ -10,6 +10,7 @@ use rigili_core::{OpenLive, OpenSpace, OpenVideo, Refresh};
 
 use super::playback::Playback;
 use crate::app::platform::image_cache;
+use crate::app::shortcuts::{FocusPlayer, FocusSearch, MAIN, ReloadPage};
 use crate::pages::account::login;
 use crate::pages::account::message::MessagesView;
 use crate::pages::account::mine::MineView;
@@ -29,6 +30,7 @@ pub struct MainView {
     space: Entity<SpaceView>,
     search_box: SearchBox,
     page: Page,
+    focus: FocusHandle,
     spaces: Vec<SpaceRoute>,
     playback: Option<Playback>,
     window_handle: AnyWindowHandle,
@@ -75,6 +77,10 @@ impl MainView {
         let space = cx.new(|cx| SpaceView::new(window, cx));
         let search_box = SearchBox::new(window, cx);
         login::restore(window, cx);
+
+        let focus = cx.focus_handle();
+        let deferred_focus = focus.clone();
+        window.defer(cx, move |window, cx| deferred_focus.focus(window, cx));
 
         Self::forward_events(cx, &home, window, |this, event: &OpenVideo, _, cx| {
             this.play(event.clone(), cx);
@@ -149,6 +155,7 @@ impl MainView {
             space,
             search_box,
             page: Page::default(),
+            focus,
             spaces: Vec::new(),
             playback: None,
             window_handle: window.window_handle(),
@@ -237,6 +244,18 @@ impl MainView {
         self.search_box.focus(window, cx);
     }
 
+    fn focus_search_shortcut(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_search_box(cx);
+        self.search_box.focus(window, cx);
+        cx.notify();
+    }
+
+    fn focus_player(&mut self, cx: &mut Context<Self>) {
+        if let Some(playback) = &self.playback {
+            playback.activate(cx);
+        }
+    }
+
     fn page_can_refresh(&self, cx: &App) -> bool {
         if !self.spaces.is_empty() {
             return self.space.read(cx).can_refresh();
@@ -297,6 +316,19 @@ impl Render for MainView {
             .size_full()
             .bg(background)
             .text_color(foreground)
+            .key_context(MAIN)
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|this, _: &ReloadPage, _, cx| {
+                if this.page_can_refresh(cx) {
+                    this.refresh_page(cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &FocusSearch, window, cx| {
+                this.focus_search_shortcut(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &FocusPlayer, _, cx| {
+                this.focus_player(cx);
+            }))
             .image_cache(image_cache::get(cx))
             .child(self.render_sidebar(cx))
             .child(

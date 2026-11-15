@@ -1,3 +1,4 @@
+use gpui_kit::base::TextSelection;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
@@ -26,8 +27,14 @@ impl Render for InfoPanel {
             .flex_shrink_0()
             .bg(background)
             .text_color(foreground)
-            .on_mouse_move(cx.listener(|this, _, window, cx| {
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 this.clear_spanning_selection(window, cx);
+                if event.pressed_button == Some(MouseButton::Left)
+                    && this.tab == InfoTab::Comments
+                    && TextSelection::has_selection(window, cx)
+                {
+                    window.refresh();
+                }
             }))
             .on_mouse_up(
                 MouseButton::Left,

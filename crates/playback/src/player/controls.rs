@@ -12,8 +12,8 @@ use gpui_kit::*;
 use rigili_bilibili::Chapter;
 use rigili_player::{BufferedRange, PlayerStatus};
 
-use crate::request::VideoQuality;
 use super::surface::PlayerView;
+use crate::request::VideoQuality;
 use crate::shortcuts::{ToggleFullscreen, TogglePlayback};
 use gpui_kit::base::{Slider as BaseSlider, SliderIndicator, SliderThumb, SliderTrack};
 use rigili_core::format_clock;
@@ -28,6 +28,8 @@ pub(super) struct Transport<'a> {
     pub(super) qualities: &'a [VideoQuality],
     pub(super) selected_quality: u32,
     pub(super) quality_open: bool,
+    pub(super) speeds: &'a [f64],
+    pub(super) speed_open: bool,
     pub(super) preview: Option<AnyElement>,
     pub(super) live: bool,
     pub(super) player: WeakEntity<PlayerView>,
@@ -336,7 +338,7 @@ impl Transport<'_> {
                             .tooltip_with_action(
                                 if paused { "播放" } else { "暂停" },
                                 &TogglePlayback,
-                                Some(crate::shortcuts::VIDEO),
+                                Some(crate::shortcuts::PLAYER),
                             )
                             .on_click(|_, window, cx| {
                                 window.dispatch_action(Box::new(TogglePlayback), cx);
@@ -428,17 +430,44 @@ impl Transport<'_> {
                         )
                     })
                     .child(
-                        Button::new("speed")
-                            .ghost()
-                            .small()
-                            .label(speed_label(speed))
-                            .tooltip("切换倍速")
-                            .on_click({
+                        Popover::new("speed-popover")
+                            .anchor(Anchor::BottomRight)
+                            .offset(px(6.))
+                            .open(self.speed_open)
+                            .trigger(
+                                Button::new("speed")
+                                    .ghost()
+                                    .small()
+                                    .label(speed_label(speed))
+                                    .tooltip("切换倍速"),
+                            )
+                            .on_open_change({
                                 let weak = weak.clone();
-                                move |_, _, cx| {
-                                    let _ = weak.update(cx, |this, cx| this.cycle_speed(cx));
+                                move |open, _, cx| {
+                                    let _ = weak.update(cx, |this, cx| {
+                                        this.set_speed_popover_open(*open, cx);
+                                    });
                                 }
-                            }),
+                            })
+                            .child(v_flex().min_w(px(96.)).gap_1().children(
+                                self.speeds.iter().enumerate().map(|(index, value)| {
+                                    let selected = (speed - *value).abs() < 1e-3;
+                                    ListItem::new(("speed", index as u32))
+                                        .check_icon(IconName::Check)
+                                        .confirmed(selected)
+                                        .selected(selected)
+                                        .on_click({
+                                            let weak = weak.clone();
+                                            let value = *value;
+                                            move |_, _, cx| {
+                                                let _ = weak.update(cx, |this, cx| {
+                                                    this.select_speed(value, cx);
+                                                });
+                                            }
+                                        })
+                                        .child(speed_label(*value))
+                                }),
+                            )),
                     )
                     .child(
                         Button::new("fullscreen")

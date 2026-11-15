@@ -21,7 +21,7 @@ impl PlayerView {
         }
 
         self.sync_native_bounds(window, cx);
-        let mut changed = self.pump_native();
+        let mut changed = self.pump_native(window);
         if notice_expired(self.notice.map(|(_, deadline)| deadline), Instant::now()) {
             self.notice = None;
             changed = true;

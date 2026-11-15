@@ -10,7 +10,7 @@ use rigili_player::{PlaybackPhase, VideoSize};
 
 use super::super::controls::{Transport, speed_label};
 use super::{
-    HOLD_SPEED, Notice, OVERLAY_FOREGROUND, OVERLAY_SCRIM, OVERLAY_SCRIM_STRONG, PlayerView,
+    HOLD_SPEED, Notice, OVERLAY_FOREGROUND, OVERLAY_SCRIM, OVERLAY_SCRIM_STRONG, PlayerView, SPEEDS,
 };
 
 const PAUSE_BADGE_MARGIN: Pixels = px(16.);
@@ -73,6 +73,8 @@ impl Render for PlayerView {
                             qualities: &self.qualities,
                             selected_quality: self.selected_quality,
                             quality_open: self.quality_popover_open,
+                            speeds: &SPEEDS,
+                            speed_open: self.speed_popover_open,
                             preview: self.progress_preview(cx),
                             live: self.live,
                             player: cx.entity().downgrade(),
@@ -254,7 +256,6 @@ impl Render for PlayerView {
                     .absolute()
                     .size_full()
                     .track_focus(&self.focus)
-                    .key_context(crate::shortcuts::VIDEO)
                     .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                         if event.keystroke.key == "right"
                             && !event.keystroke.modifiers.modified()

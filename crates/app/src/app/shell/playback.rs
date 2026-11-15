@@ -1,6 +1,6 @@
 use gpui_kit::*;
 
-use rigili_core::OpenSpace;
+use rigili_core::{FocusMain, OpenSpace};
 use rigili_playback::{PlaybackRequest, PlayerWindow};
 
 use super::MainView;
@@ -9,6 +9,7 @@ pub(super) struct Playback {
     handle: AnyWindowHandle,
     view: Entity<PlayerWindow>,
     _space_sub: Subscription,
+    _focus_sub: Subscription,
 }
 
 impl Playback {
@@ -29,10 +30,14 @@ impl Playback {
                 window.activate_window();
             });
         });
+        let focus_sub = cx.subscribe(&view, move |_, _: &FocusMain, cx| {
+            let _ = main_window.update(cx, |_, window, _| window.activate_window());
+        });
         Ok(Self {
             handle,
             view,
             _space_sub: space_sub,
+            _focus_sub: focus_sub,
         })
     }
 
@@ -42,6 +47,12 @@ impl Playback {
             view.update(cx, |player_window, cx| player_window.play(request, cx));
             window.activate_window();
         })
+    }
+
+    pub(super) fn activate(&self, cx: &mut App) {
+        let _ = self
+            .handle
+            .update(cx, |_, window, _| window.activate_window());
     }
 
     pub(super) fn is_for(&self, window_id: WindowId) -> bool {

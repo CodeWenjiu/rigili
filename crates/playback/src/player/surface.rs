@@ -80,6 +80,7 @@ pub(super) struct PlayerView {
     selected_quality: u32,
     audio_url: Option<String>,
     quality_popover_open: bool,
+    speed_popover_open: bool,
     seeking: Option<f64>,
     volume_dragging: bool,
     progress_max: f64,
@@ -169,6 +170,7 @@ impl PlayerView {
             selected_quality: 0,
             audio_url: None,
             quality_popover_open: false,
+            speed_popover_open: false,
             seeking: None,
             volume_dragging: false,
             progress_max: 0.0,
@@ -208,6 +210,7 @@ impl PlayerView {
         self.notice = None;
         self.progress_max = 0.0;
         self.quality_popover_open = false;
+        self.speed_popover_open = false;
         self.selected_quality = streams.video_id;
         self.audio_url = streams.audio.clone();
         self.qualities = streams.qualities;
@@ -233,6 +236,36 @@ impl PlayerView {
         cx.notify();
     }
 
+    pub(super) fn reload_streams(&mut self, streams: Streams, cx: &mut Context<Self>) {
+        let start = if self.status.phase == PlaybackPhase::Ended {
+            0.
+        } else {
+            self.seeking.unwrap_or(self.status.time_pos).max(0.)
+        };
+        let paused = self.status.paused;
+        if let Some(hold) = self.speed_hold.take() {
+            self.status.speed = hold.previous;
+            self.player.set_speed(hold.previous);
+        }
+        self.seeking = None;
+        self.notice = None;
+        self.quality_popover_open = false;
+        self.speed_popover_open = false;
+        self.selected_quality = streams.video_id;
+        self.audio_url = streams.audio.clone();
+        self.qualities = streams.qualities;
+        self.status.phase = PlaybackPhase::Loading;
+        self.status.error = None;
+        self.player
+            .switch_video(&streams.video, streams.audio.as_deref(), start, paused);
+        self.last_activity = Instant::now();
+        cx.notify();
+    }
+
+    pub(super) fn selected_quality(&self) -> u32 {
+        self.selected_quality
+    }
+
     pub(super) fn switch_quality(&mut self, id: u32, cx: &mut Context<Self>) {
         if self.live || id == self.selected_quality {
             return;
@@ -249,6 +282,7 @@ impl PlayerView {
         let paused = self.status.paused;
         self.selected_quality = id;
         self.quality_popover_open = false;
+        self.speed_popover_open = false;
         self.status.phase = PlaybackPhase::Loading;
         self.status.error = None;
         self.player
@@ -266,14 +300,28 @@ impl PlayerView {
         }
     }
 
+    pub(super) fn set_speed_popover_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.speed_popover_open != open {
+            self.speed_popover_open = open;
+            if open {
+                self.last_activity = Instant::now();
+            }
+            cx.notify();
+        }
+    }
+
     pub(super) fn toggle_pause(&mut self, cx: &mut Context<Self>) {
         self.player.toggle_pause();
         self.status.paused = !self.status.paused;
         cx.notify();
     }
 
-    pub(super) fn cycle_speed(&mut self, cx: &mut Context<Self>) {
-        let speed = next_speed(self.status.speed);
+    pub(super) fn select_speed(&mut self, speed: f64, cx: &mut Context<Self>) {
+        self.speed_popover_open = false;
+        if (self.status.speed - speed).abs() < 1e-3 {
+            cx.notify();
+            return;
+        }
         self.show_speed_notice(speed);
         self.apply_speed(speed, cx);
     }
@@ -384,28 +432,5 @@ impl PlayerView {
 
     pub(super) fn set_progress_bounds(&mut self, bounds: Bounds<Pixels>) {
         self.progress_bounds = Some(bounds);
-    }
-}
-
-fn next_speed(current: f64) -> f64 {
-    SPEEDS
-        .iter()
-        .copied()
-        .find(|speed| *speed > current + 1e-3)
-        .unwrap_or(SPEEDS[0])
-}
-
-#[cfg(test)]
-mod tests {
-    use super::next_speed;
-
-    #[test]
-    fn cycles_playback_speeds() {
-        assert_eq!(next_speed(0.5), 0.75);
-        assert_eq!(next_speed(1.0), 1.25);
-        assert_eq!(next_speed(2.0), 2.5);
-        assert_eq!(next_speed(3.0), 3.5);
-        assert_eq!(next_speed(4.0), 0.5);
-        assert_eq!(next_speed(9.0), 0.5);
     }
 }
