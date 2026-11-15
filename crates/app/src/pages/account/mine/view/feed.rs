@@ -1,9 +1,12 @@
+use std::sync::Arc;
+
 use gpui_kit::*;
 
-use super::{FavoriteView, FolderSource, ListMeta, MineTab, MineView, VideoListState};
-use rigili_bilibili::{BangumiFollow, BangumiFollows};
+use super::{FavoriteView, FolderSource, ListMeta, MineTab, MineView};
+use crate::shared::browse::paging::Paged;
+use rigili_bilibili::{BangumiFollow, BangumiFollows, Client};
 use rigili_core::api_task_error_message;
-use rigili_core::backend::{self, Backend};
+use rigili_core::client;
 use rigili_core::runtime::spawn_api;
 
 use crate::shared::browse::grid::VideoCard;
@@ -12,8 +15,8 @@ use crate::shared::browse::paging::{Page, spawn_first, spawn_more};
 const BANGUMI_PAGE_SIZE: usize = 20;
 
 impl MineView {
-    pub(super) fn backend(&mut self, cx: &mut Context<Self>) -> Result<Backend, String> {
-        backend::cached(&mut self.backend, cx)
+    pub(super) fn cached_client(&mut self, cx: &mut Context<Self>) -> Result<Arc<Client>, String> {
+        client::cached(&mut self.client, cx)
     }
 
     pub(super) fn load_stat(&mut self, cx: &mut Context<Self>) {
@@ -24,8 +27,8 @@ impl MineView {
         {
             return;
         }
-        let backend = match self.backend(cx) {
-            Ok(backend) => backend,
+        let client = match self.cached_client(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.stat_error = Some(error);
                 cx.notify();
@@ -38,7 +41,7 @@ impl MineView {
 
         spawn_api(
             cx,
-            async move { backend.nav_stat().await },
+            async move { client.nav_stat().await },
             move |this, result, cx| {
                 this.stat_loading = false;
                 match result {
@@ -62,15 +65,12 @@ impl MineView {
                 self.load_favorite_view(cx);
             }
             MineTab::History => {
-                if !self.history.loaded && !self.history.loading && self.history.error.is_none() {
+                if self.history.needs_first_load() {
                     self.load_history(cx);
                 }
             }
             MineTab::WatchLater => {
-                if !self.watch_later.loaded
-                    && !self.watch_later.loading
-                    && self.watch_later.error.is_none()
-                {
+                if self.watch_later.needs_first_load() {
                     self.load_watch_later(cx);
                 }
             }
@@ -94,8 +94,8 @@ impl MineView {
         if self.folders.loading {
             return;
         }
-        let backend = match self.backend(cx) {
-            Ok(backend) => backend,
+        let client = match self.cached_client(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.folders.error = Some(error);
                 cx.notify();
@@ -110,12 +110,12 @@ impl MineView {
         self.folders.error = None;
         self.folders.folders.clear();
         self.folders.current = None;
-        self.favorites = VideoListState::new();
+        self.favorites = Paged::new();
         cx.notify();
 
         spawn_api(
             cx,
-            async move { backend.fav_folders(mid).await },
+            async move { client.fav_folders(mid).await },
             move |this, result, cx| {
                 if this.folders.generation != generation {
                     return;
@@ -155,8 +155,8 @@ impl MineView {
         let Some(media_id) = self.folders.current else {
             return;
         };
-        let backend = match self.backend(cx) {
-            Ok(backend) => backend,
+        let client = match self.cached_client(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.favorites.fail_first_reset(error);
                 cx.notify();
@@ -169,10 +169,10 @@ impl MineView {
         spawn_first(
             self,
             cx,
-            |this| &mut this.favorites.list,
+            |this| &mut this.favorites,
             |card: &VideoCard| card.bvid().to_owned(),
             async move {
-                let page = backend.fav_items(media_id, 1, &keyword).await?;
+                let page = client.fav_items(media_id, 1, &keyword).await?;
                 let has_more = page.has_more;
                 Ok(Page::new(
                     favorite_cards(page.into_items()),
@@ -193,8 +193,8 @@ impl MineView {
         let Some(media_id) = self.folders.current else {
             return;
         };
-        let backend = match self.backend(cx) {
-            Ok(backend) => backend,
+        let client = match self.cached_client(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.favorites.fail_more(error);
                 cx.notify();
@@ -206,12 +206,12 @@ impl MineView {
         spawn_more(
             self,
             cx,
-            |this| &mut this.favorites.list,
+            |this| &mut this.favorites,
             |card: &VideoCard| card.bvid().to_owned(),
             move |meta| {
                 let page = meta.page + 1;
                 async move {
-                    let result = backend.fav_items(media_id, page, &keyword).await?;
+                    let result = client.fav_items(media_id, page, &keyword).await?;
                     let has_more = result.has_more;
                     Ok(Page::new(
                         favorite_cards(result.into_items()),
@@ -231,8 +231,8 @@ impl MineView {
         if self.user_mid.is_none() {
             return;
         }
-        let backend = match self.backend(cx) {
-            Ok(backend) => backend,
+        let client = match self.cached_client(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.history.fail_first_reset(error);
                 cx.notify();
@@ -243,10 +243,10 @@ impl MineView {
         spawn_first(
             self,
             cx,
-            |this| &mut this.history.list,
+            |this| &mut this.history,
             |card: &VideoCard| card.bvid().to_owned(),
             async move {
-                let page = backend.history(0, 0).await?;
+                let page = client.history(0, 0).await?;
                 Ok(history_page(page))
             },
             |this| {
@@ -259,8 +259,8 @@ impl MineView {
         if self.user_mid.is_none() {
             return;
         }
-        let backend = match self.backend(cx) {
-            Ok(backend) => backend,
+        let client = match self.cached_client(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.history.fail_more(error);
                 cx.notify();
@@ -271,10 +271,10 @@ impl MineView {
         spawn_more(
             self,
             cx,
-            |this| &mut this.history.list,
+            |this| &mut this.history,
             |card: &VideoCard| card.bvid().to_owned(),
             move |meta| async move {
-                let page = backend.history(meta.max, meta.view_at).await?;
+                let page = client.history(meta.max, meta.view_at).await?;
                 Ok(history_page(page))
             },
             |_| {},
@@ -285,8 +285,8 @@ impl MineView {
         if self.user_mid.is_none() {
             return;
         }
-        let backend = match self.backend(cx) {
-            Ok(backend) => backend,
+        let client = match self.cached_client(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.watch_later.fail_first_reset(error);
                 cx.notify();
@@ -297,10 +297,10 @@ impl MineView {
         spawn_first(
             self,
             cx,
-            |this| &mut this.watch_later.list,
+            |this| &mut this.watch_later,
             |card: &VideoCard| card.bvid().to_owned(),
             async move {
-                let page = backend.watch_later().await?;
+                let page = client.watch_later().await?;
                 Ok(Page::new(
                     watch_later_cards(page.into_items()),
                     false,
@@ -353,8 +353,8 @@ impl MineView {
         if self.collected.loading {
             return;
         }
-        let backend = match self.backend(cx) {
-            Ok(backend) => backend,
+        let client = match self.cached_client(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.collected.error = Some(error);
                 cx.notify();
@@ -372,7 +372,7 @@ impl MineView {
 
         spawn_api(
             cx,
-            async move { backend.collected_folders(mid).await },
+            async move { client.collected_folders(mid).await },
             move |this, result, cx| {
                 if this.collected.generation != generation {
                     return;
@@ -400,10 +400,10 @@ impl MineView {
         let Some(mid) = self.user_mid else {
             return;
         };
-        let backend = match self.backend(cx) {
-            Ok(backend) => backend,
+        let client = match self.cached_client(cx) {
+            Ok(client) => client,
             Err(error) => {
-                self.bangumi_state_mut(cinema).0.fail_first_reset(error);
+                self.bangumi_state_mut(cinema).fail_first_reset(error);
                 cx.notify();
                 return;
             }
@@ -413,9 +413,9 @@ impl MineView {
         spawn_first(
             self,
             cx,
-            move |this| &mut this.bangumi_state_mut(cinema).0,
+            move |this| this.bangumi_state_mut(cinema),
             |item: &BangumiFollow| item.season_id.to_string(),
-            async move { bangumi_page(backend.bangumi_follows(mid, season_type, 1).await?, 1) },
+            async move { bangumi_page(client.bangumi_follows(mid, season_type, 1).await?, 1) },
             move |this| {
                 this.bangumi_state_mut(cinema)
                     .scroll
@@ -428,10 +428,10 @@ impl MineView {
         let Some(mid) = self.user_mid else {
             return;
         };
-        let backend = match self.backend(cx) {
-            Ok(backend) => backend,
+        let client = match self.cached_client(cx) {
+            Ok(client) => client,
             Err(error) => {
-                self.bangumi_state_mut(cinema).0.fail_more(error);
+                self.bangumi_state_mut(cinema).fail_more(error);
                 cx.notify();
                 return;
             }
@@ -441,11 +441,11 @@ impl MineView {
         spawn_more(
             self,
             cx,
-            move |this| &mut this.bangumi_state_mut(cinema).0,
+            move |this| this.bangumi_state_mut(cinema),
             |item: &BangumiFollow| item.season_id.to_string(),
             move |meta| {
                 let page = meta + 1;
-                async move { bangumi_page(backend.bangumi_follows(mid, season_type, page).await?, page) }
+                async move { bangumi_page(client.bangumi_follows(mid, season_type, page).await?, page) }
             },
             |_| {},
         );

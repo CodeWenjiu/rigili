@@ -11,7 +11,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::api::comment::CommentSort;
 use rigili_bilibili::{Comment, CommentPage};
-use rigili_core::backend;
+use rigili_core::client;
 use rigili_core::runtime::spawn_api;
 use rigili_core::{
     api_error_message, api_task_error_message, format_count, format_date, message_markdown,
@@ -42,8 +42,8 @@ impl InfoPanel {
         let Some(details) = self.details.clone() else {
             return;
         };
-        let backend = match backend::get(cx) {
-            Ok(backend) => backend,
+        let client = match client::get(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.comments_loading = false;
                 self.comments_error = Some(api_error_message(error));
@@ -64,7 +64,7 @@ impl InfoPanel {
         spawn_api(
             cx,
             async move {
-                backend
+                client
                     .comments(1, &aid.to_string(), 1, CommentSort::Hot)
                     .await
             },
@@ -100,7 +100,7 @@ impl InfoPanel {
         let Some(details) = self.details.clone() else {
             return;
         };
-        let Ok(backend) = backend::get(cx) else {
+        let Ok(client) = client::get(cx) else {
             return;
         };
         let aid = details.aid;
@@ -112,7 +112,7 @@ impl InfoPanel {
         spawn_api(
             cx,
             async move {
-                backend
+                client
                     .comments(1, &aid.to_string(), requested, CommentSort::Hot)
                     .await
             },
@@ -212,7 +212,7 @@ impl InfoPanel {
         let muted = cx.theme().muted_foreground;
         let danger = cx.theme().danger;
         let border = cx.theme().border;
-        let logged_in = backend::get(cx).is_ok_and(|backend| backend.has_session());
+        let logged_in = client::get(cx).is_ok_and(|client| client.has_session());
 
         if !logged_in {
             return div()
@@ -296,8 +296,8 @@ impl InfoPanel {
         let Some(details) = self.details.clone() else {
             return;
         };
-        let backend = match backend::get(cx) {
-            Ok(backend) => backend,
+        let client = match client::get(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.comment_error = Some(api_error_message(error));
                 cx.notify();
@@ -313,7 +313,7 @@ impl InfoPanel {
 
         spawn_api(
             cx,
-            async move { backend.add_comment(aid, &content).await },
+            async move { client.add_comment(aid, &content).await },
             move |this, result, cx| {
                 if this.details.as_ref().map(|details| details.aid) != Some(aid) {
                     return;

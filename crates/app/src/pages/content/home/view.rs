@@ -1,15 +1,17 @@
 rigili_macro::mod_prv!(feed, list);
 
+use std::sync::Arc;
+
 use crate::shared::browse::paging::Paged;
 
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_bilibili::{LiveRoom, PgcItem};
+use rigili_bilibili::{Client, LiveRoom, PgcItem};
 
 use crate::shared::browse::grid::{LiveCard, PgcCard, VideoCard};
-use rigili_core::backend::{self, Backend};
+use rigili_core::client;
 use rigili_core::{OpenLive, OpenSpace, OpenVideo, Refresh, api_error_message};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -118,7 +120,7 @@ impl From<PgcItem> for HomeItem {
 pub(crate) type TabState = Paged<HomeItem, u32>;
 
 pub struct HomeView {
-    backend: Option<Backend>,
+    client: Option<Arc<Client>>,
     tab: HomeTab,
     tabs: [TabState; 5],
     opening: Option<u64>,
@@ -142,12 +144,12 @@ impl crate::shared::browse::list::ListWidth for HomeView {
 
 impl HomeView {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let (backend, error) = match backend::get(cx) {
-            Ok(backend) => (Some(backend), None),
+        let (client, error) = match client::get(cx) {
+            Ok(client) => (Some(client), None),
             Err(error) => (None, Some(api_error_message(error))),
         };
         let mut view = Self {
-            backend,
+            client,
             tab: HomeTab::default(),
             tabs: std::array::from_fn(|_| TabState::new()),
             opening: None,

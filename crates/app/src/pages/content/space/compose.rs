@@ -4,7 +4,7 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_core::backend;
+use rigili_core::client;
 use rigili_core::runtime::spawn_api;
 use rigili_core::{api_error_message, api_task_error_message};
 
@@ -62,8 +62,8 @@ impl ComposeMessage {
             cx.notify();
             return;
         }
-        let backend = match backend::get(cx) {
-            Ok(backend) => backend,
+        let client = match client::get(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.error = Some(api_error_message(error));
                 cx.notify();
@@ -79,7 +79,7 @@ impl ComposeMessage {
 
         spawn_api(
             cx,
-            async move { backend.send_message(receiver, &content).await },
+            async move { client.send_message(receiver, &content).await },
             move |this, result, cx| match result {
                 Ok(()) => {
                     let _ = window.update(cx, |_, window, cx| {

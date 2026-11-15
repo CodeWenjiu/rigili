@@ -10,18 +10,19 @@ const NAV_URL: &str = "https://api.bilibili.com/x/web-interface/nav";
 
 const LOGIN_COOKIES: [&str; 4] = ["SESSDATA", "bili_jct", "DedeUserID", "DedeUserID__ckMd5"];
 
-pub async fn generate(client: &Client) -> Result<QrCode, ApiError> {
-    client.get_json(GENERATE_URL, &[]).await
-}
+impl Client {
+    pub async fn qr_generate(&self) -> Result<QrCode, ApiError> {
+        self.get_json(GENERATE_URL, &[]).await
+    }
 
-pub async fn poll(client: &Client, qrcode_key: &str) -> Result<QrPoll, ApiError> {
-    client
-        .get_json(POLL_URL, &[("qrcode_key", qrcode_key.to_owned())])
-        .await
-}
+    pub async fn qr_poll(&self, qrcode_key: &str) -> Result<QrPoll, ApiError> {
+        self.get_json(POLL_URL, &[("qrcode_key", qrcode_key.to_owned())])
+            .await
+    }
 
-pub async fn nav(client: &Client) -> Result<Nav, ApiError> {
-    client.get_json(NAV_URL, &[]).await
+    pub async fn nav(&self) -> Result<Nav, ApiError> {
+        self.get_json(NAV_URL, &[]).await
+    }
 }
 
 pub fn cookies_from_login_url(url: &str) -> BTreeMap<String, String> {

@@ -9,7 +9,7 @@ use rigili_bilibili::{HotWord, SearchSuggestion};
 
 use super::MainView;
 use super::search_history::SearchHistory;
-use rigili_core::backend;
+use rigili_core::client;
 use rigili_core::runtime::spawn_api;
 
 const HISTORY_COLLAPSED: usize = 10;
@@ -199,7 +199,7 @@ impl MainView {
     }
 
     fn request_suggestions(&mut self, term: String, cx: &mut Context<Self>) {
-        let Ok(backend) = backend::get(cx) else {
+        let Ok(client) = client::get(cx) else {
             return;
         };
         self.search_box.suggestion_generation += 1;
@@ -209,7 +209,7 @@ impl MainView {
             cx,
             async move {
                 tokio::time::sleep(SUGGESTION_DEBOUNCE).await;
-                backend.search_suggestions(&term).await
+                client.search_suggestions(&term).await
             },
             move |this, result, cx| {
                 if this.search_box.suggestion_generation != generation {
@@ -232,7 +232,7 @@ impl MainView {
         if self.search_box.hot_loading || self.search_box.hot_loaded {
             return;
         }
-        let Ok(backend) = backend::get(cx) else {
+        let Ok(client) = client::get(cx) else {
             return;
         };
         self.search_box.hot_loading = true;
@@ -240,7 +240,7 @@ impl MainView {
 
         spawn_api(
             cx,
-            async move { backend.hot_words().await },
+            async move { client.hot_words().await },
             move |this, result, cx| {
                 this.search_box.hot_loading = false;
                 if let Ok(hot) = result {

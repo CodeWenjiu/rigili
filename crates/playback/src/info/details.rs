@@ -92,12 +92,12 @@ impl InfoPanel {
         let weak = cx.entity().downgrade();
         let aid = details.aid;
         let owner_mid = details.owner_mid;
-        let followed = self.followed;
-        let liked = self.liked;
-        let like_busy = self.like_busy;
-        let coins_given = self.coins_given;
-        let coin_busy = self.coin_busy;
-        let favorited = self.favorited;
+        let followed = self.follow.active;
+        let liked = self.like.active;
+        let like_busy = self.like.busy;
+        let coins_given = self.coin.given;
+        let coin_busy = self.coin.busy;
+        let favorited = self.favorite.active;
         let share_url = format!("https://www.bilibili.com/video/{}", details.bvid);
 
         let owner_meta: SharedString = match (self.followers, self.owner_likes) {
@@ -122,7 +122,7 @@ impl InfoPanel {
             IconName::Plus
         })
         .label(if followed { "已关注" } else { "关注" })
-        .disabled(self.follow_busy)
+        .disabled(self.follow.busy)
         .on_click({
             let weak = weak.clone();
             move |_, _, cx| {
@@ -298,9 +298,9 @@ impl InfoPanel {
                                         action_button(
                                             ("like", aid),
                                             IconName::ThumbsUp,
-                                            format_count(self.like_count).into(),
+                                            format_count(self.like.count).into(),
                                             liked,
-                                            self.like_busy,
+                                            self.like.busy,
                                             cx,
                                         )
                                         .on_click({
@@ -322,9 +322,9 @@ impl InfoPanel {
                                         action_button(
                                             ("coin", aid),
                                             IconName::Coins,
-                                            format_count(self.coin_count).into(),
+                                            format_count(self.coin.count).into(),
                                             coins_given > 0,
-                                            self.coin_busy,
+                                            self.coin.busy,
                                             cx,
                                         )
                                         .on_click({
@@ -343,7 +343,7 @@ impl InfoPanel {
                                         action_button(
                                             ("favorite", aid),
                                             IconName::Star,
-                                            format_count(self.favorite_count).into(),
+                                            format_count(self.favorite.count).into(),
                                             favorited,
                                             false,
                                             cx,

@@ -1,5 +1,7 @@
 rigili_macro::mod_prv!(info, media);
 
+use std::sync::Arc;
+
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::*;
 use gpui_kit::component::spinner::Spinner;
@@ -7,15 +9,16 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
+use super::surface::PlayerView;
 use crate::info::{InfoEvent, InfoPanel, InfoTab};
 use crate::request::{PlaybackRequest, PlaybackSource, Streams, resolve, resolve_streams};
-use super::surface::PlayerView;
 use crate::shortcuts::{
     Reload, SeekBack, SeekForward, SpeedDown, SpeedUp, ToggleComments, ToggleFullscreen,
     ToggleInfo, ToggleMute, TogglePlayback,
 };
+use rigili_bilibili::Client;
 use rigili_core::api_error_message;
-use rigili_core::backend::{self, Backend};
+use rigili_core::client;
 use rigili_core::runtime::{ApiTaskError, spawn_api};
 
 const INFO_MIN_WINDOW: Pixels = px(1000.);
@@ -24,7 +27,7 @@ pub struct PlayerWindow {
     player: Entity<PlayerView>,
     info: Entity<InfoPanel>,
     title: SharedString,
-    backend: Option<Backend>,
+    client: Option<Arc<Client>>,
     request: Option<PlaybackRequest>,
     loading: bool,
     is_live: bool,
@@ -50,15 +53,15 @@ impl PlayerWindow {
             InfoEvent::AddCoin { aid } => this.add_coin(*aid, cx),
             InfoEvent::Reload => this.refresh_info(cx),
         });
-        let (backend, error) = match backend::get(cx) {
-            Ok(backend) => (Some(backend), None),
+        let (client, error) = match client::get(cx) {
+            Ok(client) => (Some(client), None),
             Err(error) => (None, Some(api_error_message(error))),
         };
         let mut view = Self {
             player,
             info,
             title: request.title.clone().into(),
-            backend,
+            client,
             request: None,
             loading: false,
             is_live: false,
@@ -68,7 +71,7 @@ impl PlayerWindow {
             generation: 0,
             _info_sub: info_sub,
         };
-        if view.backend.is_some() {
+        if view.client.is_some() {
             view.start(request, cx);
         }
         view
@@ -93,7 +96,7 @@ impl PlayerWindow {
     }
 
     fn start(&mut self, request: PlaybackRequest, cx: &mut Context<Self>) {
-        let Some(backend) = self.backend.clone() else {
+        let Some(client) = self.client.clone() else {
             return;
         };
 
@@ -115,7 +118,7 @@ impl PlayerWindow {
         match source {
             PlaybackSource::Video { bvid, cid } => spawn_api(
                 cx,
-                async move { resolve(backend, bvid, cid).await },
+                async move { resolve(client, bvid, cid).await },
                 move |this, result, cx| {
                     if this.generation != generation {
                         return;
@@ -168,7 +171,7 @@ impl PlayerWindow {
             ),
             PlaybackSource::Live { room_id } => spawn_api(
                 cx,
-                async move { backend.live_play_url(room_id).await },
+                async move { client.live_play_url(room_id).await },
                 move |this, result, cx| {
                     if this.generation != generation {
                         return;
@@ -193,7 +196,7 @@ impl PlayerWindow {
         if self.is_live || self.loading {
             return;
         }
-        let Some(backend) = self.backend.clone() else {
+        let Some(client) = self.client.clone() else {
             return;
         };
         let Some(PlaybackSource::Video {
@@ -227,7 +230,7 @@ impl PlayerWindow {
         let chapters_bvid = bvid.clone();
         spawn_api(
             cx,
-            async move { resolve_streams(&backend, &bvid, cid).await },
+            async move { resolve_streams(&client, &bvid, cid).await },
             move |this, result, cx| {
                 if this.generation != generation {
                     return;

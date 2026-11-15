@@ -1,4 +1,3 @@
-
 use gpui_kit::assets::IconName;
 use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::*;
@@ -12,7 +11,8 @@ use crate::shared::browse::grid::{
     CARD_GAP, CardFrame, CardGrid, CardMetrics, CardStyle, VideoCardKind, VideoCards,
     card_grid_loading, card_text_height, live_card, pgc_card, video_card,
 };
-use crate::shared::browse::list::{LIST_FOOTER_HEIGHT, Rows, list_footer, virtual_rows_tracked};
+use crate::shared::browse::list::{LIST_FOOTER_HEIGHT, Rows, paged_footer, virtual_rows_tracked};
+use crate::shared::browse::season::SeasonOpener;
 use crate::shared::ui::state_view::{Layout, error_state};
 use rigili_core::{OpenLive, OpenSpace};
 
@@ -161,16 +161,11 @@ impl SearchView {
     }
 
     fn render_footer(&self, tab: SearchTab, cx: &mut Context<Self>) -> AnyElement {
-        let muted = cx.theme().muted_foreground;
-        let danger = cx.theme().danger;
-        let more_error = self.state(tab).more_error.clone();
-
-        list_footer(
+        paged_footer(
+            self.state(tab),
             ("search-retry-more", tab.index()),
-            more_error,
-            muted,
-            danger,
-            cx.listener(move |this, _, _, cx| this.retry_more(tab, cx)),
+            cx,
+            move |this, cx| this.retry_more(tab, cx),
         )
     }
 
@@ -188,7 +183,7 @@ impl SearchView {
             SearchLayout::Rows => item_count,
         };
         let header_offset = usize::from(has_header);
-        let footer = self.state(tab).loading_more || self.state(tab).more_error.is_some();
+        let footer = self.state(tab).footer_visible();
         let footer_index = header_offset + rows;
         let header_height = user_block_height(self.user_content_width());
         let row_height = match layout {

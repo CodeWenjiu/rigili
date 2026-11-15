@@ -8,14 +8,14 @@ rigili_macro::mod_prv!(
     sort_folders
 );
 
-use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_bilibili::{BangumiFollow, FavFolder, NavStat};
-use rigili_core::backend::{self, Backend};
+use rigili_bilibili::{BangumiFollow, Client, FavFolder, NavStat};
+use rigili_core::client;
 use rigili_core::{OpenSpace, OpenVideo, Refresh};
 
 use crate::shared::browse::filter;
@@ -77,10 +77,6 @@ struct CardRow<'a> {
     frame: CardFrame,
 }
 
-pub(crate) struct VideoListState {
-    list: Paged<VideoCard, ListMeta>,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ListMeta {
     pub(crate) page: u32,
@@ -115,26 +111,6 @@ impl FavoriteView {
             Self::Bangumi => 3,
             Self::Cinema => 4,
         }
-    }
-}
-
-impl VideoListState {
-    fn new() -> Self {
-        Self { list: Paged::new() }
-    }
-}
-
-impl Deref for VideoListState {
-    type Target = Paged<VideoCard, ListMeta>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.list
-    }
-}
-
-impl DerefMut for VideoListState {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.list
     }
 }
 
@@ -186,38 +162,16 @@ impl CollectedState {
     }
 }
 
-pub(crate) struct BangumiState(Paged<BangumiFollow, u32>);
-
-impl BangumiState {
-    fn new() -> Self {
-        Self(Paged::new())
-    }
-}
-
-impl Deref for BangumiState {
-    type Target = Paged<BangumiFollow, u32>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for BangumiState {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
 pub struct MineView {
-    backend: Option<Backend>,
+    client: Option<Arc<Client>>,
     tab: MineTab,
     folders: FolderState,
-    favorites: VideoListState,
-    history: VideoListState,
-    watch_later: VideoListState,
+    favorites: Paged<VideoCard, ListMeta>,
+    history: Paged<VideoCard, ListMeta>,
+    watch_later: Paged<VideoCard, ListMeta>,
     collected: CollectedState,
-    bangumi: BangumiState,
-    cinema: BangumiState,
+    bangumi: Paged<BangumiFollow, u32>,
+    cinema: Paged<BangumiFollow, u32>,
     stat: Option<NavStat>,
     stat_loading: bool,
     stat_error: Option<String>,
@@ -254,28 +208,28 @@ impl crate::shared::browse::season::SeasonOpener for MineView {
         &mut self.notice
     }
 
-    fn season_backend(&self) -> Option<Backend> {
-        self.backend.clone()
+    fn season_client(&self) -> Option<Arc<Client>> {
+        self.client.clone()
     }
 }
 
 impl MineView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let backend = backend::get(cx).ok();
+        let client = client::get(cx).ok();
         let search =
             filter::Search::new(window, cx, "搜索收藏、历史与追番", |this, cx| {
                 this.submit_search(cx)
             });
         Self {
-            backend,
+            client,
             tab: MineTab::default(),
             folders: FolderState::new(),
-            favorites: VideoListState::new(),
-            history: VideoListState::new(),
-            watch_later: VideoListState::new(),
+            favorites: Paged::new(),
+            history: Paged::new(),
+            watch_later: Paged::new(),
             collected: CollectedState::new(),
-            bangumi: BangumiState::new(),
-            cinema: BangumiState::new(),
+            bangumi: Paged::new(),
+            cinema: Paged::new(),
             stat: None,
             stat_loading: false,
             stat_error: None,
@@ -303,11 +257,11 @@ impl MineView {
         cx.notify();
     }
 
-    fn bangumi_state(&self, cinema: bool) -> &BangumiState {
+    fn bangumi_state(&self, cinema: bool) -> &Paged<BangumiFollow, u32> {
         if cinema { &self.cinema } else { &self.bangumi }
     }
 
-    fn bangumi_state_mut(&mut self, cinema: bool) -> &mut BangumiState {
+    fn bangumi_state_mut(&mut self, cinema: bool) -> &mut Paged<BangumiFollow, u32> {
         if cinema {
             &mut self.cinema
         } else {
@@ -315,7 +269,7 @@ impl MineView {
         }
     }
 
-    fn state(&self, tab: MineTab) -> &VideoListState {
+    fn state(&self, tab: MineTab) -> &Paged<VideoCard, ListMeta> {
         match tab {
             MineTab::History | MineTab::Offline => &self.history,
             MineTab::Favorites => &self.favorites,
@@ -345,12 +299,12 @@ impl MineView {
         self.favorites_view = FavoriteView::default();
         self.browsing_folder = None;
         self.folders = FolderState::new();
-        self.favorites = VideoListState::new();
-        self.history = VideoListState::new();
-        self.watch_later = VideoListState::new();
+        self.favorites = Paged::new();
+        self.history = Paged::new();
+        self.watch_later = Paged::new();
         self.collected = CollectedState::new();
-        self.bangumi = BangumiState::new();
-        self.cinema = BangumiState::new();
+        self.bangumi = Paged::new();
+        self.cinema = Paged::new();
         self.opening = None;
         self.notice = None;
         self.favorites_keyword.clear();
@@ -386,10 +340,6 @@ impl MineView {
             .child(div().flex_1())
             .child(self.search.field())
             .into_any_element()
-    }
-
-    pub(super) fn open_season(&mut self, season_id: u64, cx: &mut Context<Self>) {
-        crate::shared::browse::season::SeasonOpener::open_season(self, season_id, cx);
     }
 }
 

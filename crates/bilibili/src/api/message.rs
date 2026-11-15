@@ -36,9 +36,9 @@ impl MessageFeedKind {
     }
 }
 
-pub async fn sessions(client: &Client) -> Result<MessageSessions, ApiError> {
-    client
-        .get_json(
+impl Client {
+    pub async fn message_sessions(&self) -> Result<MessageSessions, ApiError> {
+        self.get_json(
             SESSIONS_URL,
             &[
                 ("session_type", "1".into()),
@@ -48,83 +48,83 @@ pub async fn sessions(client: &Client) -> Result<MessageSessions, ApiError> {
             ],
         )
         .await
-}
-
-pub async fn user_infos(client: &Client, uids: &[u64]) -> Result<Vec<MessageUserInfo>, ApiError> {
-    let uids = uids
-        .iter()
-        .map(u64::to_string)
-        .collect::<Vec<_>>()
-        .join(",");
-    client.get_json(USER_INFOS_URL, &[("uids", uids)]).await
-}
-
-pub async fn send_message(client: &Client, receiver: u64, content: &str) -> Result<(), ApiError> {
-    let sender = client.account_uid()?;
-    let csrf = client.csrf()?;
-    let dev_id = client.dev_id().to_owned();
-    let timestamp = crate::http::unix_timestamp();
-    let content = serde_json::json!({ "content": content }).to_string();
-
-    let form = [
-        ("msg[sender_uid]", sender.to_string()),
-        ("msg[receiver_id]", receiver.to_string()),
-        ("msg[receiver_type]", "1".to_owned()),
-        ("msg[msg_type]", "1".to_owned()),
-        ("msg[msg_status]", "0".to_owned()),
-        ("msg[dev_id]", dev_id.clone()),
-        ("msg[timestamp]", timestamp.to_string()),
-        ("msg[new_face_version]", "1".to_owned()),
-        ("msg[content]", content),
-        ("csrf", csrf.clone()),
-        ("csrf_token", csrf),
-        ("build", "0".to_owned()),
-        ("mobi_app", "web".to_owned()),
-    ];
-    let query = [
-        ("w_sender_uid", sender.to_string()),
-        ("w_receiver_id", receiver.to_string()),
-        ("w_dev_id", dev_id),
-    ];
-
-    client
-        .post_wbi_form::<serde_json::Value>(SEND_MSG_URL, &query, &form)
-        .await
-        .map(|_| ())
-}
-
-pub async fn feed(
-    client: &Client,
-    kind: MessageFeedKind,
-    cursor: Option<MessageCursor>,
-) -> Result<MessageFeed, ApiError> {
-    let url = format!("{MSGFEED_URL}/{}", kind.path());
-    let mut params = vec![
-        ("platform", "web".to_owned()),
-        ("build", "0".to_owned()),
-        ("mobi_app", "web".to_owned()),
-    ];
-    if let Some(cursor) = cursor.filter(|cursor| cursor.id > 0) {
-        params.push(("id", cursor.id.to_string()));
-        params.push((kind.time_param(), cursor.time.to_string()));
     }
 
-    if kind == MessageFeedKind::Like {
-        let feed: LikeFeed = client.get_wbi_json(&url, &params).await?;
-        let mut seen = HashSet::new();
-        let mut items = Vec::with_capacity(feed.latest.items.len() + feed.total.items.len());
-        for item in feed.latest.items.into_iter().chain(feed.total.items) {
-            if item.id == 0 || seen.insert(item.id) {
-                items.push(item);
-            }
+    pub async fn message_user_infos(&self, uids: &[u64]) -> Result<Vec<MessageUserInfo>, ApiError> {
+        let uids = uids
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        self.get_json(USER_INFOS_URL, &[("uids", uids)]).await
+    }
+
+    pub async fn send_message(&self, receiver: u64, content: &str) -> Result<(), ApiError> {
+        let sender = self.account_uid()?;
+        let csrf = self.csrf()?;
+        let dev_id = self.dev_id().to_owned();
+        let timestamp = crate::http::unix_timestamp();
+        let content = serde_json::json!({ "content": content }).to_string();
+
+        let form = [
+            ("msg[sender_uid]", sender.to_string()),
+            ("msg[receiver_id]", receiver.to_string()),
+            ("msg[receiver_type]", "1".to_owned()),
+            ("msg[msg_type]", "1".to_owned()),
+            ("msg[msg_status]", "0".to_owned()),
+            ("msg[dev_id]", dev_id.clone()),
+            ("msg[timestamp]", timestamp.to_string()),
+            ("msg[new_face_version]", "1".to_owned()),
+            ("msg[content]", content),
+            ("csrf", csrf.clone()),
+            ("csrf_token", csrf),
+            ("build", "0".to_owned()),
+            ("mobi_app", "web".to_owned()),
+        ];
+        let query = [
+            ("w_sender_uid", sender.to_string()),
+            ("w_receiver_id", receiver.to_string()),
+            ("w_dev_id", dev_id),
+        ];
+
+        self.post_wbi_form::<serde_json::Value>(SEND_MSG_URL, &query, &form)
+            .await
+            .map(|_| ())
+    }
+
+    pub async fn message_feed(
+        &self,
+        kind: MessageFeedKind,
+        cursor: Option<MessageCursor>,
+    ) -> Result<MessageFeed, ApiError> {
+        let url = format!("{MSGFEED_URL}/{}", kind.path());
+        let mut params = vec![
+            ("platform", "web".to_owned()),
+            ("build", "0".to_owned()),
+            ("mobi_app", "web".to_owned()),
+        ];
+        if let Some(cursor) = cursor.filter(|cursor| cursor.id > 0) {
+            params.push(("id", cursor.id.to_string()));
+            params.push((kind.time_param(), cursor.time.to_string()));
         }
-        return Ok(MessageFeed {
-            items,
-            cursor: feed.total.cursor,
-        });
-    }
 
-    client.get_wbi_json(&url, &params).await
+        if kind == MessageFeedKind::Like {
+            let feed: LikeFeed = self.get_wbi_json(&url, &params).await?;
+            let mut seen = HashSet::new();
+            let mut items = Vec::with_capacity(feed.latest.items.len() + feed.total.items.len());
+            for item in feed.latest.items.into_iter().chain(feed.total.items) {
+                if item.id == 0 || seen.insert(item.id) {
+                    items.push(item);
+                }
+            }
+            return Ok(MessageFeed {
+                items,
+                cursor: feed.total.cursor,
+            });
+        }
+
+        self.get_wbi_json(&url, &params).await
+    }
 }
 
 #[derive(Default, Deserialize)]

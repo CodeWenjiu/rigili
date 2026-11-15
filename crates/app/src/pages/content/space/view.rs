@@ -1,15 +1,15 @@
 rigili_macro::mod_prv!(collections, dynamics, profile, videos);
 
 use std::collections::HashMap;
-use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::api::space::SpaceVideoOrder;
-use rigili_bilibili::{DynamicItem, SeasonMeta, SeriesMeta, SpaceProfile};
+use rigili_bilibili::{Client, DynamicItem, SeasonMeta, SeriesMeta, SpaceProfile};
 
-use rigili_core::backend::{self, Backend};
+use rigili_core::client;
 use rigili_core::{OpenSpace, OpenVideo, Refresh};
 
 use super::comment;
@@ -43,7 +43,7 @@ impl SpaceTab {
 }
 
 pub struct SpaceView {
-    backend: Option<Backend>,
+    client: Option<Arc<Client>>,
     mid: Option<u64>,
     name: String,
     tab: SpaceTab,
@@ -58,7 +58,8 @@ pub struct SpaceView {
     comments_focus: FocusHandle,
     comment_trigger_focus: FocusHandle,
     dynamics: Paged<DynamicItem, String>,
-    space_videos: SpaceVideosState,
+    space_videos: Paged<VideoCard, VideoMeta>,
+    space_order: SpaceVideoOrder,
     collections: CollectionsState,
     dynamics_scroll: scroll::ScrollArea,
     collections_scroll: scroll::ScrollArea,
@@ -89,7 +90,7 @@ impl SpaceView {
         let comments_focus = cx.focus_handle();
         let comment_trigger_focus = cx.focus_handle();
         Self {
-            backend: None,
+            client: None,
             mid: None,
             name: String::new(),
             tab: SpaceTab::default(),
@@ -104,7 +105,8 @@ impl SpaceView {
             comments_focus,
             comment_trigger_focus,
             dynamics: Paged::new(),
-            space_videos: SpaceVideosState::new(),
+            space_videos: Paged::new(),
+            space_order: SpaceVideoOrder::default(),
             collections: CollectionsState::new(),
             dynamics_scroll: scroll::ScrollArea::new(),
             collections_scroll: scroll::ScrollArea::new(),
@@ -132,7 +134,8 @@ impl SpaceView {
         self.comment_views.clear();
         self.comment_trigger_key = None;
         self.dynamics = Paged::new();
-        self.space_videos = SpaceVideosState::new();
+        self.space_videos = Paged::new();
+        self.space_order = SpaceVideoOrder::default();
         self.collections = CollectionsState::new();
         self.list_width = px(0.);
         self.search.clear(window, cx);
@@ -141,8 +144,8 @@ impl SpaceView {
         cx.notify();
     }
 
-    fn backend(&mut self, cx: &mut Context<Self>) -> Result<Backend, String> {
-        backend::cached(&mut self.backend, cx)
+    fn cached_client(&mut self, cx: &mut Context<Self>) -> Result<Arc<Client>, String> {
+        client::cached(&mut self.client, cx)
     }
 
     fn load_if_needed(&mut self, cx: &mut Context<Self>) {
@@ -150,18 +153,10 @@ impl SpaceView {
             return;
         }
         match self.tab {
-            SpaceTab::Dynamics
-                if !self.dynamics.loaded
-                    && !self.dynamics.loading
-                    && self.dynamics.error.is_none() =>
-            {
+            SpaceTab::Dynamics if self.dynamics.needs_first_load() => {
                 self.load_dynamics(cx);
             }
-            SpaceTab::Videos
-                if !self.space_videos.loaded
-                    && !self.space_videos.loading
-                    && self.space_videos.error.is_none() =>
-            {
+            SpaceTab::Videos if self.space_videos.needs_first_load() => {
                 self.load_space_videos(cx);
             }
             SpaceTab::Collections
@@ -201,7 +196,8 @@ impl SpaceView {
         if self.tab == SpaceTab::Videos {
             self.load_space_videos(cx);
         } else {
-            self.space_videos = SpaceVideosState::new();
+            self.space_videos = Paged::new();
+            self.space_order = SpaceVideoOrder::default();
             self.load_if_needed(cx);
             cx.notify();
         }
@@ -239,38 +235,10 @@ impl SpaceView {
     }
 }
 
-struct SpaceVideosState {
-    list: Paged<VideoCard, VideoMeta>,
-    order: SpaceVideoOrder,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct VideoMeta {
     pub(crate) page: u32,
     pub(crate) total: u64,
-}
-
-impl SpaceVideosState {
-    fn new() -> Self {
-        Self {
-            list: Paged::new(),
-            order: SpaceVideoOrder::default(),
-        }
-    }
-}
-
-impl Deref for SpaceVideosState {
-    type Target = Paged<VideoCard, VideoMeta>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.list
-    }
-}
-
-impl DerefMut for SpaceVideosState {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.list
-    }
 }
 
 struct CollectionsState {

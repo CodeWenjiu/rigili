@@ -3,9 +3,9 @@ use crate::{ApiError, Client, LivePlayUrl, LiveRoom};
 const LIST_URL: &str = "https://api.live.bilibili.com/room/v1/Area/getRoomList";
 const PLAY_URL: &str = "https://api.live.bilibili.com/room/v1/Room/playUrl";
 
-pub async fn list(client: &Client, page: u32, page_size: u32) -> Result<Vec<LiveRoom>, ApiError> {
-    client
-        .get_json(
+impl Client {
+    pub async fn live_list(&self, page: u32, page_size: u32) -> Result<Vec<LiveRoom>, ApiError> {
+        self.get_json(
             LIST_URL,
             &[
                 ("parent_area_id", "0".into()),
@@ -16,26 +16,27 @@ pub async fn list(client: &Client, page: u32, page_size: u32) -> Result<Vec<Live
             ],
         )
         .await
-}
+    }
 
-pub async fn play_url(client: &Client, room_id: u64) -> Result<String, ApiError> {
-    let playurl: LivePlayUrl = client
-        .get_json(
-            PLAY_URL,
-            &[
-                ("cid", room_id.to_string()),
-                ("platform", "web".into()),
-                ("qn", "10000".into()),
-            ],
-        )
-        .await?;
+    pub async fn live_play_url(&self, room_id: u64) -> Result<String, ApiError> {
+        let playurl: LivePlayUrl = self
+            .get_json(
+                PLAY_URL,
+                &[
+                    ("cid", room_id.to_string()),
+                    ("platform", "web".into()),
+                    ("qn", "10000".into()),
+                ],
+            )
+            .await?;
 
-    playurl
-        .durl
-        .into_iter()
-        .map(|stream| stream.url)
-        .find(|url| !url.is_empty())
-        .ok_or_else(|| ApiError::InvalidResponse("该直播间没有可用的播放地址".into()))
+        playurl
+            .durl
+            .into_iter()
+            .map(|stream| stream.url)
+            .find(|url| !url.is_empty())
+            .ok_or_else(|| ApiError::InvalidResponse("该直播间没有可用的播放地址".into()))
+    }
 }
 
 #[cfg(test)]

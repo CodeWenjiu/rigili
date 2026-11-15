@@ -1,4 +1,2 @@
-rigili_macro::mod_pub!(
-    comment, interact, live, login, message, mine, pgc, playurl, popular, recommend, search, space,
-    view
-);
+rigili_macro::mod_prv!(interact, live, mine, pgc, playurl, popular, recommend, view);
+rigili_macro::mod_pub!(comment, login, message, search, space);

@@ -1,13 +1,12 @@
-use rigili_bilibili::ApiError;
+use rigili_bilibili::{ApiError, Client};
 
-use super::backend::Backend;
 use crate::ui::OpenVideo;
 
 pub async fn resolve_season(
-    backend: Backend,
+    client: &Client,
     season_id: u64,
 ) -> Result<Option<OpenVideo>, ApiError> {
-    let season = backend.pgc_season(season_id).await?;
+    let season = client.pgc_season(season_id).await?;
     let Some(episode) = season
         .episodes
         .into_iter()

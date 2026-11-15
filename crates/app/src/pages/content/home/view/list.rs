@@ -1,14 +1,13 @@
 use gpui_kit::component::*;
-use gpui_kit::component::spinner::Spinner;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::{HomeItem, HomeTab, HomeView};
 use crate::shared::browse::grid::{
     CARD_GAP, CardFrame, CardGrid, CardStyle, VideoCardKind, VideoCards, card_grid_loading,
-    card_text_height, live_card, pgc_card, video_card,
+    card_text_height, live_card, pgc_card, video_card, with_opening_overlay,
 };
-use crate::shared::browse::list::{LIST_FOOTER_HEIGHT, Rows, list_footer, virtual_rows_tracked};
+use crate::shared::browse::list::{LIST_FOOTER_HEIGHT, Rows, paged_footer, virtual_rows_tracked};
 use crate::shared::ui::state_view::{Layout, empty_state, error_state};
 
 impl HomeView {
@@ -56,16 +55,11 @@ impl HomeView {
     }
 
     fn render_footer(&self, tab: HomeTab, cx: &mut Context<Self>) -> AnyElement {
-        let muted = cx.theme().muted_foreground;
-        let danger = cx.theme().danger;
-        let more_error = self.state(tab).more_error.clone();
-
-        list_footer(
+        paged_footer(
+            self.state(tab),
             ("home-retry-more", tab.index()),
-            more_error,
-            muted,
-            danger,
-            cx.listener(move |this, _, _, cx| this.retry_more(tab, cx)),
+            cx,
+            move |this, cx| this.retry_more(tab, cx),
         )
     }
 
@@ -80,8 +74,8 @@ impl HomeView {
             window.scale_factor(),
         );
         let frame = CardFrame { style, metrics };
-        let rows = state.items.len().div_ceil(columns);
-        let footer = state.loading_more || state.more_error.is_some();
+        let rows = state.page_rows(columns);
+        let footer = state.footer_visible();
         let sizes = Rows::new(rows, metrics.height()).footer_if(footer, LIST_FOOTER_HEIGHT);
 
         virtual_rows_tracked(
@@ -163,30 +157,5 @@ fn home_card(
         HomeItem::Video(_) => return div().into_any_element(),
     };
 
-    if !opening {
-        return card;
-    }
-
-    div()
-        .relative()
-        .w(metrics.width)
-        .h(metrics.height())
-        .child(card)
-        .child(
-            div()
-                .absolute()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(hsla(0., 0., 0., 0.45))
-                .child(
-                    v_flex()
-                        .items_center()
-                        .gap_2()
-                        .child(Spinner::new().small())
-                        .child(div().text_xs().text_color(Hsla::white()).child("正在打开…")),
-                ),
-        )
-        .into_any_element()
+    with_opening_overlay(card, metrics.width, metrics.height(), opening)
 }

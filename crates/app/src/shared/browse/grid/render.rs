@@ -3,6 +3,7 @@ use std::rc::Rc;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::*;
 use gpui_kit::component::skeleton::Skeleton;
+use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
@@ -552,6 +553,40 @@ pub(crate) fn pgc_card(
         on_open,
     )
     .into_any_element()
+}
+
+pub(crate) fn with_opening_overlay(
+    card: AnyElement,
+    width: Pixels,
+    height: Pixels,
+    opening: bool,
+) -> AnyElement {
+    if !opening {
+        return card;
+    }
+
+    div()
+        .relative()
+        .w(width)
+        .h(height)
+        .child(card)
+        .child(
+            div()
+                .absolute()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(hsla(0., 0., 0., 0.45))
+                .child(
+                    v_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(Spinner::new().small())
+                        .child(div().text_xs().text_color(Hsla::white()).child("正在打开…")),
+                ),
+        )
+        .into_any_element()
 }
 
 pub(crate) fn skeleton_card(width: Pixels, radius: Pixels) -> impl IntoElement {

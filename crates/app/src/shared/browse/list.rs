@@ -11,6 +11,8 @@ use gpui_kit::*;
 
 use crate::shared::ui::scroll;
 
+use super::paging::Paged;
+
 pub(crate) const LIST_FOOTER_HEIGHT: Pixels = px(56.);
 const PAGE_GUTTER_REMS: f32 = 1.5;
 
@@ -106,6 +108,25 @@ pub(crate) fn list_footer(
         .justify_center()
         .child(content)
         .into_any_element()
+}
+
+pub(crate) fn paged_footer<V, T, M>(
+    state: &Paged<T, M>,
+    retry_id: impl Into<ElementId>,
+    cx: &mut Context<V>,
+    retry: impl Fn(&mut V, &mut Context<V>) + 'static,
+) -> AnyElement
+where
+    V: 'static,
+{
+    let theme = cx.theme();
+    list_footer(
+        retry_id,
+        state.more_error.clone(),
+        theme.muted_foreground,
+        theme.danger,
+        cx.listener(move |this, _, _, cx| retry(this, cx)),
+    )
 }
 
 pub(crate) trait ListWidth: 'static {

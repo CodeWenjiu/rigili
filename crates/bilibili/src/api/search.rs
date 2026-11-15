@@ -72,75 +72,78 @@ impl SearchOrder {
     }
 }
 
-pub async fn fetch_videos(
-    client: &Client,
-    keyword: &str,
-    page: u32,
-    order: SearchOrder,
-) -> Result<VideoSearch, ApiError> {
-    fetch_type(client, keyword, page, order, SearchType::Video).await
-}
-
-pub async fn fetch_users(
-    client: &Client,
-    keyword: &str,
-    page: u32,
-    order: SearchOrder,
-) -> Result<UserSearch, ApiError> {
-    fetch_type(client, keyword, page, order, SearchType::User).await
-}
-
-pub async fn fetch_live(
-    client: &Client,
-    keyword: &str,
-    page: u32,
-    order: SearchOrder,
-) -> Result<LiveSearch, ApiError> {
-    fetch_type(client, keyword, page, order, SearchType::Live).await
-}
-
-pub async fn fetch_articles(
-    client: &Client,
-    keyword: &str,
-    page: u32,
-    order: SearchOrder,
-) -> Result<ArticleSearch, ApiError> {
-    fetch_type(client, keyword, page, order, SearchType::Article).await
-}
-
-pub async fn fetch_media(
-    client: &Client,
-    keyword: &str,
-    page: u32,
-    order: SearchOrder,
-    search_type: SearchType,
-) -> Result<MediaSearch, ApiError> {
-    if !matches!(search_type, SearchType::Bangumi | SearchType::Film) {
-        return Err(ApiError::InvalidResponse("无效的影视搜索类型".into()));
+impl Client {
+    pub async fn search_videos(
+        &self,
+        keyword: &str,
+        page: u32,
+        order: SearchOrder,
+    ) -> Result<VideoSearch, ApiError> {
+        self.search_page(keyword, page, order, SearchType::Video)
+            .await
     }
 
-    fetch_type(client, keyword, page, order, search_type).await
-}
-
-pub async fn fetch_all(client: &Client, keyword: &str) -> Result<SearchAll, ApiError> {
-    let keyword = keyword.trim();
-    if keyword.is_empty() {
-        return Err(ApiError::InvalidResponse("搜索关键词不能为空".into()));
+    pub async fn search_users(
+        &self,
+        keyword: &str,
+        page: u32,
+        order: SearchOrder,
+    ) -> Result<UserSearch, ApiError> {
+        self.search_page(keyword, page, order, SearchType::User)
+            .await
     }
 
-    client
-        .get_wbi_json(ALL_URL, &[("keyword", keyword.to_owned())])
-        .await
-}
-
-pub async fn fetch_suggestions(client: &Client, term: &str) -> Result<SearchSuggestions, ApiError> {
-    let term = term.trim();
-    if term.is_empty() {
-        return Ok(SearchSuggestions::default());
+    pub async fn search_live(
+        &self,
+        keyword: &str,
+        page: u32,
+        order: SearchOrder,
+    ) -> Result<LiveSearch, ApiError> {
+        self.search_page(keyword, page, order, SearchType::Live)
+            .await
     }
 
-    client
-        .get_json(
+    pub async fn search_articles(
+        &self,
+        keyword: &str,
+        page: u32,
+        order: SearchOrder,
+    ) -> Result<ArticleSearch, ApiError> {
+        self.search_page(keyword, page, order, SearchType::Article)
+            .await
+    }
+
+    pub async fn search_media(
+        &self,
+        keyword: &str,
+        page: u32,
+        order: SearchOrder,
+        search_type: SearchType,
+    ) -> Result<MediaSearch, ApiError> {
+        if !matches!(search_type, SearchType::Bangumi | SearchType::Film) {
+            return Err(ApiError::InvalidResponse("无效的影视搜索类型".into()));
+        }
+
+        self.search_page(keyword, page, order, search_type).await
+    }
+
+    pub async fn search_all(&self, keyword: &str) -> Result<SearchAll, ApiError> {
+        let keyword = keyword.trim();
+        if keyword.is_empty() {
+            return Err(ApiError::InvalidResponse("搜索关键词不能为空".into()));
+        }
+
+        self.get_wbi_json(ALL_URL, &[("keyword", keyword.to_owned())])
+            .await
+    }
+
+    pub async fn search_suggestions(&self, term: &str) -> Result<SearchSuggestions, ApiError> {
+        let term = term.trim();
+        if term.is_empty() {
+            return Ok(SearchSuggestions::default());
+        }
+
+        self.get_json(
             SUGGEST_URL,
             &[
                 ("term", term.to_owned()),
@@ -149,29 +152,28 @@ pub async fn fetch_suggestions(client: &Client, term: &str) -> Result<SearchSugg
             ],
         )
         .await
-}
-
-pub async fn fetch_hot_words(client: &Client) -> Result<HotWords, ApiError> {
-    client.get_raw(HOTWORD_URL).await
-}
-
-async fn fetch_type<T>(
-    client: &Client,
-    keyword: &str,
-    page: u32,
-    order: SearchOrder,
-    search_type: SearchType,
-) -> Result<T, ApiError>
-where
-    T: DeserializeOwned,
-{
-    let keyword = keyword.trim();
-    if keyword.is_empty() {
-        return Err(ApiError::InvalidResponse("搜索关键词不能为空".into()));
     }
 
-    client
-        .get_wbi_json(
+    pub async fn hot_words(&self) -> Result<HotWords, ApiError> {
+        self.get_raw(HOTWORD_URL).await
+    }
+
+    async fn search_page<T>(
+        &self,
+        keyword: &str,
+        page: u32,
+        order: SearchOrder,
+        search_type: SearchType,
+    ) -> Result<T, ApiError>
+    where
+        T: DeserializeOwned,
+    {
+        let keyword = keyword.trim();
+        if keyword.is_empty() {
+            return Err(ApiError::InvalidResponse("搜索关键词不能为空".into()));
+        }
+
+        self.get_wbi_json(
             SEARCH_URL,
             &[
                 ("search_type", search_type.as_str().to_owned()),
@@ -182,6 +184,7 @@ where
             ],
         )
         .await
+    }
 }
 
 #[cfg(test)]

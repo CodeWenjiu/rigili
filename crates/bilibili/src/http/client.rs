@@ -97,6 +97,10 @@ impl Client {
         lock_cookies(&self.cookies).clone()
     }
 
+    pub fn has_session(&self) -> bool {
+        !self.cookie_values().is_empty()
+    }
+
     pub fn csrf(&self) -> Result<String, ApiError> {
         self.cookie_values()
             .get("bili_jct")
@@ -151,9 +155,7 @@ impl Client {
     where
         T: DeserializeOwned,
     {
-        let response = self.send(|| self.http.get(url).query(params)).await?;
-        let body = response.text().await?;
-        self.parse(&body)
+        self.json(|| self.http.get(url).query(params)).await
     }
 
     pub async fn get_json_or_default<T>(
@@ -173,22 +175,15 @@ impl Client {
     where
         T: DeserializeOwned,
     {
-        let signer = self.wbi.get_or_try_init(|| WbiSigner::fetch(self)).await?;
-        let params = params
-            .iter()
-            .map(|(key, value)| ((*key).to_owned(), value.clone()))
-            .collect::<Vec<_>>();
-        let query = signer.sign(&params, unix_timestamp());
-        self.get_url_json(&format!("{url}?{query}")).await
+        let target = self.wbi_url(url, params).await?;
+        self.json(|| self.http.get(&target)).await
     }
 
     pub async fn post_form<T>(&self, url: &str, params: &[(&str, String)]) -> Result<T, ApiError>
     where
         T: DeserializeOwned,
     {
-        let response = self.send(|| self.http.post(url).form(params)).await?;
-        let body = response.text().await?;
-        self.parse(&body)
+        self.json(|| self.http.post(url).form(params)).await
     }
 
     pub async fn post_wbi_form<T>(
@@ -200,16 +195,8 @@ impl Client {
     where
         T: DeserializeOwned,
     {
-        let signer = self.wbi.get_or_try_init(|| WbiSigner::fetch(self)).await?;
-        let params = params
-            .iter()
-            .map(|(key, value)| ((*key).to_owned(), value.clone()))
-            .collect::<Vec<_>>();
-        let query = signer.sign(&params, unix_timestamp());
-        let target = format!("{url}?{query}");
-        let response = self.send(|| self.http.post(&target).form(form)).await?;
-        let body = response.text().await?;
-        self.parse(&body)
+        let target = self.wbi_url(url, params).await?;
+        self.json(|| self.http.post(&target).form(form)).await
     }
 
     pub async fn post_form_ack(
@@ -222,6 +209,16 @@ impl Client {
         self.parse_ack(&body)
     }
 
+    async fn wbi_url(&self, url: &str, params: &[(&str, String)]) -> Result<String, ApiError> {
+        let signer = self.wbi.get_or_try_init(|| WbiSigner::fetch(self)).await?;
+        let params = params
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), value.clone()))
+            .collect::<Vec<_>>();
+        let query = signer.sign(&params, unix_timestamp());
+        Ok(format!("{url}?{query}"))
+    }
+
     pub(crate) async fn get_raw<T>(&self, url: &str) -> Result<T, ApiError>
     where
         T: DeserializeOwned,
@@ -231,11 +228,11 @@ impl Client {
         Ok(serde_json::from_str(&body)?)
     }
 
-    async fn get_url_json<T>(&self, url: &str) -> Result<T, ApiError>
+    async fn json<T>(&self, request: impl Fn() -> RequestBuilder + Send) -> Result<T, ApiError>
     where
         T: DeserializeOwned,
     {
-        let response = self.send(|| self.http.get(url)).await?;
+        let response = self.send(request).await?;
         let body = response.text().await?;
         self.parse(&body)
     }

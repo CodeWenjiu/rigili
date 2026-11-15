@@ -4,7 +4,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::MessageCursor;
 use rigili_bilibili::api::message::MessageFeedKind;
-use rigili_core::backend;
+use rigili_core::client;
 use rigili_core::login as login_state;
 use rigili_core::{OpenSpace, Refresh, api_error_message};
 
@@ -122,8 +122,7 @@ impl MessagesView {
         }
 
         self.tab = tab;
-        let state = self.state(tab);
-        let needs_load = !state.loaded && !state.loading && state.error.is_none();
+        let needs_load = self.state(tab).needs_first_load();
         if needs_load && self.user_mid.is_some() {
             self.load(tab, cx);
         } else {
@@ -137,8 +136,8 @@ impl MessagesView {
     }
 
     fn load(&mut self, tab: MessageTab, cx: &mut Context<Self>) {
-        let backend = match backend::get(cx) {
-            Ok(backend) => backend,
+        let client = match client::get(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.state_mut(tab)
                     .fail_first_reset(api_error_message(error));
@@ -150,11 +149,11 @@ impl MessagesView {
         let future = async move {
             match tab.feed_kind() {
                 Some(kind) => {
-                    let feed = backend.message_feed(kind, None).await?;
+                    let feed = client.message_feed(kind, None).await?;
                     Ok(feed_page(tab, feed))
                 }
                 None => {
-                    let sessions = backend.message_sessions().await?;
+                    let sessions = client.message_sessions().await?;
                     let missing = sessions
                         .session_list
                         .iter()
@@ -164,8 +163,8 @@ impl MessagesView {
                     let infos = if missing.is_empty() {
                         Vec::new()
                     } else {
-                        backend
-                            .message_user_infos(missing)
+                        client
+                            .message_user_infos(&missing)
                             .await
                             .unwrap_or_default()
                     };
@@ -192,8 +191,8 @@ impl MessagesView {
         let Some(kind) = tab.feed_kind() else {
             return;
         };
-        let backend = match backend::get(cx) {
-            Ok(backend) => backend,
+        let client = match client::get(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.state_mut(tab).fail_more(api_error_message(error));
                 cx.notify();
@@ -209,7 +208,7 @@ impl MessagesView {
             move |cursor| {
                 let cursor = cursor.unwrap_or_default();
                 async move {
-                    let feed = backend.message_feed(kind, Some(cursor)).await?;
+                    let feed = client.message_feed(kind, Some(cursor)).await?;
                     let page = feed_page(tab, feed);
                     let next = page.meta.filter(|next| *next != cursor);
                     Ok(Page::new(page.items, next.is_some(), next))

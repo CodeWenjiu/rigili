@@ -6,8 +6,10 @@ use rigili_bilibili::SpaceVideos;
 use rigili_bilibili::api::space::SpaceVideoOrder;
 
 use super::{SpaceView, VideoMeta};
-use crate::shared::browse::grid::{CardFrame, CardGrid, CardStyle, VideoCards, card_text_height};
-use crate::shared::browse::list::{LIST_FOOTER_HEIGHT, Rows, list_footer, virtual_rows_tracked};
+use crate::shared::browse::grid::{
+    CardFrame, CardGrid, CardStyle, VideoCards, card_text_height, video_card_row,
+};
+use crate::shared::browse::list::{LIST_FOOTER_HEIGHT, Rows, paged_footer, virtual_rows_tracked};
 use crate::shared::browse::paging::{Page, spawn_first, spawn_more};
 use crate::shared::ui::state_view::{Layout, centered_spinner, empty_state, error_state};
 
@@ -16,23 +18,23 @@ impl SpaceView {
         let Some(mid) = self.mid else {
             return;
         };
-        let backend = match self.backend(cx) {
-            Ok(backend) => backend,
+        let client = match self.cached_client(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.space_videos.fail_first_reset(error);
                 cx.notify();
                 return;
             }
         };
-        let order = self.space_videos.order;
+        let order = self.space_order;
         let keyword = self.search.keyword().to_owned();
 
         spawn_first(
             self,
             cx,
-            |this| &mut this.space_videos.list,
+            |this| &mut this.space_videos,
             |card: &crate::shared::browse::grid::VideoCard| card.bvid().to_owned(),
-            async move { space_page(backend.space_videos(mid, 1, order, &keyword).await?) },
+            async move { space_page(client.space_videos(mid, 1, order, &keyword).await?) },
             space_videos_applied,
         );
     }
@@ -41,25 +43,25 @@ impl SpaceView {
         let Some(mid) = self.mid else {
             return;
         };
-        let backend = match self.backend(cx) {
-            Ok(backend) => backend,
+        let client = match self.cached_client(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.space_videos.fail_more(error);
                 cx.notify();
                 return;
             }
         };
-        let order = self.space_videos.order;
+        let order = self.space_order;
         let keyword = self.search.keyword().to_owned();
 
         spawn_more(
             self,
             cx,
-            |this| &mut this.space_videos.list,
+            |this| &mut this.space_videos,
             |card: &crate::shared::browse::grid::VideoCard| card.bvid().to_owned(),
             move |meta| {
                 let page = meta.page + 1;
-                async move { space_page(backend.space_videos(mid, page, order, &keyword).await?) }
+                async move { space_page(client.space_videos(mid, page, order, &keyword).await?) }
             },
             space_videos_applied,
         );
@@ -71,10 +73,10 @@ impl SpaceView {
     }
 
     fn set_space_order(&mut self, order: SpaceVideoOrder, cx: &mut Context<Self>) {
-        if self.space_videos.order == order {
+        if self.space_order == order {
             return;
         }
-        self.space_videos.order = order;
+        self.space_order = order;
         self.load_space_videos(cx);
     }
 
@@ -95,7 +97,7 @@ impl SpaceView {
                         (SpaceVideoOrder::Plays, "最多播放", 1usize),
                     ]
                     .map(|(order, label, index)| {
-                        let active = self.space_videos.order == order;
+                        let active = self.space_order == order;
                         let group = SharedString::from(format!("space-order-{index}"));
                         v_flex()
                             .group(group.clone())
@@ -175,8 +177,8 @@ impl SpaceView {
             window.scale_factor(),
         );
         let frame = CardFrame { style, metrics };
-        let rows = self.space_videos.items.len().div_ceil(columns);
-        let footer = self.space_videos.loading_more || self.space_videos.more_error.is_some();
+        let rows = self.space_videos.page_rows(columns);
+        let footer = self.space_videos.footer_visible();
         let sizes = Rows::new(rows, metrics.height()).footer_if(footer, LIST_FOOTER_HEIGHT);
 
         virtual_rows_tracked(
@@ -220,21 +222,13 @@ impl SpaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        crate::shared::browse::grid::video_card_row(&self.space_videos.items, row, columns, frame, window, cx)
+        video_card_row(&self.space_videos.items, row, columns, frame, window, cx)
     }
 
     fn render_space_videos_footer(&self, cx: &mut Context<Self>) -> AnyElement {
-        let muted = cx.theme().muted_foreground;
-        let danger = cx.theme().danger;
-        let more_error = self.space_videos.more_error.clone();
-
-        list_footer(
-            "space-videos-more",
-            more_error,
-            muted,
-            danger,
-            cx.listener(|this, _, _, cx| this.retry_more_space_videos(cx)),
-        )
+        paged_footer(&self.space_videos, "space-videos-more", cx, |this, cx| {
+            this.retry_more_space_videos(cx)
+        })
     }
 }
 

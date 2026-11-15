@@ -4,7 +4,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use image::RgbaImage;
 use rigili_bilibili::ApiError;
-use rigili_core::backend;
+use rigili_core::client;
 use rigili_core::runtime::Tokio;
 use rigili_playback::resolve_preview;
 use rigili_player::{Player, VideoFrame, VideoSize};
@@ -87,14 +87,14 @@ impl PreviewSlot {
 
     fn start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.task = None;
-        let Ok(backend) = backend::get(cx) else {
+        let Ok(client) = client::get(cx) else {
             return;
         };
 
         let generation = self.generation;
         let bvid = self.source.bvid.to_string();
         let cid = self.source.cid;
-        let request = Tokio::spawn(cx, async move { resolve_preview(backend, bvid, cid).await });
+        let request = Tokio::spawn(cx, async move { resolve_preview(client, bvid, cid).await });
 
         self.task = Some(cx.spawn_in(window, async move |slot, cx| {
             let result = request.await;

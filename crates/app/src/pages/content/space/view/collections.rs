@@ -21,8 +21,8 @@ impl SpaceView {
         if !reset && (self.collections.loading || self.collections.loaded) {
             return;
         }
-        let backend = match self.backend(cx) {
-            Ok(backend) => backend,
+        let client = match self.cached_client(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.collections.error = Some(error);
                 cx.notify();
@@ -40,7 +40,7 @@ impl SpaceView {
 
         spawn_api(
             cx,
-            async move { backend.collections(mid, 1).await },
+            async move { client.collections(mid, 1).await },
             move |this, result, cx| {
                 if this.collections.generation != generation {
                     return;

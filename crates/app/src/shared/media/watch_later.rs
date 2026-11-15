@@ -5,7 +5,7 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_core::runtime::Tokio;
-use rigili_core::{api_error_message, backend, login};
+use rigili_core::{api_error_message, client, login};
 
 #[derive(Default)]
 struct WatchLaterState {
@@ -50,13 +50,13 @@ pub(crate) fn ensure(window: &mut Window, cx: &mut App) {
 }
 
 fn load(cx: &mut App) {
-    let Ok(backend) = backend::get(cx) else {
+    let Ok(client) = client::get(cx) else {
         let state = cx.global_mut::<WatchLaterState>();
         state.loading = false;
         state.loaded = true;
         return;
     };
-    let request = Tokio::spawn(cx, async move { backend.watch_later().await });
+    let request = Tokio::spawn(cx, async move { client.watch_later().await });
 
     cx.spawn(async move |cx| {
         let result = request.await;
@@ -79,7 +79,7 @@ fn load(cx: &mut App) {
 }
 
 pub(crate) fn toggle(bvid: SharedString, window: &mut Window, cx: &mut App) {
-    let Ok(backend) = backend::get(cx) else {
+    let Ok(client) = client::get(cx) else {
         return;
     };
     let (in_watch_later, aid) = {
@@ -105,13 +105,13 @@ pub(crate) fn toggle(bvid: SharedString, window: &mut Window, cx: &mut App) {
     let bvid_for_request = bvid_key.clone();
     let request = Tokio::spawn(cx, async move {
         if !in_watch_later {
-            return backend.watch_later_add(&bvid_for_request).await;
+            return client.watch_later_add(&bvid_for_request).await;
         }
 
         let aid = if aid > 0 {
             aid
         } else {
-            match backend.watch_later().await {
+            match client.watch_later().await {
                 Ok(page) => match page
                     .into_items()
                     .into_iter()
@@ -123,7 +123,7 @@ pub(crate) fn toggle(bvid: SharedString, window: &mut Window, cx: &mut App) {
                 Err(error) => return Err(error),
             }
         };
-        backend.watch_later_remove(aid).await
+        client.watch_later_remove(aid).await
     });
 
     cx.spawn(async move |cx| {

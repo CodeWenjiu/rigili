@@ -3,14 +3,14 @@ use crate::{ApiError, Client, PgcIndex, PgcSeason};
 const INDEX_URL: &str = "https://api.bilibili.com/pgc/season/index/result";
 const SEASON_URL: &str = "https://api.bilibili.com/pgc/view/web/season";
 
-pub async fn index(
-    client: &Client,
-    season_type: u32,
-    page: u32,
-    page_size: u32,
-) -> Result<PgcIndex, ApiError> {
-    client
-        .get_json(
+impl Client {
+    pub async fn pgc_index(
+        &self,
+        season_type: u32,
+        page: u32,
+        page_size: u32,
+    ) -> Result<PgcIndex, ApiError> {
+        self.get_json(
             INDEX_URL,
             &[
                 ("season_type", season_type.to_string()),
@@ -22,12 +22,12 @@ pub async fn index(
             ],
         )
         .await
-}
+    }
 
-pub async fn season(client: &Client, season_id: u64) -> Result<PgcSeason, ApiError> {
-    client
-        .get_json(SEASON_URL, &[("season_id", season_id.to_string())])
-        .await
+    pub async fn pgc_season(&self, season_id: u64) -> Result<PgcSeason, ApiError> {
+        self.get_json(SEASON_URL, &[("season_id", season_id.to_string())])
+            .await
+    }
 }
 
 #[cfg(test)]

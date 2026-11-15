@@ -20,30 +20,15 @@ impl CommentSort {
     }
 }
 
-pub async fn add(client: &Client, kind: u32, oid: &str, message: &str) -> Result<(), ApiError> {
-    client
-        .post_form_ack(
-            ADD_URL,
-            &[
-                ("type", kind.to_string()),
-                ("oid", oid.to_owned()),
-                ("message", message.to_owned()),
-                ("plat", "1".to_owned()),
-                ("csrf", client.csrf()?),
-            ],
-        )
-        .await
-}
-
-pub async fn fetch(
-    client: &Client,
-    kind: u32,
-    oid: &str,
-    page: u32,
-    sort: CommentSort,
-) -> Result<CommentPage, ApiError> {
-    client
-        .get_json(
+impl Client {
+    pub async fn comments(
+        &self,
+        kind: u32,
+        oid: &str,
+        page: u32,
+        sort: CommentSort,
+    ) -> Result<CommentPage, ApiError> {
+        self.get_json(
             COMMENTS_URL,
             &[
                 ("type", kind.to_string()),
@@ -54,4 +39,19 @@ pub async fn fetch(
             ],
         )
         .await
+    }
+
+    pub async fn add_comment(&self, aid: u64, message: &str) -> Result<(), ApiError> {
+        self.post_form_ack(
+            ADD_URL,
+            &[
+                ("type", "1".to_owned()),
+                ("oid", aid.to_string()),
+                ("message", message.to_owned()),
+                ("plat", "1".to_owned()),
+                ("csrf", self.csrf()?),
+            ],
+        )
+        .await
+    }
 }

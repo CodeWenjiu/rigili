@@ -8,10 +8,10 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use image::RgbaImage;
 use qrcodegen::{QrCode, QrCodeEcc};
-use rigili_bilibili::{Nav, api::login::cookies_from_login_url};
+use rigili_bilibili::{Client, Nav, api::login::cookies_from_login_url};
 
 use rigili_core::api_error_message;
-use rigili_core::backend::{self, Backend};
+use rigili_core::client;
 use rigili_core::login::set_user;
 use rigili_core::runtime::Tokio;
 
@@ -32,7 +32,7 @@ enum Phase {
 }
 
 struct LoginView {
-    backend: Option<Backend>,
+    client: Option<Arc<Client>>,
     phase: Phase,
     qr: Option<Arc<RenderImage>>,
     _task: Option<Task<()>>,
@@ -130,14 +130,14 @@ impl Prompt {
 }
 
 pub(crate) fn restore(_window: &mut Window, cx: &mut App) {
-    let Ok(backend) = backend::get(cx) else {
+    let Ok(client) = client::get(cx) else {
         return;
     };
-    if !backend.has_session() {
+    if !client.has_session() {
         return;
     }
     cx.spawn(async move |cx| {
-        let nav = request(Tokio::spawn(&*cx, async move { backend.nav().await }).await);
+        let nav = request(Tokio::spawn(&*cx, async move { client.nav().await }).await);
         if let Ok(nav) = nav
             && nav.is_login
         {
@@ -149,24 +149,24 @@ pub(crate) fn restore(_window: &mut Window, cx: &mut App) {
 
 impl LoginView {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let (backend, phase) = match backend::get(cx) {
-            Ok(backend) => (Some(backend), Phase::Starting),
+        let (client, phase) = match client::get(cx) {
+            Ok(client) => (Some(client), Phase::Starting),
             Err(error) => (None, Phase::Failed(api_error_message(error))),
         };
         let mut view = Self {
-            backend,
+            client,
             phase,
             qr: None,
             _task: None,
         };
-        if view.backend.is_some() {
+        if view.client.is_some() {
             view.start(window, cx);
         }
         view
     }
 
     fn start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(backend) = self.backend.clone() else {
+        let Some(client) = self.client.clone() else {
             return;
         };
         self.phase = Phase::Starting;
@@ -176,8 +176,8 @@ impl LoginView {
         self._task = Some(cx.spawn_in(window, async move |weak, cx| {
             let generated = request(
                 Tokio::spawn(&*cx, {
-                    let backend = backend.clone();
-                    async move { backend.qr_generate().await }
+                    let client = client.clone();
+                    async move { client.qr_generate().await }
                 })
                 .await,
             );
@@ -204,9 +204,9 @@ impl LoginView {
             loop {
                 cx.background_executor().timer(POLL_INTERVAL).await;
                 let polled = Tokio::spawn(&*cx, {
-                    let backend = backend.clone();
+                    let client = client.clone();
                     let key = qr.qrcode_key.clone();
-                    async move { backend.qr_poll(&key).await }
+                    async move { client.qr_poll(&key).await }
                 })
                 .await;
 
@@ -221,7 +221,7 @@ impl LoginView {
                 match poll.code {
                     0 => {
                         let mut cookies = cookies_from_login_url(&poll.url);
-                        cookies.extend(backend.cookie_jar_values());
+                        cookies.extend(client.jar_cookies());
                         if !cookies.contains_key("SESSDATA") {
                             eprintln!(
                                 "login: SESSDATA missing, cookies = {:?}",
@@ -232,12 +232,12 @@ impl LoginView {
                             });
                             return;
                         }
-                        backend.apply_cookies(cookies);
-                        let saved = backend.save_session();
+                        client.set_cookies(cookies);
+                        let saved = client.save_session();
                         let nav = request(
                             Tokio::spawn(&*cx, {
-                                let backend = backend.clone();
-                                async move { backend.nav().await }
+                                let client = client.clone();
+                                async move { client.nav().await }
                             })
                             .await,
                         );

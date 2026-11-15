@@ -4,7 +4,7 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_core::backend;
+use rigili_core::client;
 use rigili_core::format_count;
 use rigili_core::runtime::spawn_api;
 
@@ -59,38 +59,38 @@ impl InfoPanel {
     }
 
     fn toggle_watch_later(&mut self, cx: &mut Context<Self>) {
-        if self.watch_later_busy {
+        if self.watch_later.busy {
             return;
         }
         let Some(details) = self.details.clone() else {
             return;
         };
-        let Ok(backend) = backend::get(cx) else {
+        let Ok(client) = client::get(cx) else {
             return;
         };
         let aid = details.aid;
         let bvid = details.bvid.to_string();
-        let add = !self.watch_later;
-        self.watch_later_busy = true;
-        self.watch_later_touched = true;
+        let add = !self.watch_later.active;
+        self.watch_later.set_busy(true);
         cx.notify();
 
         spawn_api(
             cx,
             async move {
                 if add {
-                    backend.watch_later_add(&bvid).await
+                    client.watch_later_add(&bvid).await
                 } else {
-                    backend.watch_later_remove(aid).await
+                    client.watch_later_remove(aid).await
                 }
             },
             move |this, result, cx| {
                 if this.details.as_ref().map(|details| details.aid) != Some(aid) {
                     return;
                 }
-                this.watch_later_busy = false;
                 if result.is_ok() {
-                    this.watch_later = add;
+                    this.watch_later.apply(add);
+                } else {
+                    this.watch_later.busy = false;
                 }
                 cx.notify();
             },
@@ -101,7 +101,7 @@ impl InfoPanel {
         let muted = cx.theme().muted_foreground;
         let primary = cx.theme().primary;
         let count: SharedString = format_count(self.comment_count).into();
-        let watch_later = self.watch_later;
+        let watch_later = self.watch_later.active;
         let later_label: SharedString = if watch_later {
             "已加入稍后再看"
         } else {
@@ -121,7 +121,7 @@ impl InfoPanel {
             .accessibility_label(later_label.clone())
             .tooltip(later_label)
             .icon(later_icon)
-            .loading(self.watch_later_busy)
+            .loading(self.watch_later.busy)
             .on_click(cx.listener(|this, _, _, cx| this.toggle_watch_later(cx)));
         let reload_button = Button::new("player-reload")
             .ghost()

@@ -1,39 +1,38 @@
+use std::sync::Arc;
+
 use gpui_kit::*;
-use rigili_bilibili::ApiError;
 use rigili_bilibili::api::search::{SearchOrder, SearchType};
+use rigili_bilibili::{ApiError, Client};
 
 use super::items::{SearchItem, UserItem};
 use super::{SearchTab, SearchView};
-use rigili_core::api_error_message;
-use rigili_core::backend::{self, Backend};
+use rigili_core::client;
 use rigili_core::runtime::spawn_api;
 
 use crate::shared::browse::grid::VideoCard;
 use crate::shared::browse::paging::{Page, dedupe_by, spawn_first, spawn_more};
 
 impl SearchView {
+    fn cached_client(&mut self, cx: &mut Context<Self>) -> Result<Arc<Client>, String> {
+        client::cached(&mut self.client, cx)
+    }
+
     pub(super) fn load_tab(&mut self, tab: SearchTab, cx: &mut Context<Self>) {
         if self.keyword.is_empty() {
             return;
         }
-        if self.backend.is_none() {
-            match backend::get(cx) {
-                Ok(backend) => self.backend = Some(backend),
-                Err(error) => {
-                    self.state_mut(tab).fail_first(api_error_message(error));
-                    cx.notify();
-                    return;
-                }
+        let client = match self.cached_client(cx) {
+            Ok(client) => client,
+            Err(error) => {
+                self.state_mut(tab).fail_first(error);
+                cx.notify();
+                return;
             }
-        }
-
-        let Some(backend) = self.backend.clone() else {
-            return;
         };
         let keyword = self.keyword.clone();
         let order = self.order;
         let all_tab = tab == SearchTab::All;
-        let header = all_tab.then(|| (backend.clone(), keyword.clone()));
+        let header = all_tab.then(|| (client.clone(), keyword.clone()));
         if all_tab {
             self.state_mut(tab).users.clear();
         }
@@ -43,7 +42,7 @@ impl SearchView {
             cx,
             move |this| this.state_mut(tab),
             SearchItem::key,
-            async move { fetch_page(backend, tab, keyword, 1, order).await },
+            async move { fetch_page(client, tab, keyword, 1, order).await },
             move |this| {
                 this.state_mut(tab)
                     .scroll
@@ -51,13 +50,13 @@ impl SearchView {
             },
         );
 
-        if let Some((backend, keyword)) = header {
-            spawn_header(cx, generation, backend, keyword);
+        if let Some((client, keyword)) = header {
+            spawn_header(cx, generation, client, keyword);
         }
     }
 
     pub(super) fn load_more(&mut self, tab: SearchTab, cx: &mut Context<Self>) {
-        let Some(backend) = self.backend.clone() else {
+        let Some(client) = self.client.clone() else {
             return;
         };
         let keyword = self.keyword.clone();
@@ -70,7 +69,7 @@ impl SearchView {
             SearchItem::key,
             move |page| {
                 let page = page + 1;
-                async move { fetch_page(backend, tab, keyword, page, order).await }
+                async move { fetch_page(client, tab, keyword, page, order).await }
             },
             |_| {},
         );
@@ -93,17 +92,18 @@ impl SearchView {
             self.load_more(tab, cx);
         }
     }
-
-    pub(super) fn open_season(&mut self, season_id: u64, cx: &mut Context<Self>) {
-        crate::shared::browse::season::SeasonOpener::open_season(self, season_id, cx);
-    }
 }
 
-fn spawn_header(cx: &mut Context<SearchView>, generation: u64, backend: Backend, keyword: String) {
-    let preview_backend = backend.clone();
+fn spawn_header(
+    cx: &mut Context<SearchView>,
+    generation: u64,
+    client: Arc<Client>,
+    keyword: String,
+) {
+    let preview_client = client.clone();
     spawn_api(
         cx,
-        async move { backend.search_all(&keyword).await },
+        async move { client.search_all(&keyword).await },
         move |this, result, cx| {
             if !this.state(SearchTab::All).is_current(generation) {
                 return;
@@ -127,10 +127,10 @@ fn spawn_header(cx: &mut Context<SearchView>, generation: u64, backend: Backend,
                 .map(|user| user.mid);
             if let Some(mid) = first_mid {
                 this.sync_follows(vec![mid], cx);
-                let backend = preview_backend.clone();
+                let client = preview_client.clone();
                 spawn_api(
                     cx,
-                    async move { backend.space_preview_videos(mid).await },
+                    async move { client.space_preview_videos(mid).await },
                     move |this, result, cx| {
                         if !this.state(SearchTab::All).is_current(generation) {
                             return;
@@ -163,7 +163,7 @@ fn spawn_header(cx: &mut Context<SearchView>, generation: u64, backend: Backend,
 }
 
 async fn fetch_page(
-    backend: Backend,
+    client: Arc<Client>,
     tab: SearchTab,
     keyword: String,
     page: u32,
@@ -171,7 +171,7 @@ async fn fetch_page(
 ) -> Result<Page<SearchItem, u32>, ApiError> {
     match tab {
         SearchTab::All | SearchTab::Video => {
-            let result = backend.search_videos(&keyword, page, order).await?;
+            let result = client.search_videos(&keyword, page, order).await?;
             Ok(page_of(
                 result
                     .videos
@@ -187,7 +187,7 @@ async fn fetch_page(
             } else {
                 SearchType::Bangumi
             };
-            let result = backend
+            let result = client
                 .search_media(&keyword, page, order, search_type)
                 .await?;
             Ok(page_of(
@@ -200,7 +200,7 @@ async fn fetch_page(
             ))
         }
         SearchTab::Live => {
-            let result = backend.search_live(&keyword, page, order).await?;
+            let result = client.search_live(&keyword, page, order).await?;
             Ok(page_of(
                 result
                     .rooms
@@ -211,7 +211,7 @@ async fn fetch_page(
             ))
         }
         SearchTab::Article => {
-            let result = backend.search_articles(&keyword, page, order).await?;
+            let result = client.search_articles(&keyword, page, order).await?;
             Ok(page_of(
                 result
                     .articles
@@ -222,7 +222,7 @@ async fn fetch_page(
             ))
         }
         SearchTab::User => {
-            let result = backend.search_users(&keyword, page, order).await?;
+            let result = client.search_users(&keyword, page, order).await?;
             Ok(page_of(
                 result
                     .users

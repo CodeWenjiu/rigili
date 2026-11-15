@@ -1,10 +1,11 @@
+use std::sync::Arc;
+
 use gpui_kit::*;
-use rigili_bilibili::{LiveRoom, PgcIndex, Popular, Recommend};
+use rigili_bilibili::{Client, LiveRoom, PgcIndex, Popular, Recommend};
 
 use super::{HomeItem, HomeTab, HomeView, OpenTarget};
 use rigili_core::OpenLive;
-use rigili_core::api_error_message;
-use rigili_core::backend;
+use rigili_core::client;
 
 use crate::shared::browse::grid::VideoCard;
 use crate::shared::browse::paging::{Page, spawn_first, spawn_more};
@@ -15,20 +16,18 @@ const LIVE_PAGE_SIZE: u32 = 30;
 const PGC_PAGE_SIZE: u32 = 20;
 
 impl HomeView {
-    pub(super) fn load_tab(&mut self, tab: HomeTab, cx: &mut Context<Self>) {
-        if self.backend.is_none() {
-            match backend::get(cx) {
-                Ok(backend) => self.backend = Some(backend),
-                Err(error) => {
-                    self.state_mut(tab).fail_first(api_error_message(error));
-                    cx.notify();
-                    return;
-                }
-            }
-        }
+    fn cached_client(&mut self, cx: &mut Context<Self>) -> Result<Arc<Client>, String> {
+        client::cached(&mut self.client, cx)
+    }
 
-        let Some(backend) = self.backend.clone() else {
-            return;
+    pub(super) fn load_tab(&mut self, tab: HomeTab, cx: &mut Context<Self>) {
+        let client = match self.cached_client(cx) {
+            Ok(client) => client,
+            Err(error) => {
+                self.state_mut(tab).fail_first(error);
+                cx.notify();
+                return;
+            }
         };
 
         spawn_first(
@@ -38,23 +37,23 @@ impl HomeView {
             HomeItem::key,
             async move {
                 match tab {
-                    HomeTab::Recommend => backend
+                    HomeTab::Recommend => client
                         .recommend(1, VIDEO_PAGE_SIZE)
                         .await
                         .map(|page| recommend_page(page, 1)),
-                    HomeTab::Popular => backend
+                    HomeTab::Popular => client
                         .popular(1, VIDEO_PAGE_SIZE)
                         .await
                         .map(|page| popular_page(page, 1)),
-                    HomeTab::Live => backend
+                    HomeTab::Live => client
                         .live_list(1, LIVE_PAGE_SIZE)
                         .await
                         .map(|page| live_page(page, 1)),
-                    HomeTab::Bangumi => backend
+                    HomeTab::Bangumi => client
                         .pgc_index(1, 1, PGC_PAGE_SIZE)
                         .await
                         .map(|page| pgc_page(page, 1)),
-                    HomeTab::Cinema => backend
+                    HomeTab::Cinema => client
                         .pgc_index(2, 1, PGC_PAGE_SIZE)
                         .await
                         .map(|page| pgc_page(page, 1)),
@@ -69,7 +68,7 @@ impl HomeView {
     }
 
     pub(super) fn load_more(&mut self, tab: HomeTab, cx: &mut Context<Self>) {
-        let Some(backend) = self.backend.clone() else {
+        let Some(client) = self.client.clone() else {
             return;
         };
 
@@ -82,23 +81,23 @@ impl HomeView {
                 let page = page + 1;
                 async move {
                     match tab {
-                        HomeTab::Recommend => backend
+                        HomeTab::Recommend => client
                             .recommend(page, VIDEO_PAGE_SIZE)
                             .await
                             .map(|result| recommend_page(result, page)),
-                        HomeTab::Popular => backend
+                        HomeTab::Popular => client
                             .popular(page, VIDEO_PAGE_SIZE)
                             .await
                             .map(|result| popular_page(result, page)),
-                        HomeTab::Live => backend
+                        HomeTab::Live => client
                             .live_list(page, LIVE_PAGE_SIZE)
                             .await
                             .map(|result| live_page(result, page)),
-                        HomeTab::Bangumi => backend
+                        HomeTab::Bangumi => client
                             .pgc_index(1, page, PGC_PAGE_SIZE)
                             .await
                             .map(|result| pgc_page(result, page)),
-                        HomeTab::Cinema => backend
+                        HomeTab::Cinema => client
                             .pgc_index(2, page, PGC_PAGE_SIZE)
                             .await
                             .map(|result| pgc_page(result, page)),
@@ -144,8 +143,8 @@ impl crate::shared::browse::season::SeasonOpener for HomeView {
         &mut self.notice
     }
 
-    fn season_backend(&self) -> Option<rigili_core::backend::Backend> {
-        self.backend.clone()
+    fn season_client(&self) -> Option<Arc<Client>> {
+        self.client.clone()
     }
 }
 

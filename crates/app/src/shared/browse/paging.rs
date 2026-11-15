@@ -128,6 +128,18 @@ impl<T, M: Clone> Paged<T, M> {
     pub(crate) fn is_current(&self, generation: u64) -> bool {
         self.generation == generation
     }
+
+    pub(crate) fn needs_first_load(&self) -> bool {
+        !self.loaded && !self.loading && self.error.is_none()
+    }
+
+    pub(crate) fn footer_visible(&self) -> bool {
+        self.loading_more || self.more_error.is_some()
+    }
+
+    pub(crate) fn page_rows(&self, columns: usize) -> usize {
+        self.items.len().div_ceil(columns.max(1))
+    }
 }
 
 pub(crate) fn spawn_first<V, T, M, F, S, A>(
@@ -303,5 +315,21 @@ mod tests {
             |item| item.clone(),
         );
         assert_eq!(items, ["BV1", "BV2"]);
+    }
+
+    #[test]
+    fn derives_first_load_and_footer_state() {
+        let mut state = Paged::<String, u32>::new();
+        assert!(state.needs_first_load());
+
+        state.reset(0);
+        assert!(!state.needs_first_load());
+        state.apply_first(Page::new(["a".into(), "b".into(), "c".into()], true, 1));
+        assert!(!state.needs_first_load());
+        assert!(!state.footer_visible());
+        assert_eq!(state.page_rows(2), 2);
+
+        state.fail_more("错误".into());
+        assert!(state.footer_visible());
     }
 }

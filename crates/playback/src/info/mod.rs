@@ -1,4 +1,4 @@
-rigili_macro::mod_prv!(comments, details, favorite, header, render);
+rigili_macro::mod_prv!(comments, details, favorite, header, interaction, render);
 
 use std::sync::Arc;
 
@@ -7,6 +7,8 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::{ArchiveRelation, Comment, RecommendVideo, VideoInfo, VideoPage};
 use rigili_core::{format_count, format_datetime};
+
+use interaction::{CoinState, FlagState, ToggleState};
 
 const INFO_WIDTH: Pixels = px(340.);
 const RELATED_LIMIT: usize = 20;
@@ -98,22 +100,12 @@ pub(super) struct InfoPanel {
     scroll: ScrollHandle,
     related: Vec<RecommendVideo>,
     description_expanded: bool,
-    followed: bool,
+    follow: FlagState,
     followers: Option<u64>,
     owner_likes: Option<u64>,
-    follow_busy: bool,
-    follow_touched: bool,
-    liked: bool,
-    like_count: u64,
-    like_busy: bool,
-    like_touched: bool,
-    coins_given: u32,
-    coin_count: u64,
-    coin_busy: bool,
-    coin_touched: bool,
-    favorited: bool,
-    favorite_count: u64,
-    favorite_touched: bool,
+    like: ToggleState,
+    coin: CoinState,
+    favorite: ToggleState,
     share_count: u64,
     tab: InfoTab,
     comment_count: u64,
@@ -131,9 +123,7 @@ pub(super) struct InfoPanel {
     _draft_sub: Option<Subscription>,
     comment_sending: bool,
     comment_error: Option<String>,
-    watch_later: bool,
-    watch_later_busy: bool,
-    watch_later_touched: bool,
+    watch_later: FlagState,
     refresh_busy: bool,
     refresh_error: Option<String>,
 }
@@ -149,22 +139,12 @@ impl InfoPanel {
             scroll: ScrollHandle::default(),
             related: Vec::new(),
             description_expanded: false,
-            followed: false,
+            follow: FlagState::default(),
             followers: None,
             owner_likes: None,
-            follow_busy: false,
-            follow_touched: false,
-            liked: false,
-            like_count: 0,
-            like_busy: false,
-            like_touched: false,
-            coins_given: 0,
-            coin_count: 0,
-            coin_busy: false,
-            coin_touched: false,
-            favorited: false,
-            favorite_count: 0,
-            favorite_touched: false,
+            like: ToggleState::default(),
+            coin: CoinState::default(),
+            favorite: ToggleState::default(),
             share_count: 0,
             tab: InfoTab::Info,
             comment_count: 0,
@@ -182,9 +162,7 @@ impl InfoPanel {
             _draft_sub: None,
             comment_sending: false,
             comment_error: None,
-            watch_later: false,
-            watch_later_busy: false,
-            watch_later_touched: false,
+            watch_later: FlagState::default(),
             refresh_busy: false,
             refresh_error: None,
         }
@@ -206,31 +184,19 @@ impl InfoPanel {
         self.busy = false;
         self.related.clear();
         self.description_expanded = false;
-        self.followed = false;
+        self.follow = FlagState::default();
         self.followers = None;
         self.owner_likes = None;
-        self.follow_busy = false;
-        self.follow_touched = false;
-        self.liked = false;
-        self.like_count = stat.like;
-        self.like_busy = false;
-        self.like_touched = false;
-        self.coins_given = 0;
-        self.coin_count = stat.coin;
-        self.coin_busy = false;
-        self.coin_touched = false;
-        self.favorited = false;
-        self.favorite_count = stat.favorite;
-        self.favorite_touched = false;
+        self.like = ToggleState::with_count(stat.like);
+        self.coin = CoinState::with_count(stat.coin);
+        self.favorite = ToggleState::with_count(stat.favorite);
         self.share_count = stat.share;
         self.comment_count = stat.reply;
         self.tab = InfoTab::Info;
         self.refresh_busy = false;
         self.refresh_error = None;
         self.reset_comments();
-        self.watch_later = false;
-        self.watch_later_busy = false;
-        self.watch_later_touched = false;
+        self.watch_later = FlagState::default();
         self.scroll.set_offset(point(px(0.), px(0.)));
         cx.notify();
     }
@@ -254,15 +220,9 @@ impl InfoPanel {
         self.followers = Some(followers);
         self.owner_likes = Some(likes);
         self.set_related(related, cx);
-        if !self.like_touched {
-            self.like_count = stat.like;
-        }
-        if !self.coin_touched {
-            self.coin_count = stat.coin;
-        }
-        if !self.favorite_touched {
-            self.favorite_count = stat.favorite;
-        }
+        self.like.accept_count(stat.like);
+        self.coin.accept_count(stat.coin);
+        self.favorite.accept_count(stat.favorite);
         self.share_count = stat.share;
         self.comment_count = stat.reply;
         self.busy = false;
@@ -291,22 +251,14 @@ impl InfoPanel {
     }
 
     pub(super) fn set_follow_status(&mut self, followed: bool, cx: &mut Context<Self>) {
-        if !self.follow_touched {
-            self.followed = followed;
-        }
+        self.follow.accept(followed);
         cx.notify();
     }
 
     pub(super) fn set_interactions(&mut self, relation: ArchiveRelation, cx: &mut Context<Self>) {
-        if !self.like_touched {
-            self.liked = relation.like;
-        }
-        if !self.favorite_touched {
-            self.favorited = relation.favorite;
-        }
-        if !self.coin_touched {
-            self.coins_given = relation.coin.min(2);
-        }
+        self.like.accept(relation.like);
+        self.favorite.accept(relation.favorite);
+        self.coin.accept(relation.coin);
         cx.notify();
     }
 
@@ -320,83 +272,51 @@ impl InfoPanel {
     }
 
     pub(super) fn set_follow_busy(&mut self, busy: bool, cx: &mut Context<Self>) {
-        self.follow_busy = busy;
-        if busy {
-            self.follow_touched = true;
-        }
+        self.follow.set_busy(busy);
         cx.notify();
     }
 
     pub(super) fn set_followed(&mut self, followed: bool, cx: &mut Context<Self>) {
-        if self.followed != followed {
-            self.followed = followed;
-            if let Some(followers) = self.followers.as_mut() {
-                if followed {
-                    *followers = followers.saturating_add(1);
-                } else {
-                    *followers = followers.saturating_sub(1);
-                }
+        if self.follow.active != followed
+            && let Some(followers) = self.followers.as_mut()
+        {
+            if followed {
+                *followers = followers.saturating_add(1);
+            } else {
+                *followers = followers.saturating_sub(1);
             }
         }
-        self.follow_busy = false;
+        self.follow.apply(followed);
         cx.notify();
     }
 
     pub(super) fn set_like_busy(&mut self, busy: bool, cx: &mut Context<Self>) {
-        self.like_busy = busy;
-        if busy {
-            self.like_touched = true;
-        }
+        self.like.set_busy(busy);
         cx.notify();
     }
 
     pub(super) fn set_liked(&mut self, liked: bool, cx: &mut Context<Self>) {
-        if self.liked != liked {
-            self.liked = liked;
-            if liked {
-                self.like_count = self.like_count.saturating_add(1);
-            } else {
-                self.like_count = self.like_count.saturating_sub(1);
-            }
-        }
-        self.like_busy = false;
+        self.like.apply(liked);
         cx.notify();
     }
 
     pub(super) fn set_coin_busy(&mut self, busy: bool, cx: &mut Context<Self>) {
-        self.coin_busy = busy;
-        if busy {
-            self.coin_touched = true;
-        }
+        self.coin.set_busy(busy);
         cx.notify();
     }
 
     pub(super) fn grant_coin(&mut self, cx: &mut Context<Self>) {
-        if self.coins_given < 2 {
-            self.coins_given += 1;
-            self.coin_count = self.coin_count.saturating_add(1);
-        }
-        self.coin_busy = false;
+        self.coin.grant();
         cx.notify();
     }
 
     pub(super) fn set_favorited(&mut self, favorited: bool, cx: &mut Context<Self>) {
-        self.favorite_touched = true;
-        if self.favorited != favorited {
-            self.favorited = favorited;
-            if favorited {
-                self.favorite_count = self.favorite_count.saturating_add(1);
-            } else {
-                self.favorite_count = self.favorite_count.saturating_sub(1);
-            }
-        }
+        self.favorite.apply(favorited);
         cx.notify();
     }
 
     pub(super) fn set_watch_later(&mut self, added: bool, cx: &mut Context<Self>) {
-        if !self.watch_later_touched {
-            self.watch_later = added;
-        }
+        self.watch_later.accept(added);
         cx.notify();
     }
 

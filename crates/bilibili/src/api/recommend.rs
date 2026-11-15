@@ -2,12 +2,12 @@ use crate::{ApiError, Client, Recommend};
 
 const RECOMMEND_URL: &str = "https://api.bilibili.com/x/web-interface/wbi/index/top/feed/rcmd";
 
-pub async fn fetch(client: &Client, fresh_idx: u32, page_size: u32) -> Result<Recommend, ApiError> {
-    let fresh_idx = fresh_idx.max(1);
-    let page_size = page_size.clamp(1, 30);
+impl Client {
+    pub async fn recommend(&self, fresh_idx: u32, page_size: u32) -> Result<Recommend, ApiError> {
+        let fresh_idx = fresh_idx.max(1);
+        let page_size = page_size.clamp(1, 30);
 
-    client
-        .get_wbi_json(
+        self.get_wbi_json(
             RECOMMEND_URL,
             &[
                 ("web_location", "1430654".into()),
@@ -22,6 +22,7 @@ pub async fn fetch(client: &Client, fresh_idx: u32, page_size: u32) -> Result<Re
             ],
         )
         .await
+    }
 }
 
 #[cfg(test)]

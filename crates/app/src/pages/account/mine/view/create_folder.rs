@@ -6,7 +6,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::MineView;
-use rigili_core::backend;
+use rigili_core::client;
 use rigili_core::runtime::spawn_api;
 
 use rigili_core::{api_error_message, api_task_error_message};
@@ -53,8 +53,8 @@ impl CreateFolderDialog {
             cx.notify();
             return;
         }
-        let backend = match backend::get(cx) {
-            Ok(backend) => backend,
+        let client = match client::get(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.error = Some(api_error_message(error));
                 cx.notify();
@@ -71,7 +71,7 @@ impl CreateFolderDialog {
 
         spawn_api(
             cx,
-            async move { backend.create_folder(&title, private).await },
+            async move { client.create_folder(&title, private).await },
             move |this, result, cx| match result {
                 Ok(_) => {
                     mine.update(cx, |mine, cx| mine.folders_changed(cx));

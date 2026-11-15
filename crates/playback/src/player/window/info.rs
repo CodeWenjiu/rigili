@@ -7,14 +7,14 @@ use crate::request::PlaybackSource;
 
 impl PlayerWindow {
     pub(super) fn load_follow_status(&self, mid: u64, cx: &mut Context<Self>) {
-        let Some(backend) = self.backend.clone() else {
+        let Some(client) = self.client.clone() else {
             return;
         };
         let generation = self.generation;
         let info = self.info.clone();
         spawn_api(
             cx,
-            async move { backend.relation_status(mid).await },
+            async move { client.relation_status(mid).await },
             move |this, result, cx| {
                 if this.generation != generation {
                     return;
@@ -29,14 +29,14 @@ impl PlayerWindow {
     }
 
     pub(super) fn load_interactions(&self, aid: u64, cx: &mut Context<Self>) {
-        let Some(backend) = self.backend.clone() else {
+        let Some(client) = self.client.clone() else {
             return;
         };
         let generation = self.generation;
         let info = self.info.clone();
         spawn_api(
             cx,
-            async move { backend.archive_relation(aid).await },
+            async move { client.archive_relation(aid).await },
             move |this, result, cx| {
                 if this.generation != generation {
                     return;
@@ -49,14 +49,14 @@ impl PlayerWindow {
     }
 
     pub(super) fn load_watch_later(&self, aid: u64, cx: &mut Context<Self>) {
-        let Some(backend) = self.backend.clone() else {
+        let Some(client) = self.client.clone() else {
             return;
         };
         let generation = self.generation;
         let info = self.info.clone();
         spawn_api(
             cx,
-            async move { backend.watch_later().await },
+            async move { client.watch_later().await },
             move |this, result, cx| {
                 if this.generation != generation {
                     return;
@@ -70,7 +70,7 @@ impl PlayerWindow {
     }
 
     pub(super) fn refresh_info(&mut self, cx: &mut Context<Self>) {
-        let Some(backend) = self.backend.clone() else {
+        let Some(client) = self.client.clone() else {
             return;
         };
         let Some(PlaybackSource::Video { bvid, .. }) =
@@ -82,7 +82,7 @@ impl PlayerWindow {
         let info = self.info.clone();
         spawn_api(
             cx,
-            async move { backend.video_detail(&bvid).await },
+            async move { client.video_detail(&bvid).await },
             move |this, result, cx| {
                 if this.generation != generation {
                     return;
@@ -107,14 +107,14 @@ impl PlayerWindow {
     }
 
     pub(super) fn set_follow(&mut self, mid: u64, follow: bool, cx: &mut Context<Self>) {
-        let Some(backend) = self.backend.clone() else {
+        let Some(client) = self.client.clone() else {
             return;
         };
         let info = self.info.clone();
         info.update(cx, |info, cx| info.set_follow_busy(true, cx));
         spawn_api(
             cx,
-            async move { backend.modify_relation(mid, follow).await },
+            async move { client.modify_relation(mid, follow).await },
             move |_, result, cx| {
                 info.update(cx, |info, cx| match result {
                     Ok(()) => info.set_followed(follow, cx),
@@ -125,14 +125,14 @@ impl PlayerWindow {
     }
 
     pub(super) fn set_like(&mut self, aid: u64, like: bool, cx: &mut Context<Self>) {
-        let Some(backend) = self.backend.clone() else {
+        let Some(client) = self.client.clone() else {
             return;
         };
         let info = self.info.clone();
         info.update(cx, |info, cx| info.set_like_busy(true, cx));
         spawn_api(
             cx,
-            async move { backend.set_like(aid, like).await },
+            async move { client.set_like(aid, like).await },
             move |_, result, cx| {
                 info.update(cx, |info, cx| match result {
                     Ok(()) => info.set_liked(like, cx),
@@ -143,14 +143,14 @@ impl PlayerWindow {
     }
 
     pub(super) fn add_coin(&mut self, aid: u64, cx: &mut Context<Self>) {
-        let Some(backend) = self.backend.clone() else {
+        let Some(client) = self.client.clone() else {
             return;
         };
         let info = self.info.clone();
         info.update(cx, |info, cx| info.set_coin_busy(true, cx));
         spawn_api(
             cx,
-            async move { backend.add_coin(aid).await },
+            async move { client.add_coin(aid).await },
             move |_, result, cx| {
                 info.update(cx, |info, cx| match result {
                     Ok(()) => info.grant_coin(cx),

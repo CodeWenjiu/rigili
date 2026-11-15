@@ -1,4 +1,4 @@
-use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::avatar::Avatar;
@@ -9,21 +9,17 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::api::comment::CommentSort;
-use rigili_bilibili::{Comment, CommentPage, DynamicItem};
-use rigili_core::backend::{self, Backend};
+use rigili_bilibili::{Client, Comment, CommentPage, DynamicItem};
+use rigili_core::client;
 use rigili_core::{format_count, format_date, message_markdown};
 
 use crate::shared::browse::paging::{Page, Paged, spawn_first, spawn_more};
 
 pub(super) struct CommentsView {
-    backend: Option<Backend>,
+    client: Option<Arc<Client>>,
     dynamic: DynamicItem,
     sort: CommentSort,
-    state: CommentsState,
-}
-
-struct CommentsState {
-    list: Paged<Comment, CommentMeta>,
+    state: Paged<Comment, CommentMeta>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -32,32 +28,18 @@ pub(crate) struct CommentMeta {
     pub(crate) total: u64,
 }
 
-impl Deref for CommentsState {
-    type Target = Paged<Comment, CommentMeta>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.list
-    }
-}
-
-impl DerefMut for CommentsState {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.list
-    }
-}
-
 impl CommentsView {
     pub(super) fn new(dynamic: DynamicItem) -> Self {
         Self {
-            backend: None,
+            client: None,
             dynamic,
             sort: CommentSort::default(),
-            state: CommentsState { list: Paged::new() },
+            state: Paged::new(),
         }
     }
 
-    fn backend(&mut self, cx: &mut Context<Self>) -> Result<Backend, String> {
-        backend::cached(&mut self.backend, cx)
+    fn cached_client(&mut self, cx: &mut Context<Self>) -> Result<Arc<Client>, String> {
+        client::cached(&mut self.client, cx)
     }
 
     pub(super) fn load(&mut self, reset: bool, cx: &mut Context<Self>) {
@@ -72,8 +54,8 @@ impl CommentsView {
         let (kind, oid) = self.dynamic.comment_target();
         let oid = oid.to_owned();
         let sort = self.sort;
-        let backend = match self.backend(cx) {
-            Ok(backend) => backend,
+        let client = match self.cached_client(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.state.fail_first_reset(error);
                 cx.notify();
@@ -84,9 +66,9 @@ impl CommentsView {
         spawn_first(
             self,
             cx,
-            |this| &mut this.state.list,
+            |this| &mut this.state,
             |comment: &Comment| comment.rpid.to_string(),
-            async move { comment_page(backend.comments(kind, &oid, 1, sort).await?, 1) },
+            async move { comment_page(client.comments(kind, &oid, 1, sort).await?, 1) },
             comments_applied,
         );
     }
@@ -95,8 +77,8 @@ impl CommentsView {
         let (kind, oid) = self.dynamic.comment_target();
         let oid = oid.to_owned();
         let sort = self.sort;
-        let backend = match self.backend(cx) {
-            Ok(backend) => backend,
+        let client = match self.cached_client(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.state.fail_more(error);
                 cx.notify();
@@ -107,11 +89,11 @@ impl CommentsView {
         spawn_more(
             self,
             cx,
-            |this| &mut this.state.list,
+            |this| &mut this.state,
             |comment: &Comment| comment.rpid.to_string(),
             move |meta| {
                 let page = meta.page + 1;
-                async move { comment_page(backend.comments(kind, &oid, page, sort).await?, page) }
+                async move { comment_page(client.comments(kind, &oid, page, sort).await?, page) }
             },
             comments_applied,
         );

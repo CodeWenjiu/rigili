@@ -5,15 +5,15 @@ use gpui_kit::*;
 
 use super::{CardRow, FavoriteView, FolderSource, MineTab, MineView};
 
+use crate::app::platform::theme::cover_scrim;
 use crate::shared::browse::filter;
 use crate::shared::browse::grid::{
     CARD_GAP, CardFrame, CardGrid, CardStyle, FolderCards, VideoCards, card_grid_loading,
     card_text_height, skeleton_card, video_card_row, video_card_row_indexed,
 };
 use crate::shared::browse::list::{
-    LIST_FOOTER_HEIGHT, Rows, list_footer, track_element_width, virtual_rows_tracked,
+    LIST_FOOTER_HEIGHT, Rows, paged_footer, track_element_width, virtual_rows_tracked,
 };
-use crate::app::platform::theme::cover_scrim;
 use crate::shared::ui::state_view::{Layout, empty_state, error_state};
 use rigili_bilibili::{FavFolder, thumbnail};
 use rigili_core::format_ymd;
@@ -227,16 +227,11 @@ impl MineView {
     }
 
     fn render_footer(&self, tab: MineTab, cx: &mut Context<Self>) -> AnyElement {
-        let muted = cx.theme().muted_foreground;
-        let danger = cx.theme().danger;
-        let more_error = self.state(tab).more_error.clone();
-
-        list_footer(
+        paged_footer(
+            self.state(tab),
             ("mine-retry-more", tab.index()),
-            more_error,
-            muted,
-            danger,
-            cx.listener(move |this, _, _, cx| this.retry_more(tab, cx)),
+            cx,
+            move |this, cx| this.retry_more(tab, cx),
         )
     }
 
@@ -269,7 +264,7 @@ impl MineView {
         );
         let frame = CardFrame { style, metrics };
         let rows = count.div_ceil(columns);
-        let footer = state.loading_more || state.more_error.is_some();
+        let footer = state.footer_visible();
         let sizes = Rows::new(rows, metrics.height()).footer_if(footer, LIST_FOOTER_HEIGHT);
 
         virtual_rows_tracked(

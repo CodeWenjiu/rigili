@@ -5,13 +5,13 @@ use super::PlayerWindow;
 
 impl PlayerWindow {
     pub(super) fn load_previews(&self, bvid: String, cid: u64, cx: &mut Context<Self>) {
-        let Some(backend) = self.backend.clone() else {
+        let Some(client) = self.client.clone() else {
             return;
         };
         let generation = self.generation;
         spawn_api(
             cx,
-            async move { backend.videoshot(&bvid, cid).await },
+            async move { client.videoshot(&bvid, cid).await },
             move |this, result, cx| {
                 if this.generation != generation {
                     return;
@@ -25,13 +25,13 @@ impl PlayerWindow {
     }
 
     pub(super) fn load_chapters(&self, bvid: String, cid: u64, cx: &mut Context<Self>) {
-        let Some(backend) = self.backend.clone() else {
+        let Some(client) = self.client.clone() else {
             return;
         };
         let generation = self.generation;
         spawn_api(
             cx,
-            async move { backend.chapters(&bvid, cid).await },
+            async move { client.chapters(&bvid, cid).await },
             move |this, result, cx| {
                 if this.generation != generation {
                     return;

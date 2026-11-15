@@ -6,7 +6,7 @@ use gpui_kit::*;
 use rigili_bilibili::FavFolder;
 
 use super::MineView;
-use rigili_core::backend;
+use rigili_core::client;
 use rigili_core::runtime::spawn_api;
 
 use rigili_core::{api_error_message, api_task_error_message};
@@ -59,8 +59,8 @@ impl SortFoldersDialog {
         }
         let mut ids = self.default_id.into_iter().collect::<Vec<_>>();
         ids.extend(self.folders.iter().map(|folder| folder.id));
-        let backend = match backend::get(cx) {
-            Ok(backend) => backend,
+        let client = match client::get(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.error = Some(api_error_message(error));
                 cx.notify();
@@ -76,7 +76,7 @@ impl SortFoldersDialog {
 
         spawn_api(
             cx,
-            async move { backend.sort_folders(&ids).await },
+            async move { client.sort_folders(&ids).await },
             move |this, result, cx| match result {
                 Ok(()) => {
                     mine.update(cx, |mine, cx| mine.folders_changed(cx));

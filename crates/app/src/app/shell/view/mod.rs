@@ -9,14 +9,14 @@ use gpui_kit::*;
 use rigili_core::{OpenLive, OpenSpace, OpenVideo, Refresh};
 
 use super::playback::Playback;
-use crate::pages::content::home::HomeView;
+use crate::app::platform::image_cache;
 use crate::pages::account::login;
 use crate::pages::account::message::MessagesView;
 use crate::pages::account::mine::MineView;
-use crate::app::platform::image_cache;
-use crate::shared::media::preview;
+use crate::pages::content::home::HomeView;
 use crate::pages::content::search::SearchView;
 use crate::pages::content::space::{CloseSpace, SpaceView};
+use crate::shared::media::preview;
 use rigili_playback::PlaybackRequest;
 use search_box::SearchBox;
 
@@ -75,14 +75,52 @@ impl MainView {
         let search_box = SearchBox::new(window, cx);
         login::restore(window, cx);
 
-        Self::forward_page_events(cx, &home, window);
-        Self::forward_page_events(cx, &search, window);
-        Self::forward_space_events(cx, &messages, window);
-        Self::forward_video_events(cx, &mine, window);
-        Self::forward_space_events(cx, &mine, window);
-        Self::forward_video_events(cx, &space, window);
-        Self::forward_space_events(cx, &space, window);
-        Self::forward_close_space_events(cx, &space, window);
+        Self::forward_events(cx, &home, window, |this, event: &OpenVideo, _, cx| {
+            this.play(event.clone(), cx);
+        });
+        Self::forward_events(cx, &home, window, |this, event: &OpenLive, _, cx| {
+            this.play_live(event.clone(), cx);
+        });
+        Self::forward_events(cx, &home, window, |this, event: &OpenSpace, window, cx| {
+            this.open_space(event.clone(), window, cx);
+        });
+        Self::forward_events(cx, &search, window, |this, event: &OpenVideo, _, cx| {
+            this.play(event.clone(), cx);
+        });
+        Self::forward_events(cx, &search, window, |this, event: &OpenLive, _, cx| {
+            this.play_live(event.clone(), cx);
+        });
+        Self::forward_events(
+            cx,
+            &search,
+            window,
+            |this, event: &OpenSpace, window, cx| {
+                this.open_space(event.clone(), window, cx);
+            },
+        );
+        Self::forward_events(
+            cx,
+            &messages,
+            window,
+            |this, event: &OpenSpace, window, cx| {
+                this.open_space(event.clone(), window, cx);
+            },
+        );
+        Self::forward_events(cx, &mine, window, |this, event: &OpenVideo, _, cx| {
+            this.play(event.clone(), cx);
+        });
+        Self::forward_events(cx, &mine, window, |this, event: &OpenSpace, window, cx| {
+            this.open_space(event.clone(), window, cx);
+        });
+        Self::forward_events(cx, &space, window, |this, event: &OpenVideo, _, cx| {
+            this.play(event.clone(), cx);
+        });
+        Self::forward_events(cx, &space, window, |this, event: &OpenSpace, window, cx| {
+            this.open_space(event.clone(), window, cx);
+        });
+        Self::forward_events(cx, &space, window, |this, _: &CloseSpace, window, cx| {
+            this.close_space(window, cx);
+        });
 
         cx.on_window_closed({
             let weak = cx.entity().downgrade();
@@ -115,51 +153,17 @@ impl MainView {
         }
     }
 
-    fn forward_page_events<T>(cx: &mut Context<Self>, page: &Entity<T>, window: &mut Window)
-    where
-        T: EventEmitter<OpenVideo> + EventEmitter<OpenLive> + EventEmitter<OpenSpace> + 'static,
+    fn forward_events<T, E>(
+        cx: &mut Context<Self>,
+        page: &Entity<T>,
+        window: &mut Window,
+        handler: impl Fn(&mut Self, &E, &mut Window, &mut Context<Self>) + 'static,
+    ) where
+        T: EventEmitter<E> + 'static,
+        E: 'static,
     {
-        Self::forward_video_events(cx, page, window);
-        Self::forward_live_events(cx, page, window);
-        Self::forward_space_events(cx, page, window);
-    }
-
-    fn forward_video_events<T>(cx: &mut Context<Self>, page: &Entity<T>, window: &mut Window)
-    where
-        T: EventEmitter<OpenVideo> + 'static,
-    {
-        cx.subscribe_in(page, window, |this, _, event: &OpenVideo, _window, cx| {
-            this.play(event.clone(), cx);
-        })
-        .detach();
-    }
-
-    fn forward_live_events<T>(cx: &mut Context<Self>, page: &Entity<T>, window: &mut Window)
-    where
-        T: EventEmitter<OpenLive> + 'static,
-    {
-        cx.subscribe_in(page, window, |this, _, event: &OpenLive, _window, cx| {
-            this.play_live(event.clone(), cx);
-        })
-        .detach();
-    }
-
-    fn forward_space_events<T>(cx: &mut Context<Self>, page: &Entity<T>, window: &mut Window)
-    where
-        T: EventEmitter<OpenSpace> + 'static,
-    {
-        cx.subscribe_in(page, window, |this, _, event: &OpenSpace, window, cx| {
-            this.open_space(event.clone(), window, cx);
-        })
-        .detach();
-    }
-
-    fn forward_close_space_events<T>(cx: &mut Context<Self>, page: &Entity<T>, window: &mut Window)
-    where
-        T: EventEmitter<CloseSpace> + 'static,
-    {
-        cx.subscribe_in(page, window, |this, _, _: &CloseSpace, window, cx| {
-            this.close_space(window, cx);
+        cx.subscribe_in(page, window, move |this, _, event, window, cx| {
+            handler(this, event, window, cx);
         })
         .detach();
     }

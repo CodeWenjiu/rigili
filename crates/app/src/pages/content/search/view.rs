@@ -2,17 +2,18 @@ rigili_macro::mod_prv!(cards, feed, items, list, toolbar, user);
 
 use std::collections::BTreeMap;
 use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_bilibili::SpaceRelationStatus;
 use rigili_bilibili::api::search::{SearchOrder, SearchType};
+use rigili_bilibili::{Client, SpaceRelationStatus};
 
 use items::SearchItem;
-use rigili_core::backend::{self, Backend};
+use rigili_core::client;
 use rigili_core::login as login_state;
 use rigili_core::runtime::spawn_api;
 use rigili_core::{
@@ -158,7 +159,7 @@ impl DerefMut for TabState {
 }
 
 pub struct SearchView {
-    backend: Option<Backend>,
+    client: Option<Arc<Client>>,
     keyword: String,
     tab: SearchTab,
     order: SearchOrder,
@@ -193,19 +194,19 @@ impl crate::shared::browse::season::SeasonOpener for SearchView {
         &mut self.notice
     }
 
-    fn season_backend(&self) -> Option<Backend> {
-        self.backend.clone()
+    fn season_client(&self) -> Option<Arc<Client>> {
+        self.client.clone()
     }
 }
 
 impl SearchView {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let (backend, error) = match backend::get(cx) {
-            Ok(backend) => (Some(backend), None),
+        let (client, error) = match client::get(cx) {
+            Ok(client) => (Some(client), None),
             Err(error) => (None, Some(api_error_message(error))),
         };
         let mut view = Self {
-            backend,
+            client,
             keyword: String::new(),
             tab: SearchTab::default(),
             order: SearchOrder::Default,
@@ -273,10 +274,7 @@ impl SearchView {
 
         self.tab = tab;
         self.notice = None;
-        let needs_load = {
-            let state = self.state(tab);
-            !state.loaded && !state.loading && state.error.is_none()
-        };
+        let needs_load = self.state(tab).needs_first_load();
         if needs_load {
             self.load_tab(tab, cx);
         } else {
@@ -307,7 +305,7 @@ impl SearchView {
         if mids.is_empty() || login_state::user(cx).is_none() {
             return;
         }
-        let Some(backend) = self.backend.clone() else {
+        let Some(client) = self.client.clone() else {
             return;
         };
         let mids = mids
@@ -332,7 +330,7 @@ impl SearchView {
         let requested = mids.clone();
         spawn_api(
             cx,
-            async move { backend.relation_statuses(&mids).await },
+            async move { client.relation_statuses(&mids).await },
             move |this, result, cx| {
                 match result {
                     Ok(statuses) => {
@@ -363,7 +361,7 @@ impl SearchView {
     }
 
     fn toggle_follow(&mut self, mid: u64, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(backend) = self.backend.clone() else {
+        let Some(client) = self.client.clone() else {
             return;
         };
         if login_state::user(cx).is_none() {
@@ -383,7 +381,7 @@ impl SearchView {
 
         spawn_api(
             cx,
-            async move { backend.modify_relation(mid, follow).await },
+            async move { client.modify_relation(mid, follow).await },
             move |this, result, cx| match result {
                 Ok(()) => {
                     if let Some(state) = this.follows.get_mut(&mid) {

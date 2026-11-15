@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::*;
@@ -9,8 +10,8 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use rigili_bilibili::FavFolder;
-use rigili_core::backend::{self, Backend};
+use rigili_bilibili::{Client, FavFolder};
+use rigili_core::client;
 use rigili_core::runtime::spawn_api;
 use rigili_core::{api_error_message, api_task_error_message};
 
@@ -74,7 +75,7 @@ impl FavoriteDialog {
     }
 
     fn load(&mut self, cx: &mut Context<Self>) {
-        let Some(backend) = self.require_backend(cx) else {
+        let Some(client) = self.require_client(cx) else {
             self.loading = false;
             return;
         };
@@ -86,8 +87,8 @@ impl FavoriteDialog {
         spawn_api(
             cx,
             async move {
-                let nav = backend.nav().await?;
-                backend.fav_folders_with_state(nav.mid, aid).await
+                let nav = client.nav().await?;
+                client.fav_folders_with_state(nav.mid, aid).await
             },
             move |this, result, cx| {
                 this.loading = false;
@@ -139,7 +140,7 @@ impl FavoriteDialog {
             cx.notify();
             return;
         }
-        let Some(backend) = self.require_backend(cx) else {
+        let Some(client) = self.require_client(cx) else {
             return;
         };
 
@@ -150,7 +151,7 @@ impl FavoriteDialog {
 
         spawn_api(
             cx,
-            async move { backend.create_folder(&title, private).await },
+            async move { client.create_folder(&title, private).await },
             move |this, result, cx| {
                 this.creating = false;
                 match result {
@@ -188,7 +189,7 @@ impl FavoriteDialog {
             self.close(cx);
             return;
         }
-        let Some(backend) = self.require_backend(cx) else {
+        let Some(client) = self.require_client(cx) else {
             return;
         };
 
@@ -204,10 +205,10 @@ impl FavoriteDialog {
             cx,
             async move {
                 for folder in added {
-                    backend.set_favorite(aid, folder, true).await?;
+                    client.set_favorite(aid, folder, true).await?;
                 }
                 for folder in removed {
-                    backend.set_favorite(aid, folder, false).await?;
+                    client.set_favorite(aid, folder, false).await?;
                 }
                 Ok(favorited)
             },
@@ -240,9 +241,9 @@ impl FavoriteDialog {
         });
     }
 
-    fn require_backend(&mut self, cx: &mut Context<Self>) -> Option<Backend> {
-        match backend::get(cx) {
-            Ok(backend) => Some(backend),
+    fn require_client(&mut self, cx: &mut Context<Self>) -> Option<Arc<Client>> {
+        match client::get(cx) {
+            Ok(client) => Some(client),
             Err(error) => {
                 self.error = Some(api_error_message(error));
                 self.loading = false;

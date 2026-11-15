@@ -1,5 +1,4 @@
 use gpui_kit::assets::IconName;
-use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -9,9 +8,10 @@ use super::{CardRow, MineView};
 use crate::shared::browse::filter;
 use crate::shared::browse::grid::{
     BangumiCards, CARD_GAP, CardFrame, CardGrid, CardMetrics, CardOverlay, CardStyle, MediaCard,
-    card_grid_loading, card_text_height, media_card,
+    card_grid_loading, card_text_height, media_card, with_opening_overlay,
 };
-use crate::shared::browse::list::{LIST_FOOTER_HEIGHT, Rows, list_footer, virtual_rows_tracked};
+use crate::shared::browse::list::{LIST_FOOTER_HEIGHT, Rows, paged_footer, virtual_rows_tracked};
+use crate::shared::browse::season::SeasonOpener;
 use crate::shared::ui::state_view::{Layout, empty_state, error_state};
 
 impl MineView {
@@ -104,22 +104,15 @@ impl MineView {
     }
 
     fn render_bangumi_footer(&self, cinema: bool, cx: &mut Context<Self>) -> AnyElement {
-        let muted = cx.theme().muted_foreground;
-        let danger = cx.theme().danger;
-        let more_error = self.bangumi_state(cinema).more_error.clone();
         let retry_id = if cinema {
             ("mine-cinema-retry", 0usize)
         } else {
             ("mine-bangumi-retry", 0usize)
         };
 
-        list_footer(
-            retry_id,
-            more_error,
-            muted,
-            danger,
-            cx.listener(move |this, _, _, cx| this.retry_bangumi_more(cinema, cx)),
-        )
+        paged_footer(self.bangumi_state(cinema), retry_id, cx, move |this, cx| {
+            this.retry_bangumi_more(cinema, cx)
+        })
     }
 
     fn render_bangumi_list(
@@ -143,10 +136,7 @@ impl MineView {
         );
         let frame = CardFrame { style, metrics };
         let rows = count.div_ceil(columns);
-        let footer = {
-            let state = self.bangumi_state(cinema);
-            state.loading_more || state.more_error.is_some()
-        };
+        let footer = self.bangumi_state(cinema).footer_visible();
         let list_id = if cinema {
             "mine-cinema-list"
         } else {
@@ -229,30 +219,10 @@ fn bangumi_card(
         on_open,
     );
 
-    if !opening {
-        return card.into_any_element();
-    }
-
-    div()
-        .relative()
-        .w(metrics.width)
-        .h(metrics.height())
-        .child(card)
-        .child(
-            div()
-                .absolute()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(hsla(0., 0., 0., 0.45))
-                .child(
-                    v_flex()
-                        .items_center()
-                        .gap_2()
-                        .child(Spinner::new().small())
-                        .child(div().text_xs().text_color(Hsla::white()).child("正在打开…")),
-                ),
-        )
-        .into_any_element()
+    with_opening_overlay(
+        card.into_any_element(),
+        metrics.width,
+        metrics.height(),
+        opening,
+    )
 }

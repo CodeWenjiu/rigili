@@ -98,7 +98,7 @@ impl MessagesView {
         let tab = self.tab;
         let state = self.state(tab);
         let rows = state.items.len();
-        let footer = state.loading_more || state.more_error.is_some();
+        let footer = state.footer_visible();
         let sizes = Rows::new(rows, ROW_HEIGHT)
             .gap(rems(0.))
             .footer_if(footer, LIST_FOOTER_HEIGHT);

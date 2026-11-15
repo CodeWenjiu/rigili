@@ -25,8 +25,8 @@ impl SpaceView {
         if self.profile_loading {
             return;
         }
-        let backend = match self.backend(cx) {
-            Ok(backend) => backend,
+        let client = match self.cached_client(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.profile_loading = false;
                 self.profile_error = Some(error);
@@ -41,7 +41,7 @@ impl SpaceView {
 
         spawn_api(
             cx,
-            async move { backend.space_profile(mid).await },
+            async move { client.space_profile(mid).await },
             move |this, result, cx| {
                 if this.mid != Some(mid) {
                     return;
@@ -74,8 +74,8 @@ impl SpaceView {
         if Some(user.mid) == self.mid {
             return;
         }
-        let backend = match self.backend(cx) {
-            Ok(backend) => backend,
+        let client = match self.cached_client(cx) {
+            Ok(client) => client,
             Err(error) => {
                 window.push_notification(Notification::error(error), cx);
                 return;
@@ -89,7 +89,7 @@ impl SpaceView {
 
         spawn_api(
             cx,
-            async move { backend.modify_relation(mid, follow).await },
+            async move { client.modify_relation(mid, follow).await },
             move |this, result, cx| {
                 this.follow_pending = false;
                 match result {

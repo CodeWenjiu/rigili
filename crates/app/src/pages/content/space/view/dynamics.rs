@@ -21,8 +21,8 @@ impl SpaceView {
         let Some(mid) = self.mid else {
             return;
         };
-        let backend = match self.backend(cx) {
-            Ok(backend) => backend,
+        let client = match self.cached_client(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.dynamics.fail_first_reset(error);
                 cx.notify();
@@ -40,7 +40,7 @@ impl SpaceView {
             |this| &mut this.dynamics,
             |item: &DynamicItem| item.id_str.clone(),
             async move {
-                let page = backend.dynamics(mid, "").await?;
+                let page = client.dynamics(mid, "").await?;
                 Ok(Page::new(page.items, page.has_more, page.offset))
             },
             |_| {},
@@ -54,8 +54,8 @@ impl SpaceView {
         if self.dynamics.meta.is_empty() {
             return;
         }
-        let backend = match self.backend(cx) {
-            Ok(backend) => backend,
+        let client = match self.cached_client(cx) {
+            Ok(client) => client,
             Err(error) => {
                 self.dynamics.fail_more(error);
                 cx.notify();
@@ -69,7 +69,7 @@ impl SpaceView {
             |this| &mut this.dynamics,
             |item: &DynamicItem| item.id_str.clone(),
             move |offset| async move {
-                let page = backend.dynamics(mid, &offset).await?;
+                let page = client.dynamics(mid, &offset).await?;
                 Ok(Page::new(page.items, page.has_more, page.offset))
             },
             |_| {},

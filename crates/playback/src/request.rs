@@ -1,6 +1,6 @@
-use rigili_bilibili::{ApiError, Dash, PlayUrl, RecommendVideo, VideoInfo};
+use std::sync::Arc;
 
-use rigili_core::backend::Backend;
+use rigili_bilibili::{ApiError, Client, Dash, PlayUrl, RecommendVideo, VideoInfo};
 
 #[derive(Clone, Debug)]
 pub struct PlaybackRequest {
@@ -66,14 +66,14 @@ impl Streams {
 }
 
 pub(super) async fn resolve(
-    backend: Backend,
+    client: Arc<Client>,
     bvid: String,
     cid: Option<u64>,
 ) -> Result<Resolved, ApiError> {
-    let detail = backend.video_detail(&bvid).await?;
+    let detail = client.video_detail(&bvid).await?;
     let info = detail.view;
     let cid = cid.unwrap_or(info.cid);
-    let streams = resolve_streams(&backend, &bvid, cid).await?;
+    let streams = resolve_streams(&client, &bvid, cid).await?;
     Ok(Resolved {
         info,
         related: detail.related,
@@ -85,11 +85,11 @@ pub(super) async fn resolve(
 }
 
 pub(super) async fn resolve_streams(
-    backend: &Backend,
+    client: &Arc<Client>,
     bvid: &str,
     cid: u64,
 ) -> Result<Streams, ApiError> {
-    let playurl = backend.playurl(bvid, cid).await?;
+    let playurl = client.playurl(bvid, cid).await?;
     if playurl.dash.is_none() {
         return Err(ApiError::InvalidResponse("该视频没有可用的 DASH 流".into()));
     }
@@ -97,15 +97,15 @@ pub(super) async fn resolve_streams(
 }
 
 pub async fn resolve_preview(
-    backend: Backend,
+    client: Arc<Client>,
     bvid: String,
     cid: Option<u64>,
 ) -> Result<String, ApiError> {
     let cid = match cid {
         Some(cid) => cid,
-        None => backend.view(&bvid).await?.cid,
+        None => client.view(&bvid).await?.cid,
     };
-    let playurl = backend.playurl(&bvid, cid).await?;
+    let playurl = client.playurl(&bvid, cid).await?;
     playurl
         .dash
         .as_ref()

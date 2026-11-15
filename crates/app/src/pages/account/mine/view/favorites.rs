@@ -8,6 +8,7 @@ use super::{
     FavoriteView, FolderSource, MineTab, MineView, create_folder::CreateFolderDialog,
     sort_folders::SortFoldersDialog,
 };
+use crate::shared::browse::paging::Paged;
 
 impl MineView {
     fn current_folder(&self) -> Option<&FavFolder> {
@@ -58,7 +59,7 @@ impl MineView {
         if default_id.is_some() {
             self.load_favorite_items(cx);
         } else {
-            self.favorites = super::VideoListState::new();
+            self.favorites = Paged::new();
         }
     }
 
@@ -83,16 +84,10 @@ impl MineView {
             {
                 self.load_collected(cx);
             }
-            FavoriteView::Bangumi
-                if !self.bangumi.loaded
-                    && !self.bangumi.loading
-                    && self.bangumi.error.is_none() =>
-            {
+            FavoriteView::Bangumi if self.bangumi.needs_first_load() => {
                 self.load_bangumi(false, cx);
             }
-            FavoriteView::Cinema
-                if !self.cinema.loaded && !self.cinema.loading && self.cinema.error.is_none() =>
-            {
+            FavoriteView::Cinema if self.cinema.needs_first_load() => {
                 self.load_bangumi(true, cx);
             }
             _ => {}
