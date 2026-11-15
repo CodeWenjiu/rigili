@@ -77,6 +77,11 @@ impl Render for PlayerView {
                             speed_open: self.speed_popover_open,
                             preview: self.progress_preview(cx),
                             live: self.live,
+                            danmaku: self.danmaku_settings(cx),
+                            danmaku_input: &self.danmaku_input,
+                            danmaku_sending: self.danmaku_sending,
+                            danmaku_settings_open: self.danmaku_settings_open,
+                            can_send_danmaku: self.danmaku_source.is_some(),
                             player: cx.entity().downgrade(),
                         }
                         .render(window, cx),
@@ -289,6 +294,7 @@ impl Render for PlayerView {
                     .on_scroll(cx.listener(|this, event: &ScrollEvent, window, cx| {
                         this.on_scroll(event, window, cx);
                     }))
+                    .child(self.danmaku_layer.clone())
                     .children(overlays),
             ));
 

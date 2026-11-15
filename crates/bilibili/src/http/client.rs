@@ -19,6 +19,7 @@ use super::wbi::WbiSigner;
 
 const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const API_REFERER: &str = "https://www.bilibili.com/";
+const FINGERPRINT_URL: &str = "https://api.bilibili.com/x/frontend/finger/spi";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const RETRY_LIMIT: usize = 3;
@@ -36,6 +37,7 @@ pub struct Client {
     next_request: Arc<Mutex<Option<Instant>>>,
     requests: Arc<Semaphore>,
     wbi: Arc<OnceCell<WbiSigner>>,
+    buvid: Arc<OnceCell<()>>,
     dev_id: String,
 }
 
@@ -81,6 +83,7 @@ impl Client {
             next_request: Arc::new(Mutex::new(None)),
             requests: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
             wbi: Arc::new(OnceCell::new()),
+            buvid: Arc::new(OnceCell::new()),
             dev_id: generate_dev_id(),
         })
     }
@@ -210,6 +213,34 @@ impl Client {
         self.parse_ack(&body)
     }
 
+    async fn ensure_buvid(&self) -> Result<(), ApiError> {
+        if self.cookie_values().contains_key("buvid3") {
+            return Ok(());
+        }
+        self.buvid
+            .get_or_try_init(|| async {
+                let response = self.http.get(FINGERPRINT_URL).send().await?;
+                if !response.status().is_success() {
+                    return Err(ApiError::Status(response.status()));
+                }
+                let body = response.text().await?;
+                let fingerprint: Fingerprint = serde_json::from_str(&body)?;
+                if let Some(data) = fingerprint.data {
+                    if !data.b_3.is_empty() {
+                        add_cookie(&self.jar, "buvid3", &data.b_3);
+                        lock_cookies(&self.cookies).insert("buvid3".into(), data.b_3);
+                    }
+                    if !data.b_4.is_empty() {
+                        add_cookie(&self.jar, "buvid4", &data.b_4);
+                        lock_cookies(&self.cookies).insert("buvid4".into(), data.b_4);
+                    }
+                }
+                Ok::<(), ApiError>(())
+            })
+            .await
+            .map(|_| ())
+    }
+
     async fn wbi_url(&self, url: &str, params: &[(&str, String)]) -> Result<String, ApiError> {
         let signer = self.wbi.get_or_try_init(|| WbiSigner::fetch(self)).await?;
         let params = params
@@ -227,6 +258,20 @@ impl Client {
         let response = self.send(url, || self.http.get(url)).await?;
         let body = self.body(url, response).await?;
         Ok(serde_json::from_str(&body)?)
+    }
+
+    pub(crate) async fn get_bytes(&self, url: &str) -> Result<Vec<u8>, ApiError> {
+        let response = self.send(url, || self.http.get(url)).await?;
+        let started = Instant::now();
+        let status = response.status();
+        let body = response.bytes().await?;
+        rigili_monitor::monitor!(
+            "http",
+            "{url} {status} {} bytes in {:?}",
+            body.len(),
+            started.elapsed()
+        );
+        Ok(body.to_vec())
     }
 
     pub async fn probe_stream(&self, url: &str) -> Option<Duration> {
@@ -334,6 +379,9 @@ impl Client {
         url: &str,
         request: impl Fn() -> RequestBuilder + Send,
     ) -> Result<Response, ApiError> {
+        if let Err(error) = self.ensure_buvid().await {
+            rigili_monitor::monitor!("http", "fingerprint failed: {error}");
+        }
         let queued = Instant::now();
         let _permit = self
             .requests
@@ -510,6 +558,20 @@ fn generate_dev_id() -> String {
         &hex[16..20],
         &hex[20..32]
     )
+}
+
+#[derive(Deserialize)]
+struct Fingerprint {
+    #[serde(default)]
+    data: Option<FingerprintData>,
+}
+
+#[derive(Deserialize)]
+struct FingerprintData {
+    #[serde(default)]
+    b_3: String,
+    #[serde(default)]
+    b_4: String,
 }
 
 fn add_cookie(jar: &Jar, name: &str, value: &str) {

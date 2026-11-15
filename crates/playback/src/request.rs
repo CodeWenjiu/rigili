@@ -74,13 +74,14 @@ pub(super) async fn resolve(
     client: Arc<Client>,
     bvid: String,
     cid: Option<u64>,
+    preferred_quality: Option<u32>,
 ) -> Result<Resolved, ApiError> {
     let started = Instant::now();
     rigili_monitor::monitor!("stream", "resolving {bvid} (cid {cid:?})");
     let detail = client.video_detail(&bvid).await?;
     let info = detail.view;
     let cid = cid.unwrap_or(info.cid);
-    let streams = resolve_streams(&client, &bvid, cid).await?;
+    let streams = resolve_streams(&client, &bvid, cid, preferred_quality).await?;
     rigili_monitor::monitor!(
         "stream",
         "resolved {bvid} cid {cid} in {:?}",
@@ -97,14 +98,6 @@ pub(super) async fn resolve(
 }
 
 pub(super) async fn resolve_streams(
-    client: &Arc<Client>,
-    bvid: &str,
-    cid: u64,
-) -> Result<Streams, ApiError> {
-    resolve_streams_at(client, bvid, cid, None).await
-}
-
-pub(super) async fn resolve_streams_at(
     client: &Arc<Client>,
     bvid: &str,
     cid: u64,
@@ -176,9 +169,7 @@ fn select_streams(
     preferred_quality: Option<u32>,
 ) -> Option<(Streams, Vec<String>, Vec<String>)> {
     let dash = playurl.dash.as_ref()?;
-    let video = preferred_quality
-        .and_then(|id| video_track(dash, id))
-        .or_else(|| dash.best_video())?;
+    let video = preferred_video(dash, preferred_quality)?;
     let audio = dash.best_audio();
     rigili_monitor::monitor!(
         "stream",
@@ -217,13 +208,35 @@ fn select_streams(
     ))
 }
 
+fn preferred_video(dash: &Dash, preferred: Option<u32>) -> Option<&DashVideo> {
+    let Some(preferred) = preferred else {
+        return dash.best_video();
+    };
+    let mut ids: Vec<u32> = dash
+        .video
+        .iter()
+        .filter(|video| playable(video))
+        .map(|video| video.id)
+        .collect();
+    ids.sort_unstable_by(|a, b| b.cmp(a));
+    ids.dedup();
+    let id = ids
+        .iter()
+        .copied()
+        .find(|id| *id <= preferred)
+        .or_else(|| ids.last().copied())?;
+    video_track(dash, id)
+}
+
 fn video_track(dash: &Dash, id: u32) -> Option<&DashVideo> {
     dash.video
         .iter()
-        .filter(|video| {
-            video.id == id && !video.base_url.is_empty() && video.width > 0 && video.height > 0
-        })
+        .filter(|video| video.id == id && playable(video))
         .max_by_key(|video| (video.codecid == 7, video.bandwidth))
+}
+
+fn playable(video: &DashVideo) -> bool {
+    !video.base_url.is_empty() && video.width > 0 && video.height > 0
 }
 
 fn candidates(primary: &str, backups: &[String]) -> Vec<String> {
@@ -504,7 +517,7 @@ mod tests {
     }
 
     #[test]
-    fn keeps_the_requested_quality_when_reloading() {
+    fn falls_back_to_the_best_quality_below_the_preference() {
         let video = |id, url: &str, bandwidth| DashVideo {
             id,
             base_url: url.into(),
@@ -524,12 +537,31 @@ mod tests {
             accept_description: Vec::new(),
         };
 
-        let streams = select_streams(&playurl, Some(64)).expect("streams").0;
-        assert_eq!(streams.video, "720p");
-        assert_eq!(streams.video_id, 64);
+        let exact = select_streams(&playurl, Some(80)).expect("streams").0;
+        assert_eq!(exact.video, "1080p");
+        assert_eq!(exact.video_id, 80);
 
-        let fallback = select_streams(&playurl, Some(32)).expect("streams").0;
-        assert_eq!(fallback.video, "1080p");
-        assert_eq!(fallback.video_id, 80);
+        let below = select_streams(&playurl, Some(64)).expect("streams").0;
+        assert_eq!(below.video, "720p");
+        assert_eq!(below.video_id, 64);
+
+        let unavailable = select_streams(&playurl, Some(32)).expect("streams").0;
+        assert_eq!(unavailable.video, "720p");
+        assert_eq!(unavailable.video_id, 64);
+
+        let above = select_streams(&playurl, Some(127)).expect("streams").0;
+        assert_eq!(above.video, "1080p");
+        assert_eq!(above.video_id, 80);
+
+        let only_high = PlayUrl {
+            dash: Some(Dash {
+                video: vec![video(80, "1080p", 600_000)],
+                audio: Vec::new(),
+            }),
+            accept_quality: vec![80],
+            accept_description: Vec::new(),
+        };
+        let lowest = select_streams(&only_high, Some(32)).expect("streams").0;
+        assert_eq!(lowest.video_id, 80);
     }
 }

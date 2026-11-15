@@ -270,10 +270,25 @@ impl InfoPanel {
     }
 
     pub(super) fn clear(&mut self, cx: &mut Context<Self>) {
+        let tab = self.tab;
         let emotes = self.emotes.take();
         *self = Self::new(self.selections.clone());
+        self.tab = tab;
         self.emotes = emotes;
         cx.notify();
+    }
+
+    pub(super) fn aid(&self) -> Option<u64> {
+        self.details.as_ref().map(|details| details.aid)
+    }
+
+    pub(super) fn page_duration(&self, cid: u64) -> Option<u64> {
+        self.details
+            .as_ref()?
+            .pages
+            .iter()
+            .find(|page| page.cid == cid)
+            .map(|page| page.duration)
     }
 
     pub(super) fn set(&mut self, info: VideoInfo, cid: u64, cx: &mut Context<Self>) {
@@ -291,12 +306,14 @@ impl InfoPanel {
         self.favorite = ToggleState::with_count(stat.favorite);
         self.share_count = stat.share;
         self.comment_count = stat.reply;
-        self.tab = InfoTab::Info;
         self.refresh_busy = false;
         self.refresh_error = None;
         self.reset_comments();
         self.watch_later = FlagState::default();
         self.scroll.set_offset(point(px(0.), px(0.)));
+        if self.tab == InfoTab::Comments {
+            self.load_comments(cx);
+        }
         cx.notify();
     }
 

@@ -167,6 +167,9 @@ impl PlayerView {
             || self.volume_popup_open
             || self.quality_popover_open
             || self.speed_popover_open
+            || self.danmaku_settings_open
+            || self.danmaku_sending
+            || self.danmaku_input_focused
     }
 
     pub(super) fn controls_idle(&self) -> bool {
@@ -192,6 +195,8 @@ impl PlayerView {
             SliderEvent::Release(SliderValue::Single(value)) => {
                 self.seeking = None;
                 self.status.time_pos = *value as f64;
+                self.play_anchor = Some((*value as f64, Instant::now()));
+                self.seek_danmaku(*value as f64, cx);
                 self.player.seek(*value as f64);
                 if !self.preview_hovered {
                     self.preview_time = None;

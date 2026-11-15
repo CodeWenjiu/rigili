@@ -11,6 +11,7 @@ fn main() {
             gpui_kit::init(cx);
             app::shortcuts::bind(cx);
             rigili_playback::shortcuts::bind(cx);
+            rigili_playback::settings::init(cx);
             rigili_core::cursor::init(cx, platform.clone());
             cx.set_global(rigili_core::login::LoginState::default());
             app::platform::init(cx);

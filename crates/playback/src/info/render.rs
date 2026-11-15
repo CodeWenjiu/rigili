@@ -72,7 +72,7 @@ impl InfoPanel {
 #[cfg(test)]
 mod tests {
     use super::{INFO_WIDTH, InfoPanel};
-    use crate::info::InfoSelections;
+    use crate::info::{InfoSelections, InfoTab};
     use gpui_kit::prelude::*;
     use gpui_kit::test::TestWindowExt;
     use gpui_kit::{Bounds, TestAppContext, WindowBounds, WindowOptions, px, size};
@@ -105,5 +105,33 @@ mod tests {
             })
             .expect("info panel bounds");
         assert_eq!(width, INFO_WIDTH);
+    }
+
+    #[gpui_kit::test]
+    fn keeps_the_comments_tab_when_clearing(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (_, panel) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Default::default(),
+                        size(px(500.), px(300.)),
+                    ))),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| {
+                    let selections = InfoSelections::new(window, cx);
+                    cx.new(|_| InfoPanel::new(selections))
+                },
+            )
+            .expect("open info panel window")
+        });
+
+        panel.update(cx, |panel, cx| {
+            panel.tab = InfoTab::Comments;
+            panel.clear(cx);
+            assert_eq!(panel.tab, InfoTab::Comments);
+        });
     }
 }

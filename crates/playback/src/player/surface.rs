@@ -1,4 +1,4 @@
-rigili_macro::mod_prv!(input, native, poll, render);
+rigili_macro::mod_prv!(danmaku, input, native, poll, render);
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -97,6 +97,15 @@ pub(super) struct PlayerView {
     progress_bounds: Option<Bounds<Pixels>>,
     focus: FocusHandle,
     speed_hold: Option<SpeedHold>,
+    danmaku_layer: Entity<danmaku::DanmakuLayer>,
+    danmaku_input: Entity<gpui_kit::component::input::InputState>,
+    danmaku_source: Option<danmaku::DanmakuSource>,
+    danmaku_demand: Arc<danmaku::DanmakuDemand>,
+    danmaku_sending: bool,
+    danmaku_settings_open: bool,
+    danmaku_input_focused: bool,
+    last_pump: Instant,
+    play_anchor: Option<(f64, Instant)>,
     notice: Option<(Notice, Instant)>,
     _progress_sub: Option<Subscription>,
     _subscriptions: Vec<Subscription>,
@@ -120,11 +129,26 @@ impl PlayerView {
             |this, _, event: &SliderEvent, window, cx| this.on_volume(event, window, cx),
         )];
         let volume_popup = cx.new(|cx| VolumePopup::new(volume.clone(), cx));
+        let persisted = crate::settings::current(cx);
+        let danmaku_layer = cx.new(|_| danmaku::DanmakuLayer::new(persisted.danmaku));
 
         let progress_sub = Some(cx.subscribe_in(
             &progress,
             window,
             |this, _, event: &SliderEvent, window, cx| this.on_progress(event, window, cx),
+        ));
+
+        let danmaku_input = cx.new(|cx| {
+            gpui_kit::component::input::InputState::new(window, cx)
+                .placeholder("发个友善的弹幕见证当下")
+                .submit_on_enter(true)
+        });
+        subscriptions.push(cx.subscribe_in(
+            &danmaku_input,
+            window,
+            |this, _, event: &gpui_kit::component::input::InputEvent, window, cx| {
+                this.on_danmaku_input(event, window, cx)
+            },
         ));
 
         let focus = cx.focus_handle();
@@ -148,8 +172,15 @@ impl PlayerView {
         });
 
         let player = Player::new();
+        let speed = SPEEDS
+            .iter()
+            .copied()
+            .find(|value| (value - persisted.speed).abs() < 1e-3)
+            .unwrap_or(1.0);
+        player.set_speed(speed);
         let status_source = player.status();
-        let status = (*status_source).clone();
+        let mut status = (*status_source).clone();
+        status.speed = speed;
         let native = create_native_surface(window);
 
         Self {
@@ -187,6 +218,15 @@ impl PlayerView {
             progress_bounds: None,
             focus,
             speed_hold: None,
+            danmaku_layer,
+            danmaku_input,
+            danmaku_source: None,
+            danmaku_demand: Arc::new(danmaku::DanmakuDemand::new(persisted.danmaku.enabled)),
+            danmaku_sending: false,
+            danmaku_settings_open: false,
+            danmaku_input_focused: false,
+            last_pump: Instant::now(),
+            play_anchor: None,
             notice: None,
             _progress_sub: progress_sub,
             _subscriptions: subscriptions,
@@ -211,6 +251,11 @@ impl PlayerView {
         self.progress_max = 0.0;
         self.quality_popover_open = false;
         self.speed_popover_open = false;
+        self.clear_danmaku(cx);
+        self.danmaku_source = None;
+        self.danmaku_sending = false;
+        self.danmaku_settings_open = false;
+        self.play_anchor = None;
         self.selected_quality = streams.video_id;
         self.audio_url = streams.audio.clone();
         self.qualities = streams.qualities;
@@ -251,6 +296,8 @@ impl PlayerView {
         self.notice = None;
         self.quality_popover_open = false;
         self.speed_popover_open = false;
+        self.play_anchor = Some((start, Instant::now()));
+        self.seek_danmaku(start, cx);
         self.selected_quality = streams.video_id;
         self.audio_url = streams.audio.clone();
         self.qualities = streams.qualities;
@@ -283,6 +330,9 @@ impl PlayerView {
         self.selected_quality = id;
         self.quality_popover_open = false;
         self.speed_popover_open = false;
+        crate::settings::update(cx, |settings| settings.preferred_quality = Some(id));
+        self.play_anchor = Some((start, Instant::now()));
+        self.seek_danmaku(start, cx);
         self.status.phase = PlaybackPhase::Loading;
         self.status.error = None;
         self.player
@@ -311,6 +361,7 @@ impl PlayerView {
     }
 
     pub(super) fn toggle_pause(&mut self, cx: &mut Context<Self>) {
+        self.anchor_clock();
         self.player.toggle_pause();
         self.status.paused = !self.status.paused;
         cx.notify();
@@ -323,7 +374,7 @@ impl PlayerView {
             return;
         }
         self.show_speed_notice(speed);
-        self.apply_speed(speed, cx);
+        self.apply_speed(speed, true, cx);
     }
 
     pub(super) fn begin_speed_hold(&mut self, cx: &mut Context<Self>) {
@@ -334,14 +385,14 @@ impl PlayerView {
             previous: self.status.speed,
             started: Instant::now(),
         });
-        self.apply_speed(HOLD_SPEED, cx);
+        self.apply_speed(HOLD_SPEED, false, cx);
     }
 
     pub(super) fn end_speed_hold(&mut self, cx: &mut Context<Self>) {
         let Some(hold) = self.speed_hold.take() else {
             return;
         };
-        self.apply_speed(hold.previous, cx);
+        self.apply_speed(hold.previous, false, cx);
         if hold.started.elapsed() < HOLD_TAP_MAX {
             self.seek_by(SEEK_STEP, cx);
         }
@@ -349,13 +400,17 @@ impl PlayerView {
 
     fn cancel_speed_hold(&mut self, cx: &mut Context<Self>) {
         if let Some(hold) = self.speed_hold.take() {
-            self.apply_speed(hold.previous, cx);
+            self.apply_speed(hold.previous, false, cx);
         }
     }
 
-    fn apply_speed(&mut self, speed: f64, cx: &mut Context<Self>) {
+    fn apply_speed(&mut self, speed: f64, remember: bool, cx: &mut Context<Self>) {
+        self.anchor_clock();
         self.status.speed = speed;
         self.player.set_speed(speed);
+        if remember {
+            crate::settings::update(cx, |settings| settings.speed = speed);
+        }
         self.last_activity = Instant::now();
         cx.notify();
     }
@@ -368,6 +423,8 @@ impl PlayerView {
         let target = (current + delta).clamp(0., self.status.duration);
         self.seeking = None;
         self.status.time_pos = target;
+        self.play_anchor = Some((target, Instant::now()));
+        self.seek_danmaku(target, cx);
         self.player.seek(target);
         self.last_activity = Instant::now();
         cx.notify();
@@ -388,7 +445,7 @@ impl PlayerView {
         if (speed - current).abs() > 1e-3 {
             self.last_activity = Instant::now();
             self.show_speed_notice(speed);
-            self.apply_speed(speed, cx);
+            self.apply_speed(speed, true, cx);
         }
     }
 

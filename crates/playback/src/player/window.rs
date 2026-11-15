@@ -12,12 +12,10 @@ use gpui_kit::*;
 use super::history::History;
 use super::surface::PlayerView;
 use crate::info::{InfoEvent, InfoPanel, InfoSelections, InfoTab};
-use crate::request::{
-    PlaybackRequest, PlaybackSource, Streams, resolve, resolve_streams, resolve_streams_at,
-};
+use crate::request::{PlaybackRequest, PlaybackSource, Streams, resolve, resolve_streams};
 use crate::shortcuts::{
     HistoryBack, HistoryForward, Reload, SeekBack, SpeedDown, SpeedUp, SwitchToMain,
-    ToggleComments, ToggleFullscreen, ToggleInfo, ToggleMute, TogglePlayback,
+    ToggleComments, ToggleDanmaku, ToggleFullscreen, ToggleInfo, ToggleMute, TogglePlayback,
 };
 use rigili_bilibili::Client;
 use rigili_core::api_error_message;
@@ -40,6 +38,7 @@ pub struct PlayerWindow {
     show_info: bool,
     fullscreen_info: bool,
     generation: u64,
+    danmaku_task: Option<Task<()>>,
     _info_sub: Subscription,
 }
 
@@ -82,6 +81,7 @@ impl PlayerWindow {
             show_info: true,
             fullscreen_info: false,
             generation: 0,
+            danmaku_task: None,
             _info_sub: info_sub,
         };
         if view.client.is_some() {
@@ -148,8 +148,12 @@ impl PlayerWindow {
         };
 
         self.generation += 1;
+        self.danmaku_task = None;
+        self.player
+            .update(cx, |player, cx| player.clear_danmaku_source(cx));
         let generation = self.generation;
         let source = request.source.clone();
+        let preferred = crate::settings::current(cx).preferred_quality;
         self.is_live = matches!(source, PlaybackSource::Live { .. });
         if !request.title.is_empty() {
             self.title = request.title.clone().into();
@@ -162,12 +166,14 @@ impl PlayerWindow {
         self.error = None;
         self.info.update(cx, |info, cx| info.clear(cx));
         self.info.update(cx, |info, cx| info.set_busy(true, cx));
+        self.player
+            .update(cx, |player, cx| player.clear_danmaku(cx));
         cx.notify();
 
         match source {
             PlaybackSource::Video { bvid, cid } => spawn_api(
                 cx,
-                async move { resolve(client, bvid, cid).await },
+                async move { resolve(client, bvid, cid, preferred).await },
                 move |this, result, cx| {
                     if this.generation != generation {
                         return;
@@ -178,6 +184,13 @@ impl PlayerWindow {
                             let cid = resolved.cid;
                             let bvid = resolved.info.bvid.clone();
                             let aid = resolved.info.aid;
+                            let duration = resolved
+                                .info
+                                .pages
+                                .iter()
+                                .find(|page| page.cid == cid)
+                                .map(|page| page.duration)
+                                .unwrap_or(resolved.info.duration);
                             let owner_mid = resolved.info.owner.mid;
                             let followers = resolved.followers;
                             let owner_likes = resolved.owner_likes;
@@ -206,6 +219,7 @@ impl PlayerWindow {
                             });
                             this.load_previews(bvid.clone(), cid, cx);
                             this.load_chapters(bvid.clone(), cid, cx);
+                            this.load_danmaku(bvid, aid, cid, duration, cx);
                             this.load_follow_status(owner_mid, cx);
                             this.load_interactions(aid, cx);
                             this.load_watch_later(aid, cx);
@@ -269,6 +283,9 @@ impl PlayerWindow {
             *request_cid = Some(cid);
         }
         self.generation += 1;
+        self.danmaku_task = None;
+        self.player
+            .update(cx, |player, cx| player.clear_danmaku_source(cx));
         let generation = self.generation;
         self.loading = true;
         self.error = None;
@@ -277,9 +294,13 @@ impl PlayerWindow {
 
         let preview_bvid = bvid.clone();
         let chapters_bvid = bvid.clone();
+        let danmaku_bvid = bvid.clone();
+        let preferred = crate::settings::current(cx).preferred_quality;
+        let aid = self.info.read(cx).aid().unwrap_or_default();
+        let duration = self.info.read(cx).page_duration(cid).unwrap_or_default();
         spawn_api(
             cx,
-            async move { resolve_streams(&client, &bvid, cid).await },
+            async move { resolve_streams(&client, &bvid, cid, preferred).await },
             move |this, result, cx| {
                 if this.generation != generation {
                     return;
@@ -293,6 +314,7 @@ impl PlayerWindow {
                             .update(cx, |player, cx| player.load_streams(streams, false, cx));
                         this.load_previews(preview_bvid, cid, cx);
                         this.load_chapters(chapters_bvid, cid, cx);
+                        this.load_danmaku(danmaku_bvid, aid, cid, duration, cx);
                     }
                     Err(error) => {
                         this.info.update(cx, |info, cx| info.set_busy(false, cx));
@@ -351,7 +373,7 @@ impl PlayerWindow {
 
         spawn_api(
             cx,
-            async move { resolve_streams_at(&client, &bvid, cid, Some(preferred)).await },
+            async move { resolve_streams(&client, &bvid, cid, Some(preferred)).await },
             move |this, result, cx| {
                 if this.generation != generation {
                     return;
@@ -439,6 +461,10 @@ impl Render for PlayerWindow {
             }))
             .on_action(cx.listener(|this, _: &ToggleComments, window, cx| {
                 this.toggle_panel(InfoTab::Comments, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ToggleDanmaku, _, cx| {
+                this.player
+                    .update(cx, |player, cx| player.toggle_danmaku(cx));
             }))
             .on_action(cx.listener(|this, _: &Reload, _, cx| {
                 this.reload(cx);

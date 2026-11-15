@@ -6158,6 +6158,8 @@ dependencies = [
  "rigili_macro",
  "rigili_monitor",
  "rigili_player",
+ "serde",
+ "serde_json",
  "tokio",
  "wayland-client",
  "wayland-protocols",

@@ -15,6 +15,16 @@ where
     F: Future<Output = Result<T, ApiError>> + Send + 'static,
     U: FnOnce(&mut V, Result<T, ApiTaskError>, &mut Context<V>) + 'static,
 {
+    spawn_api_task(cx, future, on_done).detach();
+}
+
+pub fn spawn_api_task<V, T, F, U>(cx: &mut Context<V>, future: F, on_done: U) -> Task<()>
+where
+    V: 'static,
+    T: Send + 'static,
+    F: Future<Output = Result<T, ApiError>> + Send + 'static,
+    U: FnOnce(&mut V, Result<T, ApiTaskError>, &mut Context<V>) + 'static,
+{
     let task = Tokio::spawn(&*cx, future);
     cx.spawn(async move |weak, cx| {
         let result = match task.await {
@@ -24,7 +34,6 @@ where
         };
         let _ = weak.update(cx, |this, cx| on_done(this, result, cx));
     })
-    .detach();
 }
 
 pub fn init(cx: &mut App) {

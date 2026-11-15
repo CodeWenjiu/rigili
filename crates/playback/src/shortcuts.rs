@@ -17,6 +17,7 @@ actions!(
         ToggleFullscreen,
         ToggleInfo,
         ToggleComments,
+        ToggleDanmaku,
         Reload,
         SwitchToMain,
     ]
@@ -78,6 +79,11 @@ const COMMANDS: &[Command] = &[
         keys: "c",
         context: PLAYER,
         action: || Box::new(ToggleComments),
+    },
+    Command {
+        keys: "d",
+        context: PLAYER,
+        action: || Box::new(ToggleDanmaku),
     },
     Command {
         keys: "r",

@@ -16,6 +16,20 @@ impl PlayerView {
     }
 
     pub(super) fn pump(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let entered = Instant::now();
+        let interval = entered.saturating_duration_since(self.last_pump);
+        self.last_pump = entered;
+        if self.status.phase == PlaybackPhase::Playing
+            && !self.status.paused
+            && interval > POLL_INTERVAL + Duration::from_millis(14)
+        {
+            rigili_monitor::monitor!(
+                "ui",
+                "pump interval {interval:?} (active danmaku {})",
+                self.danmaku_layer.read(cx).active_count()
+            );
+        }
+
         for frame in self.retired_frames.drain(..) {
             let _ = window.drop_image(frame);
         }
@@ -53,7 +67,29 @@ impl PlayerView {
             }
             self.status = next;
             self.status_source = status;
+            self.play_anchor = Some((self.status.time_pos, Instant::now()));
             changed = true;
+        }
+
+        self.danmaku_demand
+            .set_playing(self.status.phase == PlaybackPhase::Playing && !self.status.paused);
+
+        if let Some(area) = self.video_bounds.get() {
+            let time = self.playback_time();
+            let scale = self.status.video_size.map_or(1.0, |size| {
+                (f32::from(area.size.width) / size.width as f32)
+                    .min(f32::from(area.size.height) / size.height as f32)
+            });
+            let started = Instant::now();
+            self.update_danmaku(time, area, scale, window, cx);
+            let elapsed = started.elapsed();
+            if elapsed > Duration::from_millis(2) {
+                rigili_monitor::monitor!(
+                    "danmaku",
+                    "update {elapsed:?} ({} active)",
+                    self.danmaku_layer.read(cx).active_count()
+                );
+            }
         }
 
         if self.controls_idle() {

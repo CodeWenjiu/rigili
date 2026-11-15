@@ -3,6 +3,7 @@ use std::time::Duration;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::*;
 use gpui_kit::component::hover_card::HoverCard;
+use gpui_kit::component::input::InputState;
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::slider::*;
@@ -12,8 +13,10 @@ use gpui_kit::*;
 use rigili_bilibili::Chapter;
 use rigili_player::{BufferedRange, PlayerStatus};
 
+use super::danmaku_bar::DanmakuBar;
 use super::surface::PlayerView;
 use crate::request::VideoQuality;
+use crate::settings::DanmakuSettings;
 use crate::shortcuts::{ToggleFullscreen, TogglePlayback};
 use gpui_kit::base::{Slider as BaseSlider, SliderIndicator, SliderThumb, SliderTrack};
 use rigili_core::format_clock;
@@ -32,6 +35,11 @@ pub(super) struct Transport<'a> {
     pub(super) speed_open: bool,
     pub(super) preview: Option<AnyElement>,
     pub(super) live: bool,
+    pub(super) danmaku: DanmakuSettings,
+    pub(super) danmaku_input: &'a Entity<InputState>,
+    pub(super) danmaku_sending: bool,
+    pub(super) danmaku_settings_open: bool,
+    pub(super) can_send_danmaku: bool,
     pub(super) player: WeakEntity<PlayerView>,
 }
 
@@ -362,7 +370,28 @@ impl Transport<'_> {
                                 .child("直播中"),
                         )
                     })
-                    .child(div().flex_1())
+                    .when(self.live, |this| this.child(div().flex_1()))
+                    .when(!self.live, |this| {
+                        this.child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .px_4()
+                                .flex()
+                                .justify_center()
+                                .child(
+                                    DanmakuBar {
+                                        settings: self.danmaku,
+                                        input: self.danmaku_input,
+                                        sending: self.danmaku_sending,
+                                        settings_open: self.danmaku_settings_open,
+                                        can_send: self.can_send_danmaku,
+                                        player: weak.clone(),
+                                    }
+                                    .render(cx),
+                                ),
+                        )
+                    })
                     .child(
                         HoverCard::new("player-volume")
                             .anchor(Anchor::TopCenter)

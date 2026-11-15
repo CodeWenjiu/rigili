@@ -511,10 +511,12 @@ impl State {
             return;
         }
 
-        if !matches!(phase, PlaybackPhase::Loading | PlaybackPhase::Buffering)
-            || self
-                .last_monitor
-                .is_some_and(|last| last.elapsed() < MONITOR_INTERVAL)
+        if !matches!(
+            phase,
+            PlaybackPhase::Playing | PlaybackPhase::Loading | PlaybackPhase::Buffering
+        ) || self
+            .last_monitor
+            .is_some_and(|last| last.elapsed() < MONITOR_INTERVAL)
         {
             return;
         }
