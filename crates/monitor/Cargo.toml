@@ -1,0 +1,11 @@
+[package]
+name = "rigili_monitor"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[features]
+video-monitor = []
+
+[dependencies]
+rigili_macro.workspace = true

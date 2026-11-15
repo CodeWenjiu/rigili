@@ -17,6 +17,14 @@ run *args:
 run-release *args:
     @cargo run --release -p rigili_app -- {{args}}
 
+# 运行应用并开启视频流监视；RIGILI_MPV_LOG=debug just run-monitor 可提高 mpv 日志级别
+run-monitor *args:
+    @cargo run -p rigili_app --features video-monitor -- {{args}}
+
+# release 版视频流监视
+run-monitor-release *args:
+    @cargo run --release -p rigili_app --features video-monitor -- {{args}}
+
 # 格式化
 fmt:
     @cargo fmt --all

@@ -204,15 +204,17 @@ pub struct Dash {
 
 impl Dash {
     pub fn best_video(&self) -> Option<&DashVideo> {
-        self.video
-            .iter()
+        self.usable_videos()
             .filter(|video| video.codecid == 7)
             .max_by_key(|video| video.bandwidth)
-            .or_else(|| self.video.iter().max_by_key(|video| video.bandwidth))
+            .or_else(|| self.usable_videos().max_by_key(|video| video.bandwidth))
     }
 
     pub fn best_audio(&self) -> Option<&DashAudio> {
-        self.audio.iter().max_by_key(|audio| audio.bandwidth)
+        self.audio
+            .iter()
+            .filter(|audio| !audio.base_url.is_empty())
+            .max_by_key(|audio| audio.bandwidth)
     }
 
     pub fn preview_video(&self) -> Option<&DashVideo> {
@@ -232,6 +234,7 @@ impl Dash {
 pub struct DashVideo {
     pub id: u32,
     pub base_url: String,
+    pub backup_urls: Vec<String>,
     pub bandwidth: u64,
     pub width: u32,
     pub height: u32,
@@ -244,6 +247,7 @@ pub struct DashVideo {
 pub struct DashAudio {
     pub id: u32,
     pub base_url: String,
+    pub backup_urls: Vec<String>,
     pub bandwidth: u64,
     pub codecs: String,
 }
@@ -256,6 +260,10 @@ struct RawDashVideo {
     base_url: Option<String>,
     #[serde(default, rename = "base_url")]
     base_url_snake: Option<String>,
+    #[serde(default)]
+    backup_url: Option<Vec<String>>,
+    #[serde(default, rename = "backup_url")]
+    backup_url_snake: Option<Vec<String>>,
     bandwidth: u64,
     #[serde(default)]
     width: u32,
@@ -272,6 +280,7 @@ impl From<RawDashVideo> for DashVideo {
         Self {
             id: raw.id,
             base_url: raw.base_url.or(raw.base_url_snake).unwrap_or_default(),
+            backup_urls: raw.backup_url.or(raw.backup_url_snake).unwrap_or_default(),
             bandwidth: raw.bandwidth,
             width: raw.width,
             height: raw.height,
@@ -289,6 +298,10 @@ struct RawDashAudio {
     base_url: Option<String>,
     #[serde(default, rename = "base_url")]
     base_url_snake: Option<String>,
+    #[serde(default)]
+    backup_url: Option<Vec<String>>,
+    #[serde(default, rename = "backup_url")]
+    backup_url_snake: Option<Vec<String>>,
     bandwidth: u64,
     #[serde(default)]
     codecs: String,
@@ -299,6 +312,7 @@ impl From<RawDashAudio> for DashAudio {
         Self {
             id: raw.id,
             base_url: raw.base_url.or(raw.base_url_snake).unwrap_or_default(),
+            backup_urls: raw.backup_url.or(raw.backup_url_snake).unwrap_or_default(),
             bandwidth: raw.bandwidth,
             codecs: raw.codecs,
         }
@@ -386,6 +400,7 @@ mod tests {
         DashVideo {
             id: 32,
             base_url: format!("https://example.invalid/{codecid}.m4s"),
+            backup_urls: Vec::new(),
             bandwidth,
             width: 852,
             height: 480,
@@ -398,6 +413,7 @@ mod tests {
         DashAudio {
             id: 30280,
             base_url: "https://example.invalid/audio.m4s".into(),
+            backup_urls: Vec::new(),
             bandwidth,
             codecs: String::new(),
         }
@@ -420,6 +436,21 @@ mod tests {
             audio: Vec::new(),
         };
         assert_eq!(no_avc.best_video().map(|video| video.codecid), Some(13));
+
+        let unavailable = Dash {
+            video: vec![DashVideo {
+                bandwidth: 9_000_000,
+                base_url: String::new(),
+                ..video(7, 1)
+            }],
+            audio: vec![DashAudio {
+                bandwidth: 9_000_000,
+                base_url: String::new(),
+                ..audio(1)
+            }],
+        };
+        assert!(unavailable.best_video().is_none());
+        assert!(unavailable.best_audio().is_none());
     }
 
     #[test]
@@ -460,12 +491,42 @@ mod tests {
         DashVideo {
             id,
             base_url: format!("https://example.invalid/{id}-{codecid}.m4s"),
+            backup_urls: Vec::new(),
             bandwidth,
             width: height * 16 / 9,
             height,
             codecs: String::new(),
             codecid,
         }
+    }
+
+    #[test]
+    fn parses_backup_stream_urls() {
+        let dash: Dash = serde_json::from_str(
+            r#"{
+                "video": [{
+                    "id": 80,
+                    "baseUrl": "https://a.invalid/v.m4s",
+                    "backupUrl": ["https://b.invalid/v.m4s"],
+                    "bandwidth": 1,
+                    "width": 1920,
+                    "height": 1080,
+                    "codecs": "avc1",
+                    "codecid": 7
+                }],
+                "audio": [{
+                    "id": 30280,
+                    "base_url": "https://a.invalid/a.m4s",
+                    "backup_url": ["https://b.invalid/a.m4s"],
+                    "bandwidth": 1,
+                    "codecs": "mp4a.40.2"
+                }]
+            }"#,
+        )
+        .expect("dash with backup urls");
+
+        assert_eq!(dash.video[0].backup_urls, ["https://b.invalid/v.m4s"]);
+        assert_eq!(dash.audio[0].backup_urls, ["https://b.invalid/a.m4s"]);
     }
 
     #[test]

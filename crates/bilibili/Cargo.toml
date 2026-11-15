@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 rigili_macro.workspace = true
+rigili_monitor.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

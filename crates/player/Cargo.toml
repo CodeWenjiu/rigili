@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 rigili_macro.workspace = true
+rigili_monitor.workspace = true
 thiserror.workspace = true
 glow = "0.17"
 khronos-egl = { version = "6", features = ["dynamic"] }

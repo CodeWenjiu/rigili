@@ -8,7 +8,7 @@ use std::{
 use reqwest::{
     Client as HttpClient, RequestBuilder, Response, StatusCode, Url,
     cookie::{CookieStore, Jar},
-    header::{ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderValue, REFERER},
+    header::{ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderValue, RANGE, REFERER},
 };
 use serde::{Deserialize, de::DeserializeOwned};
 use tokio::sync::{Mutex, OnceCell, Semaphore};
@@ -155,7 +155,7 @@ impl Client {
     where
         T: DeserializeOwned,
     {
-        self.json(|| self.http.get(url).query(params)).await
+        self.json(url, || self.http.get(url).query(params)).await
     }
 
     pub async fn get_json_or_default<T>(
@@ -166,8 +166,8 @@ impl Client {
     where
         T: DeserializeOwned + Default,
     {
-        let response = self.send(|| self.http.get(url).query(params)).await?;
-        let body = response.text().await?;
+        let response = self.send(url, || self.http.get(url).query(params)).await?;
+        let body = self.body(url, response).await?;
         self.parse_or_default(&body)
     }
 
@@ -176,14 +176,14 @@ impl Client {
         T: DeserializeOwned,
     {
         let target = self.wbi_url(url, params).await?;
-        self.json(|| self.http.get(&target)).await
+        self.json(&target, || self.http.get(&target)).await
     }
 
     pub async fn post_form<T>(&self, url: &str, params: &[(&str, String)]) -> Result<T, ApiError>
     where
         T: DeserializeOwned,
     {
-        self.json(|| self.http.post(url).form(params)).await
+        self.json(url, || self.http.post(url).form(params)).await
     }
 
     pub async fn post_wbi_form<T>(
@@ -196,7 +196,8 @@ impl Client {
         T: DeserializeOwned,
     {
         let target = self.wbi_url(url, params).await?;
-        self.json(|| self.http.post(&target).form(form)).await
+        self.json(&target, || self.http.post(&target).form(form))
+            .await
     }
 
     pub async fn post_form_ack(
@@ -204,8 +205,8 @@ impl Client {
         url: &str,
         params: &[(&str, String)],
     ) -> Result<(), ApiError> {
-        let response = self.send(|| self.http.post(url).form(params)).await?;
-        let body = response.text().await?;
+        let response = self.send(url, || self.http.post(url).form(params)).await?;
+        let body = self.body(url, response).await?;
         self.parse_ack(&body)
     }
 
@@ -223,17 +224,62 @@ impl Client {
     where
         T: DeserializeOwned,
     {
-        let response = self.send(|| self.http.get(url)).await?;
-        let body = response.text().await?;
+        let response = self.send(url, || self.http.get(url)).await?;
+        let body = self.body(url, response).await?;
         Ok(serde_json::from_str(&body)?)
     }
 
-    async fn json<T>(&self, request: impl Fn() -> RequestBuilder + Send) -> Result<T, ApiError>
+    pub async fn probe_stream(&self, url: &str) -> Option<Duration> {
+        const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+        const PROBE_BYTES: usize = 64 * 1024;
+
+        let started = Instant::now();
+        let mut response = self
+            .http
+            .get(url)
+            .header(RANGE, format!("bytes=0-{}", PROBE_BYTES - 1))
+            .timeout(PROBE_TIMEOUT)
+            .send()
+            .await
+            .ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+
+        let mut received = 0;
+        while received < PROBE_BYTES {
+            match response.chunk().await {
+                Ok(Some(chunk)) => received += chunk.len(),
+                Ok(None) => break,
+                Err(_) => return None,
+            }
+        }
+        (received > 0).then(|| started.elapsed())
+    }
+
+    async fn body(&self, url: &str, response: Response) -> Result<String, ApiError> {
+        let started = Instant::now();
+        let status = response.status();
+        let body = response.text().await?;
+        rigili_monitor::monitor!(
+            "http",
+            "{url} {status} {} bytes in {:?}",
+            body.len(),
+            started.elapsed()
+        );
+        Ok(body)
+    }
+
+    async fn json<T>(
+        &self,
+        url: &str,
+        request: impl Fn() -> RequestBuilder + Send,
+    ) -> Result<T, ApiError>
     where
         T: DeserializeOwned,
     {
-        let response = self.send(request).await?;
-        let body = response.text().await?;
+        let response = self.send(url, request).await?;
+        let body = self.body(url, response).await?;
         self.parse(&body)
     }
 
@@ -285,32 +331,83 @@ impl Client {
 
     async fn send(
         &self,
+        url: &str,
         request: impl Fn() -> RequestBuilder + Send,
     ) -> Result<Response, ApiError> {
+        let queued = Instant::now();
         let _permit = self
             .requests
             .acquire()
             .await
             .map_err(|_| ApiError::InvalidResponse("请求并发限制已关闭".into()))?;
+        let queued_for = queued.elapsed();
+        if queued_for >= Duration::from_millis(50) {
+            rigili_monitor::monitor!("http", "{url} waited {queued_for:?} for a request slot");
+        }
 
         let mut attempt = 0;
         loop {
-            self.wait_for_slot().await;
+            let slot_wait = self.wait_for_slot().await;
+            let started = Instant::now();
             match request().send().await {
-                Ok(response) if response.status().is_success() => return Ok(response),
+                Ok(response) if response.status().is_success() => {
+                    rigili_monitor::monitor!(
+                        "http",
+                        "{url} {} in {:?} (attempt {}, rate-limit wait {slot_wait:?})",
+                        response.status(),
+                        started.elapsed(),
+                        attempt + 1
+                    );
+                    return Ok(response);
+                }
                 Ok(response)
-                    if retryable_status(response.status()) && attempt + 1 < RETRY_LIMIT => {}
-                Ok(response) => return Err(ApiError::Status(response.status())),
-                Err(error) if retryable_error(&error) && attempt + 1 < RETRY_LIMIT => {}
-                Err(error) => return Err(ApiError::from(error)),
+                    if retryable_status(response.status()) && attempt + 1 < RETRY_LIMIT =>
+                {
+                    rigili_monitor::monitor!(
+                        "http",
+                        "{url} {} in {:?}, retrying (attempt {}/{RETRY_LIMIT})",
+                        response.status(),
+                        started.elapsed(),
+                        attempt + 1
+                    );
+                }
+                Ok(response) => {
+                    rigili_monitor::monitor!(
+                        "http",
+                        "{url} {} in {:?}, giving up after {} attempt(s)",
+                        response.status(),
+                        started.elapsed(),
+                        attempt + 1
+                    );
+                    return Err(ApiError::Status(response.status()));
+                }
+                Err(error) if retryable_error(&error) && attempt + 1 < RETRY_LIMIT => {
+                    rigili_monitor::monitor!(
+                        "http",
+                        "{url} failed in {:?}: {error}, retrying (attempt {}/{RETRY_LIMIT})",
+                        started.elapsed(),
+                        attempt + 1
+                    );
+                }
+                Err(error) => {
+                    rigili_monitor::monitor!(
+                        "http",
+                        "{url} failed in {:?}: {error}, giving up after {} attempt(s)",
+                        started.elapsed(),
+                        attempt + 1
+                    );
+                    return Err(ApiError::from(error));
+                }
             }
 
             attempt += 1;
-            tokio::time::sleep(RETRY_DELAY * 2u32.pow(attempt as u32 - 1)).await;
+            let delay = RETRY_DELAY * 2u32.pow(attempt as u32 - 1);
+            rigili_monitor::monitor!("http", "{url} retrying in {delay:?}");
+            tokio::time::sleep(delay).await;
         }
     }
 
-    async fn wait_for_slot(&self) {
+    async fn wait_for_slot(&self) -> Duration {
         let wait = {
             let mut next_slot = self.next_request.lock().await;
             let now = Instant::now();
@@ -324,6 +421,7 @@ impl Client {
         if !wait.is_zero() {
             tokio::time::sleep(wait).await;
         }
+        wait
     }
 }
 

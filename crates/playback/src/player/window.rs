@@ -13,8 +13,8 @@ use super::surface::PlayerView;
 use crate::info::{InfoEvent, InfoPanel, InfoSelections, InfoTab};
 use crate::request::{PlaybackRequest, PlaybackSource, Streams, resolve, resolve_streams};
 use crate::shortcuts::{
-    Reload, SeekBack, SeekForward, SpeedDown, SpeedUp, ToggleComments, ToggleFullscreen,
-    ToggleInfo, ToggleMute, TogglePlayback,
+    Reload, SeekBack, SpeedDown, SpeedUp, ToggleComments, ToggleFullscreen, ToggleInfo, ToggleMute,
+    TogglePlayback,
 };
 use rigili_bilibili::Client;
 use rigili_core::OpenSpace;
@@ -313,9 +313,6 @@ impl Render for PlayerWindow {
             }))
             .on_action(cx.listener(|this, _: &SeekBack, _, cx| {
                 this.player.update(cx, |player, cx| player.seek_by(-5., cx));
-            }))
-            .on_action(cx.listener(|this, _: &SeekForward, _, cx| {
-                this.player.update(cx, |player, cx| player.seek_by(5., cx));
             }))
             .on_action(cx.listener(|this, _: &SpeedDown, _, cx| {
                 this.player

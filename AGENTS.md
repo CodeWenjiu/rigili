@@ -50,6 +50,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
+视频流排障（编译期开关，关闭时零开销，日志输出到 stderr）：
+
+```bash
+cargo run --features video-monitor                        # API 请求、选流、mpv 事件与缓存快照
+RIGILI_MPV_LOG=debug cargo run --features video-monitor   # 同时提高 mpv 日志级别
+just run-monitor                                          # 同上，等价于第一条
+```
+
 性能分析（dev shell 内，`perf` 需要以子进程方式启动应用）：
 
 ```bash

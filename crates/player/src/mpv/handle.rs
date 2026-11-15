@@ -1,5 +1,5 @@
 use std::{
-    ffi::{CStr, c_char, c_int, c_void},
+    ffi::{CStr, CString, c_char, c_int, c_void},
     ptr::{NonNull, null_mut},
 };
 
@@ -10,9 +10,10 @@ use super::{
     ffi::{
         MPV_FORMAT_DOUBLE, MPV_FORMAT_FLAG, MPV_FORMAT_INT64, MPV_FORMAT_NODE,
         MPV_FORMAT_NODE_ARRAY, MPV_FORMAT_NODE_MAP, MPV_FORMAT_STRING, MpvEvent, MpvHandle,
-        MpvNode, MpvNodeValue, mpv_command, mpv_create, mpv_free, mpv_free_node_contents,
-        mpv_get_property, mpv_initialize, mpv_set_option_string, mpv_set_property,
-        mpv_terminate_destroy, mpv_wait_event,
+        MpvNode, MpvNodeValue, mpv_abort_async_command, mpv_command, mpv_command_async, mpv_create,
+        mpv_free, mpv_free_node_contents, mpv_get_property, mpv_initialize,
+        mpv_request_log_messages, mpv_set_option_string, mpv_set_property, mpv_terminate_destroy,
+        mpv_wait_event,
     },
 };
 
@@ -30,7 +31,9 @@ const OPTIONS: &[(&str, &str)] = &[
     // Software output scales on the CPU; mpv's lanczos default is too costly.
     ("zimg-scaler", "bilinear"),
     ("terminal", "no"),
-    ("msg-level", "all=warn"),
+    // Playback URLs are direct DASH/FLV streams; the hook only adds a failed
+    // subprocess to every network load.
+    ("ytdl", "no"),
     ("audio-display", "no"),
     ("osc", "no"),
     ("osd-level", "0"),
@@ -53,9 +56,31 @@ impl Mpv {
         for (name, value) in OPTIONS {
             mpv.set_option_string(name, value)?;
         }
+        let log_level = crate::monitor::log_level();
+        mpv.set_option_string(
+            "msg-level",
+            &format!("all={}", log_level.as_deref().unwrap_or("warn")),
+        )?;
 
         check(unsafe { mpv_initialize(mpv.handle.as_ptr()) })?;
+
+        if let Some(level) = &log_level {
+            if let Err(error) = mpv.request_log_messages(level) {
+                rigili_monitor::monitor!("mpv", "cannot enable mpv logging: {error}");
+            }
+            rigili_monitor::monitor!(
+                "mpv",
+                "libmpv {} (log level {level})",
+                mpv.get_property_string("mpv-version")
+                    .unwrap_or_else(|| "unknown".to_owned())
+            );
+        }
         Ok(mpv)
+    }
+
+    pub(crate) fn request_log_messages(&self, level: &str) -> Result<(), MpvError> {
+        let level = c_string(level)?;
+        check(unsafe { mpv_request_log_messages(self.handle.as_ptr(), level.as_ptr()) })
     }
 
     pub(super) fn raw_handle(&self) -> *mut MpvHandle {
@@ -69,13 +94,17 @@ impl Mpv {
     }
 
     pub(crate) fn command(&self, args: &[&str]) -> Result<(), MpvError> {
-        let args = args
-            .iter()
-            .map(|arg| c_string(arg))
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut pointers = args.iter().map(|arg| arg.as_ptr()).collect::<Vec<_>>();
-        pointers.push(std::ptr::null());
+        let (_args, pointers) = command_pointers(args)?;
         check(unsafe { mpv_command(self.handle.as_ptr(), pointers.as_ptr()) })
+    }
+
+    pub(crate) fn command_async(&self, args: &[&str], userdata: u64) -> Result<(), MpvError> {
+        let (_args, pointers) = command_pointers(args)?;
+        check(unsafe { mpv_command_async(self.handle.as_ptr(), userdata, pointers.as_ptr()) })
+    }
+
+    pub(crate) fn abort_async_command(&self, userdata: u64) {
+        unsafe { mpv_abort_async_command(self.handle.as_ptr(), userdata) };
     }
 
     pub(crate) fn set_property_double(&self, name: &str, value: f64) -> Result<(), MpvError> {
@@ -169,9 +198,32 @@ impl Mpv {
     }
 
     pub(crate) fn buffered_ranges(&self) -> Vec<BufferedRange> {
-        let Ok(name) = c_string("demuxer-cache-state") else {
+        let Some(mut node) = self.property_node("demuxer-cache-state") else {
             return Vec::new();
         };
+        let ranges = seekable_ranges(&node);
+        unsafe { mpv_free_node_contents(&mut node) };
+        ranges
+    }
+
+    pub(crate) fn cache_state(&self) -> Option<CacheState> {
+        let mut node = self.property_node("demuxer-cache-state")?;
+        let state = CacheState {
+            duration: map_f64(&node, b"cache-duration").unwrap_or_default(),
+            raw_input_rate: map_f64(&node, b"raw-input-rate").unwrap_or_default(),
+            underrun: map_get(&node, b"underrun")
+                .and_then(node_flag)
+                .unwrap_or_default(),
+            idle: map_get(&node, b"idle")
+                .and_then(node_flag)
+                .unwrap_or_default(),
+        };
+        unsafe { mpv_free_node_contents(&mut node) };
+        Some(state)
+    }
+
+    fn property_node(&self, name: &str) -> Option<MpvNode> {
+        let name = c_string(name).ok()?;
         let mut node = MpvNode {
             value: MpvNodeValue { int64: 0 },
             format: 0,
@@ -184,13 +236,7 @@ impl Mpv {
                 &mut node as *mut MpvNode as *mut c_void,
             )
         };
-        if code < 0 {
-            return Vec::new();
-        }
-
-        let ranges = seekable_ranges(&node);
-        unsafe { mpv_free_node_contents(&mut node) };
-        ranges
+        (code >= 0).then_some(node)
     }
 
     pub(crate) fn video_size(&self) -> Option<VideoSize> {
@@ -202,6 +248,16 @@ impl Mpv {
     pub(crate) fn wait_event(&self, timeout: f64) -> MpvEvent {
         unsafe { *mpv_wait_event(self.handle.as_ptr(), timeout) }
     }
+}
+
+fn command_pointers(args: &[&str]) -> Result<(Vec<CString>, Vec<*const c_char>), MpvError> {
+    let strings = args
+        .iter()
+        .map(|arg| c_string(arg))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut pointers = strings.iter().map(|arg| arg.as_ptr()).collect::<Vec<_>>();
+    pointers.push(std::ptr::null());
+    Ok((strings, pointers))
 }
 
 fn seekable_ranges(node: &MpvNode) -> Vec<BufferedRange> {
@@ -254,6 +310,25 @@ fn node_f64(node: &MpvNode) -> Option<f64> {
         MPV_FORMAT_INT64 => Some(unsafe { node.value.int64 } as f64),
         _ => None,
     }
+}
+
+fn node_flag(node: &MpvNode) -> Option<bool> {
+    match node.format {
+        MPV_FORMAT_FLAG => Some(unsafe { node.value.flag } != 0),
+        _ => node_f64(node).map(|value| value != 0.),
+    }
+}
+
+fn map_f64(node: &MpvNode, name: &[u8]) -> Option<f64> {
+    map_get(node, name).and_then(node_f64)
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CacheState {
+    pub(crate) duration: f64,
+    pub(crate) raw_input_rate: f64,
+    pub(crate) underrun: bool,
+    pub(crate) idle: bool,
 }
 
 impl Drop for Mpv {

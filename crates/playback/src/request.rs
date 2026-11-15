@@ -1,6 +1,11 @@
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use rigili_bilibili::{ApiError, Client, Dash, PlayUrl, RecommendVideo, VideoInfo};
+use tokio::task::JoinSet;
+
+const PROBE_FAST_ENOUGH: Duration = Duration::from_millis(500);
+const PROBE_DEADLINE: Duration = Duration::from_millis(2500);
 
 #[derive(Clone, Debug)]
 pub struct PlaybackRequest {
@@ -70,10 +75,17 @@ pub(super) async fn resolve(
     bvid: String,
     cid: Option<u64>,
 ) -> Result<Resolved, ApiError> {
+    let started = Instant::now();
+    rigili_monitor::monitor!("stream", "resolving {bvid} (cid {cid:?})");
     let detail = client.video_detail(&bvid).await?;
     let info = detail.view;
     let cid = cid.unwrap_or(info.cid);
     let streams = resolve_streams(&client, &bvid, cid).await?;
+    rigili_monitor::monitor!(
+        "stream",
+        "resolved {bvid} cid {cid} in {:?}",
+        started.elapsed()
+    );
     Ok(Resolved {
         info,
         related: detail.related,
@@ -90,10 +102,45 @@ pub(super) async fn resolve_streams(
     cid: u64,
 ) -> Result<Streams, ApiError> {
     let playurl = client.playurl(bvid, cid).await?;
-    if playurl.dash.is_none() {
+    let Some(dash) = playurl.dash.as_ref() else {
+        rigili_monitor::monitor!("stream", "playurl {bvid}/{cid} returned no DASH manifest");
         return Err(ApiError::InvalidResponse("该视频没有可用的 DASH 流".into()));
+    };
+    rigili_monitor::monitor!(
+        "stream",
+        "playurl {bvid}/{cid}: {} video tracks, {} audio tracks",
+        dash.video.len(),
+        dash.audio.len()
+    );
+    let Some((mut streams, video_urls, audio_urls)) = select_streams(&playurl) else {
+        return Err(ApiError::InvalidResponse("没有可用的视频流".into()));
+    };
+
+    let video_primary = streams.video.clone();
+    let audio_primary = streams.audio.clone();
+    let video_probe = fastest_stream(client, "video", &video_primary, video_urls);
+    let audio_probe = async {
+        match audio_primary.as_deref() {
+            Some(primary) => fastest_stream(client, "audio", primary, audio_urls).await,
+            None => None,
+        }
+    };
+    let (video, audio) = tokio::join!(video_probe, audio_probe);
+    if let Some(url) = video {
+        let video_id = streams.video_id;
+        if let Some(quality) = streams
+            .qualities
+            .iter_mut()
+            .find(|quality| quality.id == video_id)
+        {
+            quality.url = url.clone();
+        }
+        streams.video = url;
     }
-    best_streams(&playurl).ok_or_else(|| ApiError::InvalidResponse("没有可用的视频流".into()))
+    if let Some(url) = audio {
+        streams.audio = Some(url);
+    }
+    Ok(streams)
 }
 
 pub async fn resolve_preview(
@@ -114,15 +161,121 @@ pub async fn resolve_preview(
         .ok_or_else(|| ApiError::InvalidResponse("没有可用的预览流".into()))
 }
 
-fn best_streams(playurl: &PlayUrl) -> Option<Streams> {
+fn select_streams(playurl: &PlayUrl) -> Option<(Streams, Vec<String>, Vec<String>)> {
     let dash = playurl.dash.as_ref()?;
     let video = dash.best_video()?;
-    Some(Streams {
-        video: video.base_url.clone(),
-        video_id: video.id,
-        audio: dash.best_audio().map(|audio| audio.base_url.clone()),
-        qualities: quality_tracks(playurl, dash),
-    })
+    let audio = dash.best_audio();
+    rigili_monitor::monitor!(
+        "stream",
+        "chose video qn={} {}x{} codec={} codecid={} bandwidth={} host={}",
+        video.id,
+        video.width,
+        video.height,
+        video.codecs,
+        video.codecid,
+        video.bandwidth,
+        rigili_monitor::host(&video.base_url)
+    );
+    rigili_monitor::monitor!(
+        "stream",
+        "chose audio id={} codec={} bandwidth={} host={}",
+        audio.map(|audio| audio.id).unwrap_or_default(),
+        audio.map(|audio| audio.codecs.as_str()).unwrap_or("none"),
+        audio.map(|audio| audio.bandwidth).unwrap_or_default(),
+        audio
+            .map(|audio| rigili_monitor::host(&audio.base_url))
+            .unwrap_or("none")
+    );
+    let video_urls = candidates(&video.base_url, &video.backup_urls);
+    let audio_urls = audio
+        .map(|audio| candidates(&audio.base_url, &audio.backup_urls))
+        .unwrap_or_default();
+    Some((
+        Streams {
+            video: video.base_url.clone(),
+            video_id: video.id,
+            audio: audio.map(|audio| audio.base_url.clone()),
+            qualities: quality_tracks(playurl, dash),
+        },
+        video_urls,
+        audio_urls,
+    ))
+}
+
+fn candidates(primary: &str, backups: &[String]) -> Vec<String> {
+    let mut urls = Vec::with_capacity(backups.len() + 1);
+    for url in std::iter::once(primary).chain(backups.iter().map(String::as_str)) {
+        if !url.is_empty() && !urls.iter().any(|seen: &String| seen.as_str() == url) {
+            urls.push(url.to_owned());
+        }
+    }
+    urls
+}
+
+async fn fastest_stream(
+    client: &Arc<Client>,
+    kind: &'static str,
+    primary: &str,
+    candidates: Vec<String>,
+) -> Option<String> {
+    let primary_host = rigili_monitor::host(primary);
+    if candidates.len() <= 1
+        || candidates
+            .iter()
+            .all(|url| rigili_monitor::host(url) == primary_host)
+    {
+        return None;
+    }
+
+    let mut set = JoinSet::new();
+    for url in candidates {
+        let client = Arc::clone(client);
+        set.spawn(async move {
+            let elapsed = client.probe_stream(&url).await;
+            rigili_monitor::monitor!(
+                "stream",
+                "probe {kind} host={} -> {elapsed:?}",
+                rigili_monitor::host(&url)
+            );
+            (url, elapsed)
+        });
+    }
+
+    let best = {
+        let mut best: Option<(String, Duration)> = None;
+        let _ = tokio::time::timeout(PROBE_DEADLINE, async {
+            while let Some(joined) = set.join_next().await {
+                if let Ok((url, Some(elapsed))) = joined {
+                    if best.as_ref().is_none_or(|(_, best)| elapsed < *best) {
+                        best = Some((url, elapsed));
+                    }
+                    if elapsed <= PROBE_FAST_ENOUGH {
+                        break;
+                    }
+                }
+            }
+        })
+        .await;
+        best
+    };
+
+    match best {
+        Some((url, elapsed)) => {
+            rigili_monitor::monitor!(
+                "stream",
+                "using {kind} host={} (probed {elapsed:?})",
+                rigili_monitor::host(&url)
+            );
+            Some(url)
+        }
+        None => {
+            rigili_monitor::monitor!(
+                "stream",
+                "no {kind} probe succeeded within {PROBE_DEADLINE:?}, keeping host={primary_host}"
+            );
+            None
+        }
+    }
 }
 
 fn quality_tracks(playurl: &PlayUrl, dash: &Dash) -> Vec<VideoQuality> {
@@ -193,8 +346,66 @@ fn quality_label(id: u32, height: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::best_streams;
+    use super::{candidates, select_streams};
     use rigili_bilibili::{Dash, DashAudio, DashVideo, PlayUrl};
+
+    #[test]
+    fn deduplicates_stream_candidates() {
+        let urls = candidates(
+            "https://a.invalid/v.m4s",
+            &[
+                "https://b.invalid/v.m4s".into(),
+                "https://a.invalid/v.m4s".into(),
+                String::new(),
+                "https://b.invalid/v.m4s".into(),
+            ],
+        );
+        assert_eq!(
+            urls.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["https://a.invalid/v.m4s", "https://b.invalid/v.m4s"]
+        );
+    }
+
+    #[tokio::test]
+    async fn prefers_the_fastest_stream_candidate() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            sync::Arc,
+            thread,
+            time::Duration,
+        };
+
+        use rigili_bilibili::Client;
+
+        fn serve(delay: Duration) -> String {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind probe server");
+            let port = listener.local_addr().expect("probe server address").port();
+            thread::spawn(move || {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let mut request = [0u8; 1024];
+                let _ = stream.read(&mut request);
+                thread::sleep(delay);
+                let body = vec![0u8; 64 * 1024];
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&body);
+            });
+            format!("http://127.0.0.1:{port}/v.m4s")
+        }
+
+        let slow = serve(Duration::from_millis(700));
+        let fast = serve(Duration::ZERO);
+        let client = Arc::new(Client::with_data_dir(None).expect("probe client"));
+        let chosen =
+            super::fastest_stream(&client, "video", &slow, vec![slow.clone(), fast.clone()]).await;
+        assert_eq!(chosen.as_deref(), Some(fast.as_str()));
+    }
 
     #[test]
     fn pairs_video_with_audio_streams() {
@@ -202,6 +413,7 @@ mod tests {
             video: vec![DashVideo {
                 id: 80,
                 base_url: "https://example.invalid/avc.m4s".into(),
+                backup_urls: Vec::new(),
                 bandwidth: 600_000,
                 width: 1920,
                 height: 1080,
@@ -211,6 +423,7 @@ mod tests {
             audio: vec![DashAudio {
                 id: 30280,
                 base_url: "https://example.invalid/audio.m4s".into(),
+                backup_urls: Vec::new(),
                 bandwidth: 196_608,
                 codecs: "mp4a.40.2".into(),
             }],
@@ -221,7 +434,7 @@ mod tests {
             accept_description: vec!["1080P 高清".into()],
         };
 
-        let streams = best_streams(&playurl).expect("streams");
+        let streams = select_streams(&playurl).expect("streams").0;
         assert_eq!(streams.video, "https://example.invalid/avc.m4s");
         assert_eq!(
             streams.audio.as_deref(),
@@ -238,6 +451,7 @@ mod tests {
         let video = |id, url: &str, codecid, bandwidth| DashVideo {
             id,
             base_url: url.into(),
+            backup_urls: Vec::new(),
             bandwidth,
             width: 1920,
             height: 1080,
@@ -257,7 +471,7 @@ mod tests {
             accept_description: Vec::new(),
         };
 
-        let streams = best_streams(&playurl).expect("streams");
+        let streams = select_streams(&playurl).expect("streams").0;
         assert_eq!(streams.video, "avc");
         assert_eq!(streams.video_id, 80);
         let qualities: Vec<_> = streams

@@ -28,6 +28,7 @@ pub(crate) struct PreviewSlot {
     source: PreviewSource,
     hovered: bool,
     generation: u64,
+    epoch: u64,
     task: Option<Task<()>>,
     surface: Option<Entity<PreviewSurface>>,
 }
@@ -38,6 +39,7 @@ impl PreviewSlot {
             source,
             hovered: false,
             generation: 0,
+            epoch: 0,
             task: None,
             surface: None,
         }
@@ -90,6 +92,10 @@ impl PreviewSlot {
         let Ok(client) = client::get(cx) else {
             return;
         };
+        self.epoch = cx
+            .try_global::<PreviewState>()
+            .map(|state| state.stopped)
+            .unwrap_or_default();
 
         let generation = self.generation;
         let bvid = self.source.bvid.to_string();
@@ -117,6 +123,9 @@ impl PreviewSlot {
             Ok(Ok(video)) => video,
             Ok(Err(_)) | Err(_) => return,
         };
+        if cx.try_global::<PreviewState>().map(|state| state.stopped) != Some(self.epoch) {
+            return;
+        }
 
         let surface = cx.new(|cx| PreviewSurface::new(video, window, cx));
         let slot = cx.entity().downgrade();
@@ -252,6 +261,7 @@ impl PreviewArbiter {
 
 struct PreviewState {
     arbiter: Entity<PreviewArbiter>,
+    stopped: u64,
 }
 
 impl Global for PreviewState {}
@@ -262,7 +272,10 @@ pub(crate) fn init(cx: &mut App) {
     }
 
     let arbiter = cx.new(|_| PreviewArbiter::default());
-    cx.set_global(PreviewState { arbiter });
+    cx.set_global(PreviewState {
+        arbiter,
+        stopped: 0,
+    });
 }
 
 pub(crate) fn slot(
@@ -280,6 +293,9 @@ pub(crate) fn stop_all(cx: &mut App) {
     };
     let arbiter = state.arbiter.clone();
     arbiter.update(cx, |arbiter, cx| arbiter.stop(cx));
+    cx.update_global::<PreviewState, _>(|state, _| {
+        state.stopped = state.stopped.wrapping_add(1);
+    });
 }
 
 fn render_image(frame: VideoFrame) -> Option<Arc<RenderImage>> {

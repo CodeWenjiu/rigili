@@ -17,6 +17,27 @@ use native::{NativeSurface, create_native_surface};
 
 const PREVIEW_WIDTH: f32 = 200.;
 
+// Video overlays stay light-on-dark regardless of the app theme so they stay
+// readable over arbitrary frames.
+const OVERLAY_SCRIM: Hsla = Hsla {
+    h: 0.,
+    s: 0.,
+    l: 0.,
+    a: 0.5,
+};
+const OVERLAY_SCRIM_STRONG: Hsla = Hsla {
+    h: 0.,
+    s: 0.,
+    l: 0.,
+    a: 0.62,
+};
+const OVERLAY_FOREGROUND: Hsla = Hsla {
+    h: 0.,
+    s: 0.,
+    l: 1.,
+    a: 1.,
+};
+
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
 const PAUSED_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -26,11 +47,19 @@ const VOLUME_NOTICE: Duration = Duration::from_millis(900);
 const SPEEDS: [f64; 10] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0];
 const WHEEL_VOLUME_STEP: f32 = 5.0;
 const PRECISE_VOLUME_STEP: f32 = 2.0;
+const HOLD_SPEED: f64 = 4.0;
+const HOLD_TAP_MAX: Duration = Duration::from_millis(250);
+const SEEK_STEP: f64 = 5.0;
 
 #[derive(Clone, Copy)]
 enum Notice {
     Speed(f64),
     Volume(f64),
+}
+
+struct SpeedHold {
+    previous: f64,
+    started: Instant,
 }
 
 pub(super) struct PlayerView {
@@ -66,6 +95,7 @@ pub(super) struct PlayerView {
     preview_hovered: bool,
     progress_bounds: Option<Bounds<Pixels>>,
     focus: FocusHandle,
+    speed_hold: Option<SpeedHold>,
     notice: Option<(Notice, Instant)>,
     _progress_sub: Option<Subscription>,
     _subscriptions: Vec<Subscription>,
@@ -83,7 +113,7 @@ impl PlayerView {
                 .default_value(100.0)
         });
 
-        let subscriptions = vec![cx.subscribe_in(
+        let mut subscriptions = vec![cx.subscribe_in(
             &volume,
             window,
             |this, _, event: &SliderEvent, window, cx| this.on_volume(event, window, cx),
@@ -99,6 +129,7 @@ impl PlayerView {
         let focus = cx.focus_handle();
         let deferred_focus = focus.clone();
         window.defer(cx, move |window, cx| deferred_focus.focus(window, cx));
+        subscriptions.push(cx.on_blur(&focus, window, |this, _, cx| this.cancel_speed_hold(cx)));
 
         let poll_task = cx.spawn_in(window, async move |weak, async_cx| {
             let mut interval = POLL_INTERVAL;
@@ -153,6 +184,7 @@ impl PlayerView {
             preview_hovered: false,
             progress_bounds: None,
             focus,
+            speed_hold: None,
             notice: None,
             _progress_sub: progress_sub,
             _subscriptions: subscriptions,
@@ -161,6 +193,10 @@ impl PlayerView {
     }
 
     pub(super) fn load_streams(&mut self, streams: Streams, live: bool, cx: &mut Context<Self>) {
+        if let Some(hold) = self.speed_hold.take() {
+            self.status.speed = hold.previous;
+            self.player.set_speed(hold.previous);
+        }
         if let Some(frame) = self.frame.take() {
             self.retired_frames.push(frame);
         }
@@ -238,9 +274,41 @@ impl PlayerView {
 
     pub(super) fn cycle_speed(&mut self, cx: &mut Context<Self>) {
         let speed = next_speed(self.status.speed);
+        self.show_speed_notice(speed);
+        self.apply_speed(speed, cx);
+    }
+
+    pub(super) fn begin_speed_hold(&mut self, cx: &mut Context<Self>) {
+        if self.live || self.status.duration <= 0. || self.speed_hold.is_some() {
+            return;
+        }
+        self.speed_hold = Some(SpeedHold {
+            previous: self.status.speed,
+            started: Instant::now(),
+        });
+        self.apply_speed(HOLD_SPEED, cx);
+    }
+
+    pub(super) fn end_speed_hold(&mut self, cx: &mut Context<Self>) {
+        let Some(hold) = self.speed_hold.take() else {
+            return;
+        };
+        self.apply_speed(hold.previous, cx);
+        if hold.started.elapsed() < HOLD_TAP_MAX {
+            self.seek_by(SEEK_STEP, cx);
+        }
+    }
+
+    fn cancel_speed_hold(&mut self, cx: &mut Context<Self>) {
+        if let Some(hold) = self.speed_hold.take() {
+            self.apply_speed(hold.previous, cx);
+        }
+    }
+
+    fn apply_speed(&mut self, speed: f64, cx: &mut Context<Self>) {
         self.status.speed = speed;
         self.player.set_speed(speed);
-        self.show_speed_notice(speed);
+        self.last_activity = Instant::now();
         cx.notify();
     }
 
@@ -270,11 +338,9 @@ impl PlayerView {
         };
         let speed = SPEEDS[next];
         if (speed - current).abs() > 1e-3 {
-            self.status.speed = speed;
-            self.player.set_speed(speed);
             self.last_activity = Instant::now();
             self.show_speed_notice(speed);
-            cx.notify();
+            self.apply_speed(speed, cx);
         }
     }
 

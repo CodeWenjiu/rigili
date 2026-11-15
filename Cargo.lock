@@ -6118,6 +6118,7 @@ dependencies = [
  "percent-encoding",
  "reqwest",
  "rigili_macro",
+ "rigili_monitor",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -6139,6 +6140,13 @@ name = "rigili_macro"
 version = "0.1.0"
 
 [[package]]
+name = "rigili_monitor"
+version = "0.1.0"
+dependencies = [
+ "rigili_macro",
+]
+
+[[package]]
 name = "rigili_playback"
 version = "0.1.0"
 dependencies = [
@@ -6148,7 +6156,9 @@ dependencies = [
  "rigili_bilibili",
  "rigili_core",
  "rigili_macro",
+ "rigili_monitor",
  "rigili_player",
+ "tokio",
  "wayland-client",
  "wayland-protocols",
 ]
@@ -6160,6 +6170,7 @@ dependencies = [
  "glow",
  "khronos-egl",
  "rigili_macro",
+ "rigili_monitor",
  "thiserror 2.0.21",
 ]
 

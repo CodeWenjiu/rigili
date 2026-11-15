@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 publish = false
 
+[features]
+video-monitor = ["rigili_playback/video-monitor"]
+
 [[bin]]
 name = "rigili"
 path = "src/main.rs"

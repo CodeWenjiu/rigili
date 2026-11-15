@@ -99,6 +99,27 @@ pub(crate) struct MpvEvent {
     pub(crate) data: *mut c_void,
 }
 
+#[repr(C)]
+pub(super) struct MpvEventLogMessage {
+    pub(super) prefix: *const c_char,
+    pub(super) level: *const c_char,
+    pub(super) text: *const c_char,
+}
+
+#[repr(C)]
+pub(super) struct MpvEventStartFile {
+    pub(super) playlist_entry_id: i64,
+}
+
+#[repr(C)]
+pub(super) struct MpvEventEndFile {
+    pub(super) reason: c_int,
+    pub(super) error: c_int,
+    pub(super) playlist_entry_id: i64,
+    pub(super) playlist_insert_id: i64,
+    pub(super) playlist_insert_num_entries: c_int,
+}
+
 #[link(name = "mpv")]
 unsafe extern "C" {
     pub(super) fn mpv_create() -> *mut MpvHandle;
@@ -110,6 +131,12 @@ unsafe extern "C" {
         data: *const c_char,
     ) -> c_int;
     pub(super) fn mpv_command(ctx: *mut MpvHandle, args: *const *const c_char) -> c_int;
+    pub(super) fn mpv_command_async(
+        ctx: *mut MpvHandle,
+        reply_userdata: u64,
+        args: *const *const c_char,
+    ) -> c_int;
+    pub(super) fn mpv_abort_async_command(ctx: *mut MpvHandle, reply_userdata: u64);
     pub(super) fn mpv_set_property(
         ctx: *mut MpvHandle,
         name: *const c_char,
@@ -123,6 +150,7 @@ unsafe extern "C" {
         data: *mut c_void,
     ) -> c_int;
     pub(super) fn mpv_wait_event(ctx: *mut MpvHandle, timeout: f64) -> *mut MpvEvent;
+    pub(super) fn mpv_request_log_messages(ctx: *mut MpvHandle, min_level: *const c_char) -> c_int;
     pub(super) fn mpv_error_string(error: c_int) -> *const c_char;
     pub(super) fn mpv_free(data: *mut c_void);
     pub(super) fn mpv_free_node_contents(node: *mut MpvNode);

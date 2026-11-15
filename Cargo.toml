@@ -20,5 +20,6 @@ tokio = "1"
 rigili_macro = { path = "crates/macro" }
 rigili_bilibili = { path = "crates/bilibili" }
 rigili_core = { path = "crates/core" }
+rigili_monitor = { path = "crates/monitor" }
 rigili_playback = { path = "crates/playback" }
 rigili_player = { path = "crates/player" }

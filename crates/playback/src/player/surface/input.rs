@@ -8,7 +8,8 @@ use rigili_bilibili::normalize_url;
 use rigili_core::format_clock;
 
 use super::{
-    CONTROLS_IDLE, PRECISE_VOLUME_STEP, PREVIEW_WIDTH, PlayerView, WHEEL_VOLUME_STEP,
+    CONTROLS_IDLE, OVERLAY_FOREGROUND, OVERLAY_SCRIM_STRONG, PRECISE_VOLUME_STEP, PREVIEW_WIDTH,
+    PlayerView, WHEEL_VOLUME_STEP,
 };
 
 impl PlayerView {
@@ -108,9 +109,9 @@ impl PlayerView {
                                 .bottom_1()
                                 .px_1()
                                 .rounded(theme.radius)
-                                .bg(hsla(0., 0., 0., 0.65))
+                                .bg(OVERLAY_SCRIM_STRONG)
                                 .text_xs()
-                                .text_color(Hsla::white())
+                                .text_color(OVERLAY_FOREGROUND)
                                 .child(format_clock(time)),
                         ),
                 )

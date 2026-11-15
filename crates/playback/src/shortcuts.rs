@@ -10,7 +10,6 @@ actions!(
     [
         TogglePlayback,
         SeekBack,
-        SeekForward,
         SpeedDown,
         SpeedUp,
         ToggleMute,
@@ -37,11 +36,6 @@ const COMMANDS: &[Command] = &[
         keys: "left",
         context: PLAYER,
         action: || Box::new(SeekBack),
-    },
-    Command {
-        keys: "right",
-        context: PLAYER,
-        action: || Box::new(SeekForward),
     },
     Command {
         keys: "shift-left",

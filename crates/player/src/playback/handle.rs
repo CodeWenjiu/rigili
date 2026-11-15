@@ -378,6 +378,11 @@ mod tests {
         player.toggle_pause();
         wait_until(&player, Duration::from_secs(2), |status| !status.paused);
 
+        player.load(&path, audio.as_deref());
+        wait_until(&player, Duration::from_secs(5), |status| {
+            status.duration > 0.0 && status.time_pos < 1.0
+        });
+
         let status = player.status();
         println!("{status:?}");
         assert!(status.error.is_none(), "{:?}", status.error);
