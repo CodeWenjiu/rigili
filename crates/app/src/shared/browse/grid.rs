@@ -1,5 +1,7 @@
 rigili_macro::mod_flat!(cards, render);
 
+pub(crate) use rigili_core::video::VideoCard;
+
 use gpui_kit::component::*;
 use gpui_kit::*;
 

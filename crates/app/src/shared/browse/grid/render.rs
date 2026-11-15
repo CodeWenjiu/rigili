@@ -4,11 +4,11 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::*;
 use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::thumbnail;
+use rigili_core::video::{video_meta, video_title};
 use rigili_core::{OpenSpace, OpenVideo};
 
 use super::{
@@ -117,8 +117,6 @@ pub(crate) fn media_card(
     let title_id = ElementId::NamedInteger(id.clone(), 1);
     let meta_id = ElementId::NamedInteger(id.clone(), 2);
     let watch_later_id = ElementId::NamedInteger(id.clone(), 4);
-    let title_tooltip = title.to_owned();
-    let meta_tooltip = footer.unwrap_or_default().to_owned();
     let meta_click = match author {
         Some(author) => navigate(author.on_click),
         None => navigate(on_open.clone()),
@@ -290,44 +288,19 @@ pub(crate) fn media_card(
                 .justify_between()
                 .overflow_hidden()
                 .child(
-                    div()
-                        .id(title_id)
-                        .w_full()
-                        .min_w_0()
-                        .text_sm()
-                        .line_clamp(title_lines)
-                        .text_ellipsis()
+                    video_title(title_id, title.to_owned(), title_lines)
                         .text_color(style.foreground)
                         .cursor_pointer()
                         .hover(|this| this.text_color(style.primary))
-                        .on_click(navigate(on_open.clone()))
-                        .tooltip(move |window, cx| {
-                            Tooltip::new(title_tooltip.clone()).build(window, cx)
-                        })
-                        .child(title.to_owned()),
+                        .on_click(navigate(on_open.clone())),
                 )
                 .when_some(footer, |this, footer| {
                     this.child(
-                        h_flex()
-                            .id(meta_id)
-                            .items_center()
-                            .gap_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_xs()
+                        video_meta(meta_id, footer.to_owned(), footer_icon)
                             .text_color(style.muted)
                             .cursor_pointer()
                             .hover(|this| this.text_color(style.primary))
-                            .on_click(meta_click)
-                            .when(!meta_tooltip.is_empty(), |this| {
-                                this.tooltip(move |window, cx| {
-                                    Tooltip::new(meta_tooltip.clone()).build(window, cx)
-                                })
-                            })
-                            .when_some(footer_icon, |this, icon| {
-                                this.child(Icon::new(icon).with_size(px(12.)))
-                            })
-                            .child(div().min_w_0().truncate().child(footer.to_owned())),
+                            .on_click(meta_click),
                     )
                 }),
         )
