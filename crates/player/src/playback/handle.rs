@@ -330,7 +330,9 @@ mod tests {
     #[ignore = "requires RIGILI_TEST_VIDEO and a working libmpv"]
     fn plays_a_local_file() {
         let path = std::env::var("RIGILI_TEST_VIDEO").expect("RIGILI_TEST_VIDEO");
-        let audio = std::env::var("RIGILI_TEST_AUDIO").ok();
+        let audio = std::env::var("RIGILI_TEST_AUDIO")
+            .ok()
+            .filter(|path| !path.is_empty());
         let player = Player::new();
         player.set_viewport(VideoSize::new(1280, 720));
         player.load(&path, audio.as_deref());

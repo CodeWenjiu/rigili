@@ -36,12 +36,8 @@ test:
 # 提交前检查：格式 + lint + 测试
 check: fmt-check lint test
 
-# 播放器手动测试：只测视频
-test-player video:
-    RIGILI_TEST_VIDEO="{{video}}" cargo test -p rigili_player plays_a_local_file -- --ignored --nocapture
-
-# 播放器手动测试：视频 + 独立音频（DASH 路径）
-test-player-dash video audio:
+# 播放器手动测试：视频，可选独立音频（DASH 路径）
+test-player video audio="":
     RIGILI_TEST_VIDEO="{{video}}" RIGILI_TEST_AUDIO="{{audio}}" cargo test -p rigili_player plays_a_local_file -- --ignored --nocapture
 
 # 清理构建产物
