@@ -1,10 +1,10 @@
 use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
+use gpui_kit::base::Popup;
 use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::Input;
-use gpui_kit::component::popover::Popover;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -318,49 +318,57 @@ impl MainView {
                         }
                     }))
                     .child({
-                        let weak = cx.entity().downgrade();
+                        // The search input owns Enter and Space; Popover's trigger
+                        // would bind both to Confirm before the input sees them.
                         let focus = self.search_box.focus_handle(cx);
-                        Popover::new("search-popover")
-                            .offset(px(6.))
-                            .open(self.search_box_is_open())
-                            .appearance(false)
-                            .track_focus(&focus)
-                            .trigger_style(StyleRefinement::default().w_full().max_w(search_width))
-                            .on_open_change({
-                                let weak = weak.clone();
-                                move |open, window, cx| {
-                                    let _ = weak.update(cx, |this, cx| {
-                                        this.search_popover_open_changed(*open, window, cx)
-                                    });
+                        let mut popup = Popup::new(
+                            "search-popover",
+                            Input::new(self.search_box.input())
+                                .w_full()
+                                .large()
+                                .h(px(40.))
+                                .cleanable(true)
+                                .suffix(
+                                    Button::new("search-submit")
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(IconName::Search)
+                                        .accessibility_label("搜索")
+                                        .tooltip("搜索")
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.submit_search(cx);
+                                            this.focus_search(window, cx);
+                                        })),
+                                ),
+                        )
+                        .offset(px(6.))
+                        .w_full()
+                        .max_w(search_width)
+                        .track_focus(&focus)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _, cx| {
+                                if !this.search_box_is_open() {
+                                    this.open_search_box(cx);
                                 }
-                            })
-                            .trigger(
-                                Input::new(self.search_box.input())
-                                    .large()
-                                    .h(px(40.))
-                                    .cleanable(true)
-                                    .suffix(
-                                        Button::new("search-submit")
-                                            .ghost()
-                                            .xsmall()
-                                            .icon(IconName::Search)
-                                            .accessibility_label("搜索")
-                                            .tooltip("搜索")
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.submit_search(cx);
-                                                this.focus_search(window, cx);
-                                            })),
-                                    ),
-                            )
-                            .content({
-                                let weak = weak.clone();
-                                move |_, _, cx| {
-                                    weak.read_with(cx, |this, cx| {
-                                        this.render_search_panel(&weak, search_width, cx)
-                                    })
-                                    .unwrap_or_else(|_| div().into_any_element())
-                                }
-                            })
+                            }),
+                        );
+                        if self.search_box_is_open() {
+                            let weak = cx.entity().downgrade();
+                            let panel = self.render_search_panel(&weak, search_width, cx);
+                            popup = popup.content(
+                                div()
+                                    .id("search-popover-content")
+                                    .role(Role::Dialog)
+                                    .tab_group()
+                                    .track_focus(&focus)
+                                    .on_mouse_down_out(cx.listener(|this, _, window, cx| {
+                                        this.dismiss_search_box(window, cx);
+                                    }))
+                                    .child(panel),
+                            );
+                        }
+                        popup
                     }),
             )
             .child(

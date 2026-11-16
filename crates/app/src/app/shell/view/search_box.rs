@@ -133,19 +133,6 @@ impl MainView {
         cx.notify();
     }
 
-    pub(super) fn search_popover_open_changed(
-        &mut self,
-        open: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if open {
-            self.open_search_box(cx);
-        } else {
-            self.dismiss_search_box(window, cx);
-        }
-    }
-
     pub(super) fn search_box_is_open(&self) -> bool {
         self.search_box.open
     }
