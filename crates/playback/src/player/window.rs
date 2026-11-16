@@ -10,12 +10,13 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::history::History;
-use super::surface::PlayerView;
+use super::surface::{PlayerEvent, PlayerView};
 use crate::info::{InfoEvent, InfoPanel, InfoSelections, InfoTab};
 use crate::request::{PlaybackRequest, PlaybackSource, Streams, resolve, resolve_streams};
 use crate::shortcuts::{
-    HistoryBack, HistoryForward, Reload, SeekBack, SpeedDown, SpeedUp, SwitchToMain,
-    ToggleComments, ToggleDanmaku, ToggleFullscreen, ToggleInfo, ToggleMute, TogglePlayback,
+    HistoryBack, HistoryForward, NextPage, PreviousPage, Reload, SeekBack, SpeedDown, SpeedUp,
+    SwitchToMain, ToggleComments, ToggleDanmaku, ToggleFullscreen, ToggleInfo, ToggleMute,
+    TogglePlayback,
 };
 use rigili_bilibili::Client;
 use rigili_core::api_error_message;
@@ -40,6 +41,7 @@ pub struct PlayerWindow {
     generation: u64,
     danmaku_task: Option<Task<()>>,
     _info_sub: Subscription,
+    _player_sub: Subscription,
 }
 
 impl EventEmitter<OpenSpace> for PlayerWindow {}
@@ -64,6 +66,9 @@ impl PlayerWindow {
             }),
             InfoEvent::Reload => this.refresh_info(cx),
         });
+        let player_sub = cx.subscribe(&player, |this, _, event: &PlayerEvent, cx| match event {
+            PlayerEvent::SelectPage(cid) => this.select_page(*cid, cx),
+        });
         let (client, error) = match client::get(cx) {
             Ok(client) => (Some(client), None),
             Err(error) => (None, Some(api_error_message(error))),
@@ -83,6 +88,7 @@ impl PlayerWindow {
             generation: 0,
             danmaku_task: None,
             _info_sub: info_sub,
+            _player_sub: player_sub,
         };
         if view.client.is_some() {
             view.history.open(request.source.clone());
@@ -149,8 +155,10 @@ impl PlayerWindow {
 
         self.generation += 1;
         self.danmaku_task = None;
-        self.player
-            .update(cx, |player, cx| player.clear_danmaku_source(cx));
+        self.player.update(cx, |player, cx| {
+            player.clear_danmaku_source(cx);
+            player.clear_pages(cx);
+        });
         let generation = self.generation;
         let source = request.source.clone();
         let preferred = crate::settings::current(cx).preferred_quality;
@@ -195,6 +203,7 @@ impl PlayerWindow {
                             let followers = resolved.followers;
                             let owner_likes = resolved.owner_likes;
                             let related = resolved.related;
+                            let pages = resolved.info.pages.clone();
                             let title: SharedString = resolved.info.title.clone().into();
                             this.title = title.clone();
                             this.player
@@ -215,6 +224,7 @@ impl PlayerWindow {
                                 info.set_related(related, cx);
                             });
                             this.player.update(cx, |player, cx| {
+                                player.set_pages(pages, cid, cx);
                                 player.load_streams(resolved.streams, false, cx)
                             });
                             this.load_previews(bvid.clone(), cid, cx);
@@ -253,6 +263,13 @@ impl PlayerWindow {
                 },
             ),
         }
+    }
+
+    fn step_page(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let Some(cid) = self.player.read(cx).adjacent_page(delta) else {
+            return;
+        };
+        self.select_page(cid, cx);
     }
 
     fn select_page(&mut self, cid: u64, cx: &mut Context<Self>) {
@@ -310,8 +327,10 @@ impl PlayerWindow {
                     Ok(streams) => {
                         this.history.remember_cid(cid);
                         this.info.update(cx, |info, cx| info.select(cid, cx));
-                        this.player
-                            .update(cx, |player, cx| player.load_streams(streams, false, cx));
+                        this.player.update(cx, |player, cx| {
+                            player.set_selected_page(cid, cx);
+                            player.load_streams(streams, false, cx)
+                        });
                         this.load_previews(preview_bvid, cid, cx);
                         this.load_chapters(chapters_bvid, cid, cx);
                         this.load_danmaku(danmaku_bvid, aid, cid, duration, cx);
@@ -467,6 +486,12 @@ impl Render for PlayerWindow {
             .on_action(cx.listener(|this, _: &SpeedUp, _, cx| {
                 this.player
                     .update(cx, |player, cx| player.adjust_speed(true, cx));
+            }))
+            .on_action(cx.listener(|this, _: &PreviousPage, _, cx| {
+                this.step_page(-1, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NextPage, _, cx| {
+                this.step_page(1, cx);
             }))
             .on_action(cx.listener(|this, _: &ToggleMute, _, cx| {
                 this.player.update(cx, |player, cx| player.toggle_mute(cx));

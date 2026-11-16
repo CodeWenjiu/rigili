@@ -73,7 +73,7 @@ impl PlayerWindow {
         let Some(client) = self.client.clone() else {
             return;
         };
-        let Some(PlaybackSource::Video { bvid, .. }) =
+        let Some(PlaybackSource::Video { bvid, cid }) =
             self.request.as_ref().map(|request| request.source.clone())
         else {
             return;
@@ -88,15 +88,22 @@ impl PlayerWindow {
                     return;
                 }
                 match result {
-                    Ok(detail) => info.update(cx, |info, cx| {
-                        info.refresh(
-                            detail.view,
-                            detail.related,
-                            detail.card.follower,
-                            detail.card.like_num,
-                            cx,
-                        )
-                    }),
+                    Ok(detail) => {
+                        let pages = detail.view.pages.clone();
+                        info.update(cx, |info, cx| {
+                            info.refresh(
+                                detail.view,
+                                detail.related,
+                                detail.card.follower,
+                                detail.card.like_num,
+                                cx,
+                            )
+                        });
+                        if let Some(cid) = cid {
+                            this.player
+                                .update(cx, |player, cx| player.set_pages(pages, cid, cx));
+                        }
+                    }
                     Err(error) => {
                         let message = api_task_error_message(error, cx);
                         info.update(cx, |info, cx| info.set_refresh_error(message, cx));

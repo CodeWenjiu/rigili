@@ -9,7 +9,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::slider::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_bilibili::{Chapter, VideoShot};
+use rigili_bilibili::{Chapter, VideoPage, VideoShot};
 use rigili_player::{PlaybackPhase, Player, PlayerStatus};
 
 use super::controls::VolumePopup;
@@ -83,6 +83,9 @@ pub(super) struct PlayerView {
     audio_url: Option<String>,
     quality_popover_open: bool,
     speed_popover_open: bool,
+    pages: Vec<VideoPage>,
+    selected_cid: Option<u64>,
+    page_popover_open: bool,
     seeking: Option<f64>,
     volume_dragging: bool,
     progress_max: f64,
@@ -114,6 +117,12 @@ pub(super) struct PlayerView {
     _subscriptions: Vec<Subscription>,
     _poll_task: Task<()>,
 }
+
+pub(super) enum PlayerEvent {
+    SelectPage(u64),
+}
+
+impl EventEmitter<PlayerEvent> for PlayerView {}
 
 impl PlayerView {
     pub(super) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -206,6 +215,9 @@ impl PlayerView {
             audio_url: None,
             quality_popover_open: false,
             speed_popover_open: false,
+            pages: Vec::new(),
+            selected_cid: None,
+            page_popover_open: false,
             seeking: None,
             volume_dragging: false,
             progress_max: 0.0,
@@ -267,6 +279,7 @@ impl PlayerView {
         self.progress_max = 0.0;
         self.quality_popover_open = false;
         self.speed_popover_open = false;
+        self.page_popover_open = false;
         self.clear_danmaku(cx);
         self.danmaku_source = None;
         self.danmaku_sending = false;
@@ -312,6 +325,7 @@ impl PlayerView {
         self.notice = None;
         self.quality_popover_open = false;
         self.speed_popover_open = false;
+        self.page_popover_open = false;
         self.play_anchor = Some((start, Instant::now()));
         self.seek_danmaku(start, cx);
         self.selected_quality = streams.video_id;
@@ -346,6 +360,7 @@ impl PlayerView {
         self.selected_quality = id;
         self.quality_popover_open = false;
         self.speed_popover_open = false;
+        self.page_popover_open = false;
         crate::settings::update(cx, |settings| settings.preferred_quality = Some(id));
         self.play_anchor = Some((start, Instant::now()));
         self.seek_danmaku(start, cx);
@@ -369,6 +384,54 @@ impl PlayerView {
     pub(super) fn set_speed_popover_open(&mut self, open: bool, cx: &mut Context<Self>) {
         if self.speed_popover_open != open {
             self.speed_popover_open = open;
+            if open {
+                self.last_activity = Instant::now();
+            }
+            cx.notify();
+        }
+    }
+
+    pub(super) fn set_pages(&mut self, pages: Vec<VideoPage>, cid: u64, cx: &mut Context<Self>) {
+        self.pages = pages;
+        self.selected_cid = Some(cid);
+        self.page_popover_open = false;
+        cx.notify();
+    }
+
+    pub(super) fn clear_pages(&mut self, cx: &mut Context<Self>) {
+        if !self.pages.is_empty() || self.selected_cid.is_some() {
+            self.pages.clear();
+            self.selected_cid = None;
+            self.page_popover_open = false;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn set_selected_page(&mut self, cid: u64, cx: &mut Context<Self>) {
+        if self.selected_cid != Some(cid) {
+            self.selected_cid = Some(cid);
+            cx.notify();
+        }
+    }
+
+    pub(super) fn adjacent_page(&self, delta: isize) -> Option<u64> {
+        let selected = self.selected_cid?;
+        let index = self.pages.iter().position(|page| page.cid == selected)?;
+        let index = index.checked_add_signed(delta)?;
+        self.pages.get(index).map(|page| page.cid)
+    }
+
+    pub(super) fn request_page(&mut self, cid: u64, cx: &mut Context<Self>) {
+        self.page_popover_open = false;
+        if self.selected_cid != Some(cid) {
+            cx.emit(PlayerEvent::SelectPage(cid));
+        }
+        cx.notify();
+    }
+
+    pub(super) fn set_page_popover_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.page_popover_open != open {
+            self.page_popover_open = open;
             if open {
                 self.last_activity = Instant::now();
             }

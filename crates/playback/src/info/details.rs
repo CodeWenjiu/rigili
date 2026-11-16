@@ -627,7 +627,7 @@ fn related_row(
         )
 }
 
-fn short_label(page: &VideoPage) -> String {
+pub(crate) fn short_label(page: &VideoPage) -> String {
     if page.part.is_empty() {
         format!("P{}", page.page)
     } else {

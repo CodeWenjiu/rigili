@@ -10,11 +10,12 @@ use gpui_kit::component::slider::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_bilibili::Chapter;
+use rigili_bilibili::{Chapter, VideoPage};
 use rigili_player::{BufferedRange, PlayerStatus};
 
 use super::danmaku::bar::DanmakuBar;
 use super::surface::PlayerView;
+use crate::info::short_label;
 use crate::request::VideoQuality;
 use crate::settings::DanmakuSettings;
 use crate::shortcuts::{ToggleFullscreen, TogglePlayback};
@@ -31,6 +32,9 @@ pub(super) struct Transport<'a> {
     pub(super) qualities: &'a [VideoQuality],
     pub(super) selected_quality: u32,
     pub(super) quality_open: bool,
+    pub(super) pages: &'a [VideoPage],
+    pub(super) selected_cid: Option<u64>,
+    pub(super) pages_open: bool,
     pub(super) speeds: &'a [f64],
     pub(super) speed_open: bool,
     pub(super) preview: Option<AnyElement>,
@@ -279,6 +283,7 @@ impl Transport<'_> {
             _ => "切换清晰度".to_owned(),
         };
         let fullscreen = window.is_fullscreen();
+        let current_page = page_label(self.pages, self.selected_cid);
         let preview = self.preview.take();
         let progress = (!self.live).then(|| {
             div()
@@ -458,6 +463,57 @@ impl Transport<'_> {
                                 )),
                         )
                     })
+                    .when_some(current_page, |this, current| {
+                        this.child(
+                            Popover::new("player-page-popover")
+                                .anchor(Anchor::BottomRight)
+                                .offset(px(6.))
+                                .open(self.pages_open)
+                                .trigger(
+                                    Button::new("player-page")
+                                        .ghost()
+                                        .small()
+                                        .label(current)
+                                        .tooltip("选集"),
+                                )
+                                .on_open_change({
+                                    let weak = weak.clone();
+                                    move |open, _, cx| {
+                                        let _ = weak.update(cx, |this, cx| {
+                                            this.set_page_popover_open(*open, cx);
+                                        });
+                                    }
+                                })
+                                .child(
+                                    v_flex()
+                                        .id("player-page-list")
+                                        .min_w(px(160.))
+                                        .max_w(px(320.))
+                                        .max_h(px(360.))
+                                        .overflow_y_scroll()
+                                        .gap_1()
+                                        .children(self.pages.iter().map(|page| {
+                                            let selected = Some(page.cid) == self.selected_cid;
+                                            let cid = page.cid;
+                                            let label = short_label(page);
+                                            ListItem::new(("player-page-item", cid))
+                                                .text_sm()
+                                                .check_icon(IconName::Check)
+                                                .confirmed(selected)
+                                                .selected(selected)
+                                                .on_click({
+                                                    let weak = weak.clone();
+                                                    move |_, _, cx| {
+                                                        let _ = weak.update(cx, |this, cx| {
+                                                            this.request_page(cid, cx);
+                                                        });
+                                                    }
+                                                })
+                                                .child(div().min_w_0().truncate().child(label))
+                                        })),
+                                ),
+                        )
+                    })
                     .child(
                         Popover::new("speed-popover")
                             .anchor(Anchor::BottomRight)
@@ -539,11 +595,22 @@ pub(super) fn speed_label(speed: f64) -> String {
     format!("{text}x")
 }
 
+fn page_label(pages: &[VideoPage], selected: Option<u64>) -> Option<String> {
+    if pages.len() <= 1 {
+        return None;
+    }
+    pages
+        .iter()
+        .find(|page| Some(page.cid) == selected)
+        .or_else(|| pages.first())
+        .map(|page| format!("P{}", page.page))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{progress_segments, speed_label, volume_icon};
+    use super::{page_label, progress_segments, speed_label, volume_icon};
     use gpui_kit::assets::IconName;
-    use rigili_bilibili::Chapter;
+    use rigili_bilibili::{Chapter, VideoPage};
 
     #[test]
     fn picks_volume_icons_by_level() {
@@ -558,6 +625,28 @@ mod tests {
     fn labels_speeds() {
         assert_eq!(speed_label(1.0), "1x");
         assert_eq!(speed_label(1.25), "1.25x");
+    }
+
+    #[test]
+    fn labels_the_current_page() {
+        let pages = [
+            VideoPage {
+                cid: 11,
+                page: 1,
+                part: String::new(),
+                duration: 0,
+            },
+            VideoPage {
+                cid: 22,
+                page: 2,
+                part: "下半场".into(),
+                duration: 0,
+            },
+        ];
+
+        assert_eq!(page_label(&pages, Some(22)).as_deref(), Some("P2"));
+        assert_eq!(page_label(&pages, Some(99)).as_deref(), Some("P1"));
+        assert_eq!(page_label(&pages[..1], None), None);
     }
 
     #[test]

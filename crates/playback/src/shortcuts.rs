@@ -13,6 +13,8 @@ actions!(
         HistoryForward,
         SpeedDown,
         SpeedUp,
+        PreviousPage,
+        NextPage,
         ToggleMute,
         ToggleFullscreen,
         ToggleInfo,
@@ -49,6 +51,16 @@ const COMMANDS: &[Command] = &[
         keys: "shift-right",
         context: PLAYER,
         action: || Box::new(SpeedUp),
+    },
+    Command {
+        keys: "shift-[",
+        context: PLAYER,
+        action: || Box::new(PreviousPage),
+    },
+    Command {
+        keys: "shift-]",
+        context: PLAYER,
+        action: || Box::new(NextPage),
     },
     Command {
         keys: "<",

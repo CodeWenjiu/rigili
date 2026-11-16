@@ -24,6 +24,8 @@ use rigili_core::{format_count, format_datetime};
 use comments::{EmoteTarget, ReplyTarget, ReplyThread};
 use interaction::{CoinState, FlagState, ToggleState};
 
+pub(crate) use details::short_label;
+
 const INFO_WIDTH: Pixels = px(340.);
 const RELATED_LIMIT: usize = 20;
 const RELATED_THUMB_WIDTH: Pixels = px(120.);
