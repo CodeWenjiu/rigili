@@ -109,9 +109,10 @@ impl SpaceView {
     }
 
     fn collapse_comments(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.expanded_comments.take().is_none() {
+        let Some(key) = self.expanded_comments.take() else {
             return;
-        }
+        };
+        self.comment_views.remove(&key);
         cx.notify();
         let focus = self.comment_trigger_focus.clone();
         window.defer(cx, move |window, cx| window.focus(&focus, cx));
