@@ -9,7 +9,6 @@ use gpui_kit::*;
 use rigili_core::{OpenLive, OpenSpace, OpenVideo, Refresh};
 
 use super::playback::Playback;
-use crate::app::platform::image_cache;
 use crate::app::shortcuts::{FocusPlayer, FocusSearch, MAIN, ReloadPage};
 use crate::pages::account::login;
 use crate::pages::account::message::MessagesView;
@@ -18,6 +17,7 @@ use crate::pages::content::home::HomeView;
 use crate::pages::content::search::SearchView;
 use crate::pages::content::space::{CloseSpace, SpaceView};
 use crate::shared::media::preview;
+use rigili_core::image_cache;
 use rigili_playback::PlaybackRequest;
 use search_box::SearchBox;
 

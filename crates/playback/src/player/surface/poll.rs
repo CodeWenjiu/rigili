@@ -6,7 +6,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use image::RgbaImage;
 use rigili_core::cursor;
-use rigili_player::{PlaybackPhase, VideoFrame};
+use rigili_player::{BufferedRange, PlaybackPhase, PlayerStatus, VideoFrame};
 
 use super::{IDLE_POLL_INTERVAL, PAUSED_POLL_INTERVAL, POLL_INTERVAL, PlayerView};
 
@@ -65,14 +65,15 @@ impl PlayerView {
                     state.set_value(next.volume as f32, window, cx);
                 });
             }
+            changed |= status_render_needed(&self.status, &next);
             self.status = next;
             self.status_source = status;
             self.play_anchor = Some((self.status.time_pos, Instant::now()));
-            changed = true;
         }
 
         self.danmaku_demand
             .set_playing(self.status.phase == PlaybackPhase::Playing && !self.status.paused);
+        self.danmaku_demand.set_position(self.playback_time());
 
         if let Some(area) = self.video_bounds.get() {
             let time = self.playback_time();
@@ -135,6 +136,26 @@ fn notice_expired(deadline: Option<Instant>, now: Instant) -> bool {
     deadline.is_some_and(|deadline| deadline <= now)
 }
 
+fn status_render_needed(previous: &PlayerStatus, next: &PlayerStatus) -> bool {
+    previous.phase != next.phase
+        || previous.paused != next.paused
+        || previous.duration != next.duration
+        || previous.volume != next.volume
+        || previous.muted != next.muted
+        || previous.speed != next.speed
+        || buffered_changed(&previous.buffered, &next.buffered)
+        || previous.video_size != next.video_size
+        || previous.error != next.error
+        || previous.time_pos.floor() != next.time_pos.floor()
+}
+
+fn buffered_changed(previous: &[BufferedRange], next: &[BufferedRange]) -> bool {
+    previous.len() != next.len()
+        || previous.iter().zip(next).any(|(previous, next)| {
+            previous.start.floor() != next.start.floor() || previous.end.floor() != next.end.floor()
+        })
+}
+
 fn poll_interval(phase: PlaybackPhase, paused: bool) -> Duration {
     match phase {
         PlaybackPhase::Idle | PlaybackPhase::Ended => IDLE_POLL_INTERVAL,
@@ -154,8 +175,9 @@ mod tests {
 
     use super::{
         IDLE_POLL_INTERVAL, PAUSED_POLL_INTERVAL, POLL_INTERVAL, notice_expired, poll_interval,
+        status_render_needed,
     };
-    use rigili_player::PlaybackPhase;
+    use rigili_player::{BufferedRange, PlaybackPhase, PlayerStatus};
 
     #[test]
     fn notices_expire_after_their_deadline() {
@@ -181,5 +203,35 @@ mod tests {
             poll_interval(PlaybackPhase::Ended, false),
             IDLE_POLL_INTERVAL
         );
+    }
+
+    #[test]
+    fn renders_only_when_the_visible_clock_or_state_changes() {
+        let base = PlayerStatus::default();
+        let mut sub_second = base.clone();
+        sub_second.time_pos = 0.4;
+        assert!(!status_render_needed(&base, &sub_second));
+
+        let mut next_second = base.clone();
+        next_second.time_pos = 1.2;
+        assert!(status_render_needed(&base, &next_second));
+
+        let mut paused = base.clone();
+        paused.paused = true;
+        assert!(status_render_needed(&base, &paused));
+
+        let mut buffered = base.clone();
+        buffered.buffered = vec![BufferedRange {
+            start: 0.,
+            end: 10.2,
+        }];
+        let mut buffered_later = base.clone();
+        buffered_later.buffered = vec![BufferedRange {
+            start: 0.,
+            end: 10.8,
+        }];
+        assert!(!status_render_needed(&buffered, &buffered_later));
+        buffered_later.buffered[0].end = 11.0;
+        assert!(status_render_needed(&buffered, &buffered_later));
     }
 }

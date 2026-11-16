@@ -416,6 +416,7 @@ impl Render for PlayerWindow {
         }
 
         v_flex()
+            .image_cache(rigili_core::image_cache::get(cx))
             .id("player-window")
             .size_full()
             .bg(background)

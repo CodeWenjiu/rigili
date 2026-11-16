@@ -9,3 +9,6 @@ gpui-kit.workspace = true
 rigili_bilibili.workspace = true
 rigili_macro.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false }

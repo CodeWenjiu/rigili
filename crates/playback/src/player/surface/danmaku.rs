@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui_kit::component::WindowExt;
@@ -19,6 +19,8 @@ use crate::settings::DanmakuSettings;
 use super::PlayerView;
 
 const FIXED_SECONDS: f64 = 4.5;
+const ACTIVE_PER_LANE: usize = 4;
+const MIN_ACTIVE: usize = 16;
 const MAX_ACTIVE: usize = 120;
 const MAX_SPAWN_PER_UPDATE: usize = 4;
 const SPAWN_GRACE: f64 = 0.5;
@@ -30,6 +32,7 @@ const DANMAKU_MAX_LEN: usize = 100;
 pub(crate) struct DanmakuDemand {
     enabled: AtomicBool,
     playing: AtomicBool,
+    position: AtomicU64,
 }
 
 impl DanmakuDemand {
@@ -37,6 +40,7 @@ impl DanmakuDemand {
         Self {
             enabled: AtomicBool::new(enabled),
             playing: AtomicBool::new(false),
+            position: AtomicU64::new(0),
         }
     }
 
@@ -51,6 +55,15 @@ impl DanmakuDemand {
     pub(crate) fn set_playing(&self, playing: bool) {
         self.playing.store(playing, Ordering::Relaxed);
     }
+
+    pub(crate) fn set_position(&self, time: f64) {
+        self.position
+            .store((time.max(0.) * 1000.) as u64, Ordering::Relaxed);
+    }
+
+    pub(crate) fn position(&self) -> f64 {
+        self.position.load(Ordering::Relaxed) as f64 / 1000.
+    }
 }
 
 #[derive(Clone)]
@@ -63,7 +76,7 @@ pub(super) struct DanmakuSource {
 
 #[derive(Default)]
 pub(super) struct DanmakuState {
-    items: Vec<Danmaku>,
+    items: Arc<Vec<Danmaku>>,
     cursor: usize,
     last_time: Option<f64>,
     area: Option<Bounds<Pixels>>,
@@ -72,6 +85,7 @@ pub(super) struct DanmakuState {
     lanes: Vec<f64>,
     active: Rc<RefCell<Vec<ActiveDanmaku>>>,
     settings: DanmakuSettings,
+    font_family: SharedString,
 }
 
 struct ActiveDanmaku {
@@ -87,23 +101,22 @@ struct ActiveDanmaku {
 }
 
 impl DanmakuState {
-    fn with_settings(settings: DanmakuSettings) -> Self {
+    fn with_settings(settings: DanmakuSettings, font_family: SharedString) -> Self {
         Self {
             settings,
+            font_family,
             ..Self::default()
         }
     }
 
-    pub(super) fn set_sorted(&mut self, items: Vec<Danmaku>) {
+    pub(super) fn set_sorted(&mut self, items: Arc<Vec<Danmaku>>) {
         self.items = items;
-        self.cursor = 0;
-        self.last_time = None;
-        self.active.borrow_mut().clear();
-        self.lanes.fill(0.);
+        let time = self.last_time.unwrap_or(0.);
+        self.cursor = self.items.partition_point(|item| item.time < time);
     }
 
     pub(super) fn clear(&mut self) {
-        self.items.clear();
+        self.items = Arc::new(Vec::new());
         self.cursor = 0;
         self.last_time = None;
         self.active.borrow_mut().clear();
@@ -112,6 +125,10 @@ impl DanmakuState {
 
     pub(super) fn seek(&mut self, time: f64) {
         self.reset_at(time);
+    }
+
+    fn active_limit(&self) -> usize {
+        active_limit(self.lanes.len())
     }
 
     pub(super) fn settings(&self) -> DanmakuSettings {
@@ -253,7 +270,7 @@ impl DanmakuState {
                         | DanmakuMode::Top
                         | DanmakuMode::Bottom
                 )
-                || active.len() >= MAX_ACTIVE
+                || active.len() >= self.active_limit()
                 || !self.has_free_lane(time)
             {
                 continue;
@@ -338,9 +355,13 @@ impl DanmakuState {
             (item.font_size.max(18) as f32 * self.scale * self.settings.font_scale).clamp(14., 64.);
         let line_height = px(font_size * 1.4);
         let text: SharedString = item.text.clone().into();
+        let mut font = window.text_style().font();
+        if !self.font_family.is_empty() {
+            font.family = self.font_family.clone();
+        }
         let run = TextRun {
             len: text.len(),
-            font: window.text_style().font(),
+            font,
             color: danmaku_color(item.color, self.settings.opacity),
             background_color: None,
             underline: None,
@@ -414,9 +435,9 @@ pub(super) struct DanmakuLayer {
 }
 
 impl DanmakuLayer {
-    pub(super) fn new(settings: DanmakuSettings) -> Self {
+    pub(super) fn new(settings: DanmakuSettings, font_family: SharedString) -> Self {
         Self {
-            state: DanmakuState::with_settings(settings),
+            state: DanmakuState::with_settings(settings, font_family),
         }
     }
 
@@ -441,7 +462,7 @@ impl DanmakuLayer {
         cx.notify();
     }
 
-    pub(super) fn set_sorted(&mut self, items: Vec<Danmaku>, cx: &mut Context<Self>) {
+    pub(super) fn set_sorted(&mut self, items: Arc<Vec<Danmaku>>, cx: &mut Context<Self>) {
         self.state.set_sorted(items);
         cx.notify();
     }
@@ -482,10 +503,11 @@ impl Render for DanmakuLayer {
 
 impl PlayerView {
     pub(crate) fn clear_danmaku(&mut self, cx: &mut Context<Self>) {
+        self.danmaku_demand.set_position(0.);
         self.danmaku_layer.update(cx, |layer, cx| layer.clear(cx));
     }
 
-    pub(crate) fn set_danmaku(&mut self, items: Vec<Danmaku>, cx: &mut Context<Self>) {
+    pub(crate) fn set_danmaku(&mut self, items: Arc<Vec<Danmaku>>, cx: &mut Context<Self>) {
         self.danmaku_layer
             .update(cx, |layer, cx| layer.set_sorted(items, cx));
     }
@@ -503,6 +525,7 @@ impl PlayerView {
     }
 
     pub(super) fn seek_danmaku(&mut self, time: f64, cx: &mut Context<Self>) {
+        self.danmaku_demand.set_position(time);
         self.danmaku_layer
             .update(cx, |layer, cx| layer.seek(time, cx));
     }
@@ -686,6 +709,10 @@ fn is_discontinuity(last: f64, time: f64) -> bool {
     time < last - SEEK_BACK || time > last + SEEK_FORWARD
 }
 
+fn active_limit(lanes: usize) -> usize {
+    (lanes * ACTIVE_PER_LANE).clamp(MIN_ACTIVE, MAX_ACTIVE)
+}
+
 fn danmaku_color(rgb: u32, opacity: f32) -> Hsla {
     Rgba {
         r: ((rgb >> 16) & 0xff) as f32 / 255.,
@@ -698,7 +725,10 @@ fn danmaku_color(rgb: u32, opacity: f32) -> Hsla {
 
 #[cfg(test)]
 mod tests {
-    use super::{DanmakuDemand, DanmakuSettings, DanmakuState, is_discontinuity};
+    use super::{
+        DanmakuDemand, DanmakuSettings, DanmakuState, MAX_ACTIVE, MIN_ACTIVE, active_limit,
+        is_discontinuity,
+    };
 
     #[test]
     fn loads_only_while_playing_and_enabled() {
@@ -748,5 +778,39 @@ mod tests {
         state.update_settings(settings, 5.0);
         assert!(state.active.borrow().is_empty());
         assert!(!state.settings().enabled);
+    }
+
+    #[test]
+    fn caps_active_danmaku_by_display_area() {
+        assert_eq!(active_limit(1), MIN_ACTIVE);
+        assert_eq!(active_limit(6), 24);
+        assert_eq!(active_limit(21), 84);
+        assert_eq!(active_limit(128), MAX_ACTIVE);
+    }
+
+    #[test]
+    fn keeps_the_cursor_when_items_are_replaced() {
+        use rigili_bilibili::{Danmaku, DanmakuMode};
+
+        let item = |time| Danmaku {
+            time,
+            mode: DanmakuMode::Scroll,
+            font_size: 25,
+            color: 0x00ff_ffff,
+            text: String::new(),
+        };
+        let mut state = DanmakuState {
+            last_time: Some(5.0),
+            ..DanmakuState::default()
+        };
+        state.set_sorted(std::sync::Arc::new(vec![
+            item(0.0),
+            item(1.0),
+            item(6.0),
+            item(9.0),
+        ]));
+
+        assert_eq!(state.cursor, 2);
+        assert_eq!(state.active_count(), 0);
     }
 }

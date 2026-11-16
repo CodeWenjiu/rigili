@@ -4,6 +4,7 @@ use crate::app::platform::assets::AppAssets;
 
 fn main() {
     app::platform::gpu::prefer_vulkan();
+    install_diagnostics();
     let platform = gpui_kit::platform::current_platform(false);
     gpui_kit::Application::with_platform(platform.clone())
         .with_assets(AppAssets)
@@ -24,3 +25,28 @@ fn main() {
             }
         });
 }
+
+#[cfg(feature = "video-monitor")]
+fn install_diagnostics() {
+    struct StderrLogger;
+
+    impl log::Log for StderrLogger {
+        fn enabled(&self, metadata: &log::Metadata) -> bool {
+            metadata.level() <= log::Level::Warn
+        }
+
+        fn log(&self, record: &log::Record) {
+            if self.enabled(record.metadata()) {
+                eprintln!("[{} {}] {}", record.level(), record.target(), record.args());
+            }
+        }
+
+        fn flush(&self) {}
+    }
+
+    static LOGGER: StderrLogger = StderrLogger;
+    let _ = log::set_logger(&LOGGER).map(|()| log::set_max_level(log::LevelFilter::Warn));
+}
+
+#[cfg(not(feature = "video-monitor"))]
+fn install_diagnostics() {}

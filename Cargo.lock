@@ -6099,6 +6099,7 @@ dependencies = [
  "futures",
  "gpui-kit",
  "image",
+ "log",
  "qrcodegen",
  "reqwest",
  "rigili_bilibili",
@@ -6130,6 +6131,7 @@ name = "rigili_core"
 version = "0.1.0"
 dependencies = [
  "gpui-kit",
+ "image",
  "rigili_bilibili",
  "rigili_macro",
  "tokio",

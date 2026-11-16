@@ -70,7 +70,8 @@ impl PreviewSlot {
         self.generation += 1;
         self.task = None;
         if let Some(surface) = self.surface.take() {
-            surface.update(cx, |surface, cx| surface.release(window, cx));
+            let owner = cx.entity().entity_id();
+            surface.update(cx, |surface, cx| surface.hide(owner, window, cx));
             cx.notify();
         }
     }
@@ -127,12 +128,14 @@ impl PreviewSlot {
             return;
         }
 
-        let surface = cx.new(|cx| PreviewSurface::new(video, window, cx));
-        let slot = cx.entity().downgrade();
-        if let Some(state) = cx.try_global::<PreviewState>() {
-            let arbiter = state.arbiter.clone();
-            arbiter.update(cx, |arbiter, cx| arbiter.claim(slot, window, cx));
-        }
+        let Some((surface, arbiter)) = shared(cx) else {
+            return;
+        };
+        let owner = cx.entity().downgrade();
+        arbiter.update(cx, |arbiter, cx| {
+            arbiter.claim(owner.clone(), window, cx);
+        });
+        surface.update(cx, |surface, cx| surface.show(video, owner, window, cx));
         self.surface = Some(surface);
         cx.notify();
     }
@@ -150,35 +153,88 @@ impl Render for PreviewSlot {
 struct PreviewSurface {
     player: Player,
     frame: Option<Arc<RenderImage>>,
-    _poll: Task<()>,
+    owner: Option<WeakEntity<PreviewSlot>>,
+    generation: u64,
+    poll: Option<Task<()>>,
 }
 
 impl PreviewSurface {
-    fn new(video: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new() -> Self {
         let player = Player::new_software();
         player.set_volume(0.0);
-        player.load(&video, None);
+        Self {
+            player,
+            frame: None,
+            owner: None,
+            generation: 0,
+            poll: None,
+        }
+    }
 
-        let poll = cx.spawn_in(window, async move |surface, cx| {
+    fn show(
+        &mut self,
+        video: String,
+        owner: WeakEntity<PreviewSlot>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.generation += 1;
+        self.owner = Some(owner);
+        if let Some(frame) = self.frame.take() {
+            cx.drop_image(frame, Some(window));
+        }
+        self.player.load(&video, None);
+
+        let generation = self.generation;
+        self.poll = Some(cx.spawn_in(window, async move |surface, cx| {
             loop {
                 cx.background_executor().timer(FRAME_INTERVAL).await;
                 let alive = surface
-                    .update_in(cx, |surface, window, cx| surface.pump(window, cx))
+                    .update_in(cx, |surface, window, cx| {
+                        if surface.generation != generation {
+                            return false;
+                        }
+                        surface.pump(window, cx);
+                        true
+                    })
                     .is_ok();
                 if !alive {
                     break;
                 }
             }
-        });
+        }));
+        cx.notify();
+    }
 
-        Self {
-            player,
-            frame: None,
-            _poll: poll,
+    fn hide(&mut self, owner: EntityId, window: Option<&mut Window>, cx: &mut Context<Self>) {
+        if self.owner.as_ref().map(|owner| owner.entity_id()) != Some(owner) {
+            return;
         }
+        self.clear(window, cx);
+    }
+
+    fn clear(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
+        self.owner = None;
+        self.generation += 1;
+        self.poll = None;
+        if let Some(frame) = self.frame.take() {
+            cx.drop_image(frame, window);
+        }
+        if !self.player.status().paused {
+            self.player.toggle_pause();
+        }
+        cx.notify();
     }
 
     fn pump(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .owner
+            .as_ref()
+            .is_some_and(|owner| owner.upgrade().is_none())
+        {
+            self.clear(Some(window), cx);
+            return;
+        }
         let Some(frame) = self.player.take_frame() else {
             return;
         };
@@ -190,12 +246,6 @@ impl PreviewSurface {
             let _ = window.drop_image(previous);
         }
         cx.notify();
-    }
-
-    fn release(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
-        if let Some(frame) = self.frame.take() {
-            cx.drop_image(frame, window);
-        }
     }
 }
 
@@ -261,10 +311,24 @@ impl PreviewArbiter {
 
 struct PreviewState {
     arbiter: Entity<PreviewArbiter>,
+    surface: Option<Entity<PreviewSurface>>,
     stopped: u64,
 }
 
 impl Global for PreviewState {}
+
+fn shared(cx: &mut App) -> Option<(Entity<PreviewSurface>, Entity<PreviewArbiter>)> {
+    if !cx.has_global::<PreviewState>() {
+        return None;
+    }
+    Some(cx.update_global::<PreviewState, _>(|state, cx| {
+        let surface = state
+            .surface
+            .get_or_insert_with(|| cx.new(|_| PreviewSurface::new()))
+            .clone();
+        (surface, state.arbiter.clone())
+    }))
+}
 
 pub(crate) fn init(cx: &mut App) {
     if cx.has_global::<PreviewState>() {
@@ -274,6 +338,7 @@ pub(crate) fn init(cx: &mut App) {
     let arbiter = cx.new(|_| PreviewArbiter::default());
     cx.set_global(PreviewState {
         arbiter,
+        surface: None,
         stopped: 0,
     });
 }

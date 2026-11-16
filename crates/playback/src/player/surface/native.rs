@@ -121,25 +121,63 @@ impl PlayerView {
 }
 
 pub(super) fn create_native_surface(window: &mut Window) -> Option<NativeSurface> {
-    let surface = window
-        .enable_window_composition()
-        .ok()
-        .and_then(|composition| composition.create_native_surface().ok())?;
-    let handle = surface.platform_surface().ok()?.platform_handle().ok()?;
-    let handle = handle.downcast::<RawWindowHandle>().ok()?;
+    let composition = match window.enable_window_composition() {
+        Ok(composition) => composition,
+        Err(error) => {
+            eprintln!("direct GPU output unavailable: {error:#}");
+            return None;
+        }
+    };
+    let surface = match composition.create_native_surface() {
+        Ok(surface) => surface,
+        Err(error) => {
+            eprintln!("direct GPU output unavailable: {error:#}");
+            return None;
+        }
+    };
+    let platform_surface = match surface.platform_surface() {
+        Ok(surface) => surface,
+        Err(error) => {
+            eprintln!("direct GPU output unavailable: {error:#}");
+            return None;
+        }
+    };
+    let handle = match platform_surface.platform_handle() {
+        Ok(handle) => handle,
+        Err(error) => {
+            eprintln!("direct GPU output unavailable: {error:#}");
+            return None;
+        }
+    };
+    let Some(handle) = handle.downcast::<RawWindowHandle>().ok() else {
+        eprintln!("direct GPU output unavailable: unexpected platform handle");
+        return None;
+    };
     let RawWindowHandle::Wayland(surface_handle) = *handle else {
+        eprintln!("direct GPU output unavailable: the window is not a Wayland surface");
         return None;
     };
-    let display = window.display_handle().ok()?;
+    let display = match window.display_handle() {
+        Ok(display) => display,
+        Err(error) => {
+            eprintln!("direct GPU output unavailable: {error:#}");
+            return None;
+        }
+    };
     let RawDisplayHandle::Wayland(display_handle) = display.as_raw() else {
+        eprintln!("direct GPU output unavailable: the display is not Wayland");
         return None;
     };
-    let output = WaylandOutput::new(
+    let output = match WaylandOutput::new(
         display_handle.display.as_ptr(),
         surface_handle.surface.as_ptr(),
-    )
-    .map_err(|error| eprintln!("direct GPU output unavailable: {error}"))
-    .ok()?;
+    ) {
+        Ok(output) => output,
+        Err(error) => {
+            eprintln!("direct GPU output unavailable: {error}");
+            return None;
+        }
+    };
     Some(NativeSurface {
         composition: surface,
         output,

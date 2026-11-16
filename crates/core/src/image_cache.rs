@@ -13,16 +13,16 @@ struct ImageCacheState(Entity<LruImageCache>);
 
 impl Global for ImageCacheState {}
 
-pub(crate) fn init(cx: &mut App) {
+pub fn init(cx: &mut App) {
     let cache = LruImageCache::new(cx);
     cx.set_global(ImageCacheState(cache));
 }
 
-pub(crate) fn get(cx: &App) -> Entity<LruImageCache> {
+pub fn get(cx: &App) -> Entity<LruImageCache> {
     cx.global::<ImageCacheState>().0.clone()
 }
 
-pub(crate) struct LruImageCache {
+pub struct LruImageCache {
     entries: HashMap<u64, Entry>,
     pending: Vec<u64>,
     tick: u64,

@@ -5,6 +5,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::slider::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -130,7 +131,8 @@ impl PlayerView {
         )];
         let volume_popup = cx.new(|cx| VolumePopup::new(volume.clone(), cx));
         let persisted = crate::settings::current(cx);
-        let danmaku_layer = cx.new(|_| danmaku::DanmakuLayer::new(persisted.danmaku));
+        let font_family = cx.theme().font_family.clone();
+        let danmaku_layer = cx.new(|_| danmaku::DanmakuLayer::new(persisted.danmaku, font_family));
 
         let progress_sub = Some(cx.subscribe_in(
             &progress,
