@@ -11,7 +11,16 @@ use rigili_core::{api_error_message, api_task_error_message};
 pub(super) fn open(window: &mut Window, cx: &mut App, receiver: u64, name: String) {
     let view = cx.new(|cx| ComposeMessage::new(window, cx, receiver, name));
     window.open_dialog(cx, move |dialog, _, _| {
-        dialog.w(px(420.)).title("发消息").child(view.clone())
+        let send = view.clone();
+        dialog
+            .w(px(420.))
+            .title("发消息")
+            .on_ok(move |_, _, cx| {
+                send.update(cx, |this, cx| this.submit(cx));
+                cx.stop_propagation();
+                false
+            })
+            .child(view.clone())
     });
 }
 
