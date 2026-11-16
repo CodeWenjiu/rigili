@@ -210,6 +210,7 @@ impl InfoPanel {
                         this.comments_page = if info.num == 0 { requested } else { info.num };
                         this.comments_total = this.comments_total.max(info.count.max(info.acount));
                         this.comments_more = this.comments_more
+                            && count > 0
                             && (this.comments.len() as u64) < this.comments_total;
                     }
                     Err(error) => {
@@ -939,7 +940,7 @@ impl InfoPanel {
     fn render_comment_row(
         &mut self,
         index: usize,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if let Some(comment) = self.comments.get(index) {
@@ -951,12 +952,23 @@ impl InfoPanel {
                 .child(self.render_comment(comment, 0, comment.rpid, cx))
                 .into_any_element();
         }
-        self.render_comment_tail(cx)
+        self.render_comment_tail(window, cx)
     }
 
-    fn render_comment_tail(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn maybe_load_more_comments(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.comments_more || self.comments_more_loading || self.comments_more_error.is_some() {
+            return;
+        }
+        let weak = cx.entity().downgrade();
+        window.defer(cx, move |_, cx| {
+            let _ = weak.update(cx, |this, cx| this.load_more_comments(cx));
+        });
+    }
+
+    fn render_comment_tail(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let muted = cx.theme().muted_foreground;
         let danger = cx.theme().danger;
+        self.maybe_load_more_comments(window, cx);
 
         if self.comments_loading {
             return h_flex()
@@ -995,14 +1007,7 @@ impl InfoPanel {
                 div().into_any_element()
             };
         }
-        if self.comments_more_loading {
-            h_flex()
-                .w_full()
-                .py_2()
-                .justify_center()
-                .child(Spinner::new().small())
-                .into_any_element()
-        } else if let Some(error) = self.comments_more_error.clone() {
+        if let Some(error) = self.comments_more_error.clone() {
             v_flex()
                 .w_full()
                 .items_center()
@@ -1016,17 +1021,14 @@ impl InfoPanel {
                         .on_click(cx.listener(|this, _, _, cx| this.load_more_comments(cx))),
                 )
                 .into_any_element()
-        } else if self.comments_more {
+        } else if self.comments_more || self.comments_more_loading {
             h_flex()
                 .w_full()
+                .py_2()
                 .justify_center()
-                .child(
-                    Button::new("comment-more")
-                        .small()
-                        .ghost()
-                        .label("加载更多")
-                        .on_click(cx.listener(|this, _, _, cx| this.load_more_comments(cx))),
-                )
+                .gap_2()
+                .child(Spinner::new().small())
+                .child(div().text_sm().text_color(muted).child("正在加载…"))
                 .into_any_element()
         } else if self.comments_loaded {
             h_flex()
