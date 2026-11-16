@@ -479,7 +479,7 @@ impl Transport<'_> {
                                 }
                             })
                             .child(v_flex().min_w(px(96.)).gap_1().children(
-                                self.speeds.iter().enumerate().map(|(index, value)| {
+                                self.speeds.iter().enumerate().rev().map(|(index, value)| {
                                     let selected = (speed - *value).abs() < 1e-3;
                                     ListItem::new(("speed", index as u32))
                                         .check_icon(IconName::Check)
