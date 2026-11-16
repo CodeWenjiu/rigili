@@ -53,6 +53,8 @@ pub(crate) struct PlaybackSettings {
     pub(crate) danmaku: DanmakuSettings,
     pub(crate) speed: f64,
     pub(crate) preferred_quality: Option<u32>,
+    #[serde(skip)]
+    dirty: bool,
 }
 
 impl Default for PlaybackSettings {
@@ -61,6 +63,7 @@ impl Default for PlaybackSettings {
             danmaku: DanmakuSettings::default(),
             speed: 1.0,
             preferred_quality: None,
+            dirty: false,
         }
     }
 }
@@ -69,6 +72,16 @@ impl Global for PlaybackSettings {}
 
 pub fn init(cx: &mut App) {
     cx.set_global(load());
+    cx.on_app_quit(|cx| {
+        if let Some(settings) = cx.try_global::<PlaybackSettings>()
+            && settings.dirty
+            && let Err(error) = settings.save()
+        {
+            eprintln!("failed to save playback settings: {error}");
+        }
+        async {}
+    })
+    .detach();
 }
 
 pub(crate) fn current(cx: &App) -> PlaybackSettings {
@@ -84,9 +97,7 @@ pub(crate) fn update(cx: &mut App, update: impl FnOnce(&mut PlaybackSettings)) {
     cx.update_global::<PlaybackSettings, _>(|settings, _| {
         update(settings);
         settings.normalize();
-        if let Err(error) = settings.save() {
-            eprintln!("failed to save playback settings: {error}");
-        }
+        settings.dirty = true;
     });
 }
 
@@ -182,6 +193,7 @@ mod tests {
             },
             speed: 2.0,
             preferred_quality: Some(80),
+            dirty: false,
         };
         settings.save_to(&dir).expect("save");
 
