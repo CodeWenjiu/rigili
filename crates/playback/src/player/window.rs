@@ -422,6 +422,24 @@ impl Render for PlayerWindow {
             .bg(background)
             .text_color(foreground)
             .key_context(crate::shortcuts::PLAYER)
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape"
+                    && (this.player.read(cx).text_input_focused(window, cx)
+                        || this.info.read(cx).text_input_focused(window, cx))
+                {
+                    window.blur(cx);
+                    this.player
+                        .update(cx, |player, cx| player.focus_player(window, cx));
+                    cx.stop_propagation();
+                }
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.player
+                        .update(cx, |player, cx| player.focus_player(window, cx));
+                }),
+            )
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {

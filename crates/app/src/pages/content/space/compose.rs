@@ -118,7 +118,12 @@ impl Render for ComposeMessage {
                     .text_color(muted)
                     .child(format!("发送给 {}", self.name)),
             )
-            .child(Textarea::new(&self.input).w_full())
+            .child(
+                div()
+                    .w_full()
+                    .key_context(rigili_core::TEXT_INPUT_CONTEXT)
+                    .child(Textarea::new(&self.input).w_full()),
+            )
             .when_some(self.error.clone(), |this, error| {
                 this.child(div().text_sm().text_color(danger).child(error))
             })

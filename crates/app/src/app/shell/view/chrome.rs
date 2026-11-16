@@ -12,8 +12,8 @@ use gpui_kit::*;
 use rigili_core::OpenSpace;
 
 use super::{MainView, Page, SIDEBAR_WIDTH, TOP_BAR_HEIGHT};
-use crate::pages::content::home::HomeTab;
 use crate::pages::account::login;
+use crate::pages::content::home::HomeTab;
 use crate::shared::media::preview;
 use crate::shared::ui::tabs::TabStrip;
 
@@ -298,6 +298,7 @@ impl MainView {
                     .min_w_0()
                     .flex()
                     .justify_center()
+                    .key_context(rigili_core::TEXT_INPUT_CONTEXT)
                     .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                         let handled = match event.keystroke.key.as_str() {
                             "escape" => {

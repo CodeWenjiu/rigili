@@ -7,7 +7,7 @@ use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_bilibili::{RecommendVideo, VideoPage, thumbnail};
+use rigili_bilibili::{RecommendVideo, VideoPage, avatar, thumbnail};
 use rigili_core::video::{VideoCard, video_meta, video_title};
 use rigili_core::{format_count, format_duration};
 
@@ -241,7 +241,7 @@ impl InfoPanel {
                                     .gap_3()
                                     .child(
                                         Avatar::new()
-                                            .src(details.avatar.clone())
+                                            .src(avatar(&details.avatar, 96))
                                             .name(details.owner.clone())
                                             .size(px(40.)),
                                     )

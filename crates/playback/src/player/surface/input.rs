@@ -130,6 +130,7 @@ impl PlayerView {
     }
 
     pub(super) fn pointer_moved(&mut self, cx: &mut Context<Self>) {
+        self.pointer_in_video = true;
         self.last_activity = Instant::now();
         if !self.controls_visible {
             self.controls_visible = true;
@@ -138,6 +139,7 @@ impl PlayerView {
     }
 
     pub(super) fn pointer_left_video(&mut self, cx: &mut Context<Self>) {
+        self.pointer_in_video = false;
         self.pointer_in_bar = false;
         if self.controls_visible && !self.bar_interacting() {
             self.controls_visible = false;

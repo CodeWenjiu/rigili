@@ -280,6 +280,7 @@ impl Render for PlayerView {
                     .id("player-video-input")
                     .absolute()
                     .size_full()
+                    .cursor(CursorStyle::Arrow)
                     .on_mouse_move(
                         cx.listener(|this, _: &MouseMoveEvent, _, cx| this.pointer_moved(cx)),
                     )

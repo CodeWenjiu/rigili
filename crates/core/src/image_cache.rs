@@ -4,22 +4,31 @@ use gpui_kit::*;
 
 // Decoded thumbnails dominate RSS while scrolling, so bound the cache by
 // decoded bytes instead of entries; this also frees the matching GPU texture.
-const BUDGET_BYTES: usize = 64 * 1024 * 1024;
-// Fast scrolling can queue many decodes before they finish; cap the metadata
-// and cancel the oldest pending loads as well.
-const MAX_ENTRIES: usize = 128;
+const COVER_BUDGET_BYTES: usize = 64 * 1024 * 1024;
+const COVER_MAX_ENTRIES: usize = 512;
+// Avatars are many and cheap after resizing, but they must not evict covers.
+const AVATAR_BUDGET_BYTES: usize = 16 * 1024 * 1024;
+const AVATAR_MAX_ENTRIES: usize = 512;
 
-struct ImageCacheState(Entity<LruImageCache>);
+struct ImageCacheState {
+    covers: Entity<LruImageCache>,
+    avatars: Entity<LruImageCache>,
+}
 
 impl Global for ImageCacheState {}
 
 pub fn init(cx: &mut App) {
-    let cache = LruImageCache::new(cx);
-    cx.set_global(ImageCacheState(cache));
+    let covers = LruImageCache::with_limits(cx, COVER_BUDGET_BYTES, COVER_MAX_ENTRIES);
+    let avatars = LruImageCache::with_limits(cx, AVATAR_BUDGET_BYTES, AVATAR_MAX_ENTRIES);
+    cx.set_global(ImageCacheState { covers, avatars });
 }
 
 pub fn get(cx: &App) -> Entity<LruImageCache> {
-    cx.global::<ImageCacheState>().0.clone()
+    cx.global::<ImageCacheState>().covers.clone()
+}
+
+pub fn avatars(cx: &App) -> Entity<LruImageCache> {
+    cx.global::<ImageCacheState>().avatars.clone()
 }
 
 pub struct LruImageCache {
@@ -27,6 +36,8 @@ pub struct LruImageCache {
     pending: Vec<u64>,
     tick: u64,
     bytes: usize,
+    budget_bytes: usize,
+    max_entries: usize,
 }
 
 struct Entry {
@@ -36,7 +47,7 @@ struct Entry {
 }
 
 impl LruImageCache {
-    pub(crate) fn new(cx: &mut App) -> Entity<Self> {
+    fn with_limits(cx: &mut App, budget_bytes: usize, max_entries: usize) -> Entity<Self> {
         cx.new(|cx| {
             cx.on_release(|cache: &mut Self, cx| {
                 for (_, entry) in std::mem::take(&mut cache.entries) {
@@ -52,6 +63,8 @@ impl LruImageCache {
                 pending: Vec::new(),
                 tick: 0,
                 bytes: 0,
+                budget_bytes,
+                max_entries,
             }
         })
     }
@@ -72,12 +85,12 @@ impl LruImageCache {
     }
 
     fn evict(&mut self, current: u64, window: &mut Window, cx: &mut App) {
-        if self.bytes <= BUDGET_BYTES && self.entries.len() <= MAX_ENTRIES {
+        if self.bytes <= self.budget_bytes && self.entries.len() <= self.max_entries {
             return;
         }
         self.account_pending();
 
-        while (self.bytes > BUDGET_BYTES || self.entries.len() > MAX_ENTRIES)
+        while (self.bytes > self.budget_bytes || self.entries.len() > self.max_entries)
             && self.entries.len() > 1
         {
             let Some(victim) = self

@@ -30,16 +30,19 @@ const COMMANDS: &[Command] = &[
     },
 ];
 
+fn binding_predicate(context: &str) -> KeyBindingContextPredicate {
+    let source = format!("{context} && !{}", rigili_core::TEXT_INPUT_CONTEXT);
+    KeyBindingContextPredicate::parse(&source).expect("static key context")
+}
+
 pub(crate) fn bind(cx: &mut App) {
     let bindings = COMMANDS
         .iter()
         .map(|command| {
-            let predicate =
-                KeyBindingContextPredicate::parse(command.context).expect("static key context");
             KeyBinding::load(
                 command.keys,
                 (command.action)(),
-                Some(Rc::new(predicate)),
+                Some(Rc::new(binding_predicate(command.context))),
                 false,
                 None,
                 cx,
@@ -54,9 +57,9 @@ pub(crate) fn bind(cx: &mut App) {
 mod tests {
     use std::collections::BTreeSet;
 
-    use gpui_kit::{KeyBindingContextPredicate, Keystroke};
+    use gpui_kit::{KeyBindingContextPredicate, KeyContext, Keystroke};
 
-    use super::{COMMANDS, MAIN};
+    use super::{COMMANDS, MAIN, binding_predicate};
 
     #[test]
     fn commands_parse_and_do_not_conflict() {
@@ -87,5 +90,15 @@ mod tests {
             .map(|command| command.keys)
             .collect::<BTreeSet<_>>();
         assert_eq!(keys, BTreeSet::from(["r", "i", "s"]));
+    }
+
+    #[test]
+    fn stands_down_while_a_text_input_is_focused() {
+        let predicate = binding_predicate(MAIN);
+        let main = KeyContext::parse(MAIN).expect("main context");
+        let input = KeyContext::parse(rigili_core::TEXT_INPUT_CONTEXT).expect("text input context");
+
+        assert!(predicate.depth_of(std::slice::from_ref(&main)).is_some());
+        assert!(predicate.depth_of(&[main, input]).is_none());
     }
 }

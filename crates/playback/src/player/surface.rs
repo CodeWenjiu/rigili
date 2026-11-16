@@ -88,6 +88,7 @@ pub(super) struct PlayerView {
     progress_max: f64,
     live: bool,
     controls_visible: bool,
+    pointer_in_video: bool,
     pointer_in_bar: bool,
     volume_popup_open: bool,
     pub(super) last_activity: Instant,
@@ -210,6 +211,7 @@ impl PlayerView {
             progress_max: 0.0,
             live: false,
             controls_visible: false,
+            pointer_in_video: false,
             pointer_in_bar: false,
             volume_popup_open: false,
             last_activity: Instant::now(),
@@ -235,6 +237,17 @@ impl PlayerView {
             _subscriptions: subscriptions,
             _poll_task: poll_task,
         }
+    }
+
+    pub(super) fn focus_player(&self, window: &mut Window, cx: &mut App) {
+        self.focus.focus(window, cx);
+    }
+
+    pub(super) fn text_input_focused(&self, window: &Window, cx: &App) -> bool {
+        self.danmaku_input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
     }
 
     pub(super) fn load_streams(&mut self, streams: Streams, live: bool, cx: &mut Context<Self>) {

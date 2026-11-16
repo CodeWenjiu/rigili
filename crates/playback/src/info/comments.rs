@@ -11,7 +11,7 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::api::comment::{CommentReply, CommentSort};
-use rigili_bilibili::{Comment, CommentPage, normalize_url};
+use rigili_bilibili::{Comment, CommentPage, avatar, normalize_url};
 use rigili_core::client;
 use rigili_core::runtime::spawn_api;
 use rigili_core::{
@@ -73,7 +73,34 @@ impl InfoPanel {
         self.reply_sending = false;
         self.reply_error = None;
         self.emote_target = None;
-        self.comments_scroll.set_offset(point(px(0.), px(0.)));
+        self.reset_comment_rows();
+    }
+
+    fn reset_comment_rows(&self) {
+        self.comments_list.reset(self.comments.len() + 1);
+    }
+
+    fn touch_comment_row(&self, root: u64) {
+        if let Some(index) = self
+            .comments
+            .iter()
+            .position(|comment| comment.rpid == root)
+        {
+            self.comments_list.remeasure_items(index..index + 1);
+        }
+    }
+
+    fn touch_reply_row(&self) {
+        if let Some(target) = &self.reply_target {
+            self.touch_comment_row(target.root);
+        }
+    }
+
+    fn touch_comment_tail(&self) {
+        let index = self.comments.len();
+        if index < self.comments_list.item_count() {
+            self.comments_list.remeasure_items(index..index + 1);
+        }
     }
 
     pub(super) fn load_comments(&mut self, cx: &mut Context<Self>) {
@@ -88,6 +115,7 @@ impl InfoPanel {
             Err(error) => {
                 self.comments_loading = false;
                 self.comments_error = Some(api_error_message(error));
+                self.touch_comment_tail();
                 cx.notify();
                 return;
             }
@@ -103,7 +131,7 @@ impl InfoPanel {
         self.reply_target = None;
         self.reply_error = None;
         self.emote_target = None;
-        self.comments_scroll.set_offset(point(px(0.), px(0.)));
+        self.reset_comment_rows();
         cx.notify();
 
         spawn_api(
@@ -133,6 +161,7 @@ impl InfoPanel {
                     }
                     Err(error) => this.comments_error = Some(api_task_error_message(error, cx)),
                 }
+                this.reset_comment_rows();
                 cx.notify();
             },
         );
@@ -152,6 +181,7 @@ impl InfoPanel {
         let requested = self.comments_page + 1;
         self.comments_more_loading = true;
         self.comments_more_error = None;
+        self.touch_comment_tail();
         cx.notify();
 
         spawn_api(
@@ -172,7 +202,11 @@ impl InfoPanel {
                             page: info,
                             replies,
                         } = page;
-                        this.comments.extend(replies.unwrap_or_default());
+                        let added = replies.unwrap_or_default();
+                        let start = this.comments.len();
+                        let count = added.len();
+                        this.comments.extend(added);
+                        this.comments_list.splice(start..start, count);
                         this.comments_page = if info.num == 0 { requested } else { info.num };
                         this.comments_total = this.comments_total.max(info.count.max(info.acount));
                         this.comments_more = this.comments_more
@@ -182,6 +216,7 @@ impl InfoPanel {
                         this.comments_more_error = Some(api_task_error_message(error, cx))
                     }
                 }
+                this.touch_comment_tail();
                 cx.notify();
             },
         );
@@ -218,6 +253,7 @@ impl InfoPanel {
             Ok(client) => client,
             Err(error) => {
                 thread.error = Some(api_error_message(error));
+                self.touch_comment_row(root);
                 cx.notify();
                 return;
             }
@@ -225,6 +261,7 @@ impl InfoPanel {
         let aid = details.aid;
         thread.loading = true;
         thread.error = None;
+        self.touch_comment_row(root);
         cx.notify();
 
         spawn_api(
@@ -255,6 +292,7 @@ impl InfoPanel {
                     }
                     Err(error) => thread.error = Some(api_task_error_message(error, cx)),
                 }
+                this.touch_comment_row(root);
                 cx.notify();
             },
         );
@@ -271,6 +309,7 @@ impl InfoPanel {
             self.reply_error = None;
             self.close_emote_picker(EmoteTarget::Reply);
         }
+        self.touch_comment_row(root);
         cx.notify();
     }
 
@@ -294,10 +333,9 @@ impl InfoPanel {
                 window,
                 |this, _, event: &InputEvent, window, cx| match event {
                     InputEvent::Change => {
-                        if this.reply_error.is_some() {
-                            this.reply_error = None;
-                            cx.notify();
-                        }
+                        this.reply_error = None;
+                        this.touch_reply_row();
+                        cx.notify();
                     }
                     InputEvent::PressEnter { shift: false, .. } => this.submit_reply(window, cx),
                     _ => {}
@@ -316,6 +354,7 @@ impl InfoPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let previous = self.reply_target.as_ref().map(|target| target.root);
         let same_target = self
             .reply_target
             .as_ref()
@@ -333,6 +372,10 @@ impl InfoPanel {
         window.defer(cx, move |window, cx| {
             draft.update(cx, |state, cx| state.focus(window, cx));
         });
+        if let Some(previous) = previous {
+            self.touch_comment_row(previous);
+        }
+        self.touch_comment_row(root);
         cx.notify();
     }
 
@@ -349,11 +392,13 @@ impl InfoPanel {
         let content = draft.read(cx).value().trim().to_owned();
         if content.is_empty() {
             self.reply_error = Some("请输入回复内容".into());
+            self.touch_reply_row();
             cx.notify();
             return;
         }
         if content.chars().count() > COMMENT_MAX_LEN {
             self.reply_error = Some(format!("回复不能超过 {COMMENT_MAX_LEN} 字"));
+            self.touch_reply_row();
             cx.notify();
             return;
         }
@@ -364,6 +409,7 @@ impl InfoPanel {
             Ok(client) => client,
             Err(error) => {
                 self.reply_error = Some(api_error_message(error));
+                self.touch_reply_row();
                 cx.notify();
                 return;
             }
@@ -377,6 +423,7 @@ impl InfoPanel {
         };
         self.reply_sending = true;
         self.reply_error = None;
+        self.touch_reply_row();
         cx.notify();
 
         spawn_api(
@@ -408,6 +455,7 @@ impl InfoPanel {
                     }
                     Err(error) => {
                         this.reply_error = Some(api_task_error_message(error, cx));
+                        this.touch_reply_row();
                         cx.notify();
                     }
                 }
@@ -423,12 +471,14 @@ impl InfoPanel {
             Ok(client) => client,
             Err(error) => {
                 self.emotes_error = Some(api_error_message(error));
+                self.touch_reply_emote_row();
                 cx.notify();
                 return;
             }
         };
         self.emotes_loading = true;
         self.emotes_error = None;
+        self.touch_reply_emote_row();
         cx.notify();
 
         spawn_api(
@@ -456,6 +506,7 @@ impl InfoPanel {
                     }
                     Err(error) => this.emotes_error = Some(api_task_error_message(error, cx)),
                 }
+                this.touch_reply_emote_row();
                 cx.notify();
             },
         );
@@ -466,12 +517,24 @@ impl InfoPanel {
         if self.emote_target.is_some() && self.emotes.is_none() && !self.emotes_loading {
             self.load_emotes(cx);
         }
+        if target == EmoteTarget::Reply {
+            self.touch_reply_row();
+        }
         cx.notify();
     }
 
     fn close_emote_picker(&mut self, target: EmoteTarget) {
         if self.emote_target == Some(target) {
             self.emote_target = None;
+            if target == EmoteTarget::Reply {
+                self.touch_reply_row();
+            }
+        }
+    }
+
+    fn touch_reply_emote_row(&self) {
+        if self.emote_target == Some(EmoteTarget::Reply) {
+            self.touch_reply_row();
         }
     }
 
@@ -497,7 +560,10 @@ impl InfoPanel {
         });
         match target {
             EmoteTarget::Comment => self.comment_error = None,
-            EmoteTarget::Reply => self.reply_error = None,
+            EmoteTarget::Reply => {
+                self.reply_error = None;
+                self.touch_reply_row();
+            }
         }
         cx.notify();
     }
@@ -617,6 +683,9 @@ impl InfoPanel {
                                     .when(index == selected, |this| this.bg(accent))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.emote_package = index;
+                                        if target == EmoteTarget::Reply {
+                                            this.touch_reply_row();
+                                        }
                                         cx.notify();
                                     }))
                                     .child(if icon.is_empty() {
@@ -648,6 +717,15 @@ impl InfoPanel {
             .into_any_element()
     }
 
+    pub(crate) fn text_input_focused(&self, window: &Window, cx: &App) -> bool {
+        let focused = |draft: &Option<Entity<TextareaState>>| {
+            draft
+                .as_ref()
+                .is_some_and(|draft| draft.read(cx).focus_handle(cx).is_focused(window))
+        };
+        focused(&self.draft) || focused(&self.reply_draft)
+    }
+
     pub(super) fn render_comments_tab(
         &mut self,
         window: &mut Window,
@@ -663,15 +741,17 @@ impl InfoPanel {
                     .relative()
                     .flex_1()
                     .min_h_0()
+                    .image_cache(rigili_core::image_cache::avatars(cx))
                     .child(
-                        div()
-                            .id("player-comments-scroll")
-                            .size_full()
-                            .overflow_y_scroll()
-                            .track_scroll(&self.comments_scroll)
-                            .child(self.render_comments(cx)),
+                        list(
+                            self.comments_list.clone(),
+                            cx.processor(Self::render_comment_row),
+                        )
+                        .p_4()
+                        .pb_6()
+                        .size_full(),
                     )
-                    .child(Scrollbar::vertical(&self.comments_scroll)),
+                    .child(Scrollbar::vertical(&self.comments_list)),
             )
             .into_any_element()
     }
@@ -744,7 +824,13 @@ impl InfoPanel {
             .py_3()
             .border_b_1()
             .border_color(border)
-            .child(Textarea::new(draft).w_full())
+            .child(
+                div()
+                    .id("comment-draft-input")
+                    .key_context(rigili_core::TEXT_INPUT_CONTEXT)
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(Textarea::new(draft).w_full()),
+            )
             .when_some(self.comment_error.clone(), |this, error| {
                 this.child(div().text_xs().text_color(danger).child(error))
             })
@@ -850,19 +936,39 @@ impl InfoPanel {
         );
     }
 
-    fn render_comments(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_comment_row(
+        &mut self,
+        index: usize,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if let Some(comment) = self.comments.get(index) {
+            return div()
+                .w_full()
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .pb_5()
+                .child(self.render_comment(comment, 0, comment.rpid, cx))
+                .into_any_element();
+        }
+        self.render_comment_tail(cx)
+    }
+
+    fn render_comment_tail(&self, cx: &mut Context<Self>) -> AnyElement {
         let muted = cx.theme().muted_foreground;
         let danger = cx.theme().danger;
-        let border = cx.theme().border;
 
-        let initial: AnyElement = if self.comments_loading {
-            h_flex()
+        if self.comments_loading {
+            return h_flex()
+                .w_full()
                 .py_6()
                 .justify_center()
                 .child(Spinner::new())
-                .into_any_element()
-        } else if let Some(error) = self.comments_error.clone() {
-            v_flex()
+                .into_any_element();
+        }
+        if let Some(error) = self.comments_error.clone() {
+            return v_flex()
+                .w_full()
                 .items_center()
                 .gap_2()
                 .py_6()
@@ -873,39 +979,32 @@ impl InfoPanel {
                         .label("重试")
                         .on_click(cx.listener(|this, _, _, cx| this.load_comments(cx))),
                 )
-                .into_any_element()
-        } else if self.comments_loaded && self.comments.is_empty() {
+                .into_any_element();
+        }
+        if self.comments.is_empty() {
+            return if self.comments_loaded {
+                h_flex()
+                    .w_full()
+                    .py_6()
+                    .justify_center()
+                    .text_sm()
+                    .text_color(muted)
+                    .child("暂无评论")
+                    .into_any_element()
+            } else {
+                div().into_any_element()
+            };
+        }
+        if self.comments_more_loading {
             h_flex()
-                .py_6()
-                .justify_center()
-                .text_sm()
-                .text_color(muted)
-                .child("暂无评论")
-                .into_any_element()
-        } else {
-            div().into_any_element()
-        };
-
-        let rows = self
-            .comments
-            .iter()
-            .map(|comment| {
-                div()
-                    .border_b_1()
-                    .border_color(border)
-                    .pb_3()
-                    .child(self.render_comment(comment, 0, comment.rpid, cx))
-            })
-            .collect::<Vec<_>>();
-
-        let footer: AnyElement = if self.comments_more_loading {
-            h_flex()
+                .w_full()
                 .py_2()
                 .justify_center()
                 .child(Spinner::new().small())
                 .into_any_element()
         } else if let Some(error) = self.comments_more_error.clone() {
             v_flex()
+                .w_full()
                 .items_center()
                 .gap_2()
                 .py_2()
@@ -919,6 +1018,7 @@ impl InfoPanel {
                 .into_any_element()
         } else if self.comments_more {
             h_flex()
+                .w_full()
                 .justify_center()
                 .child(
                     Button::new("comment-more")
@@ -928,8 +1028,9 @@ impl InfoPanel {
                         .on_click(cx.listener(|this, _, _, cx| this.load_more_comments(cx))),
                 )
                 .into_any_element()
-        } else if self.comments_loaded && !self.comments.is_empty() {
+        } else if self.comments_loaded {
             h_flex()
+                .w_full()
                 .py_2()
                 .justify_center()
                 .text_xs()
@@ -938,16 +1039,7 @@ impl InfoPanel {
                 .into_any_element()
         } else {
             div().into_any_element()
-        };
-
-        v_flex()
-            .gap_4()
-            .p_4()
-            .pb_6()
-            .child(initial)
-            .children(rows)
-            .child(footer)
-            .into_any_element()
+        }
     }
 
     fn render_reply_composer(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -961,7 +1053,13 @@ impl InfoPanel {
         v_flex()
             .gap_2()
             .pt_1()
-            .child(Textarea::new(draft).w_full())
+            .child(
+                div()
+                    .id("reply-draft-input")
+                    .key_context(rigili_core::TEXT_INPUT_CONTEXT)
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(Textarea::new(draft).w_full()),
+            )
             .when_some(self.reply_error.clone(), |this, error| {
                 this.child(div().text_xs().text_color(danger).child(error))
             })
@@ -1044,7 +1142,7 @@ impl InfoPanel {
         } else {
             comment.reply_control.time_desc.clone()
         };
-        let avatar = if depth == 0 {
+        let avatar_size = if depth == 0 {
             COMMENT_AVATAR
         } else {
             NESTED_COMMENT_AVATAR
@@ -1180,9 +1278,9 @@ impl InfoPanel {
                             })
                             .child(
                                 Avatar::new()
-                                    .src(member.avatar_url())
+                                    .src(avatar(&member.avatar, 64))
                                     .name(member.uname.clone())
-                                    .size(avatar),
+                                    .size(avatar_size),
                             ),
                     )
                     .child(

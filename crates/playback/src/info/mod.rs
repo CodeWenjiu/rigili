@@ -32,6 +32,7 @@ const COMMENT_AVATAR: Pixels = px(28.);
 const NESTED_COMMENT_AVATAR: Pixels = px(20.);
 const NESTED_COMMENT_LIMIT: usize = 2;
 const COMMENT_MAX_LEN: usize = 1000;
+const COMMENT_LIST_OVERDRAW: Pixels = px(480.);
 
 pub(super) enum InfoEvent {
     SelectPage(u64),
@@ -125,7 +126,7 @@ pub(super) struct InfoPanel {
     tab: InfoTab,
     comment_count: u64,
     comments: Vec<Comment>,
-    comments_scroll: ScrollHandle,
+    comments_list: ListState,
     comments_loading: bool,
     comments_loaded: bool,
     comments_more: bool,
@@ -239,7 +240,7 @@ impl InfoPanel {
             tab: InfoTab::Info,
             comment_count: 0,
             comments: Vec::new(),
-            comments_scroll: ScrollHandle::default(),
+            comments_list: ListState::new(1, ListAlignment::Top, COMMENT_LIST_OVERDRAW),
             comments_loading: false,
             comments_loaded: false,
             comments_more: false,

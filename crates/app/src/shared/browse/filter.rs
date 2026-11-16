@@ -67,12 +67,15 @@ impl Search {
     }
 
     pub(crate) fn field(&self) -> Div {
-        div().w(px(240.)).child(
-            Input::new(&self.input)
-                .small()
-                .cleanable(true)
-                .prefix(IconName::Search),
-        )
+        div()
+            .w(px(240.))
+            .key_context(rigili_core::TEXT_INPUT_CONTEXT)
+            .child(
+                Input::new(&self.input)
+                    .small()
+                    .cleanable(true)
+                    .prefix(IconName::Search),
+            )
     }
 }
 

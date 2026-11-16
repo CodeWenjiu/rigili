@@ -96,7 +96,9 @@ impl PlayerView {
         if self.controls_idle() {
             self.controls_visible = false;
             self.preview_time = None;
-            cursor::hide_until_mouse_moves(cx);
+            if self.pointer_in_video && window.is_window_active() {
+                cursor::hide_until_mouse_moves(cx);
+            }
             changed = true;
         }
 

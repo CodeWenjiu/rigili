@@ -3,23 +3,41 @@ use std::sync::Arc;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
+use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::api::comment::CommentSort;
-use rigili_bilibili::{Client, Comment, CommentPage, DynamicItem};
+use rigili_bilibili::{Client, Comment, CommentPage, DynamicItem, avatar};
 use rigili_core::client;
 use rigili_core::{format_count, format_date, message_markdown};
 
 use crate::shared::browse::paging::{Page, Paged, spawn_first, spawn_more};
+
+const COMMENT_OVERDRAW: Pixels = px(480.);
+const COMMENT_MAX_HEIGHT: Pixels = px(420.);
 
 pub(super) struct CommentsView {
     client: Option<Arc<Client>>,
     dynamic: DynamicItem,
     sort: CommentSort,
     state: Paged<Comment, CommentMeta>,
+    list: ListState,
+    synced_generation: u64,
+    synced_count: usize,
+    tail: TailState,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct TailState {
+    loading: bool,
+    loaded: bool,
+    error: bool,
+    loading_more: bool,
+    more_error: bool,
+    has_more: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -35,6 +53,10 @@ impl CommentsView {
             dynamic,
             sort: CommentSort::default(),
             state: Paged::new(),
+            list: ListState::new(1, ListAlignment::Top, COMMENT_OVERDRAW),
+            synced_generation: 0,
+            synced_count: 0,
+            tail: TailState::default(),
         }
     }
 
@@ -146,6 +168,60 @@ impl CommentsView {
             .into_any_element()
     }
 
+    fn sync_rows(&mut self) {
+        let count = self.state.items.len();
+        if self.synced_generation != self.state.generation || count < self.synced_count {
+            self.list.reset(count + 1);
+        } else if count > self.synced_count {
+            self.list.splice(
+                self.synced_count..self.synced_count,
+                count - self.synced_count,
+            );
+            self.list.remeasure_items(count..count + 1);
+        }
+        self.synced_generation = self.state.generation;
+        self.synced_count = count;
+
+        let tail = TailState {
+            loading: self.state.loading,
+            loaded: self.state.loaded,
+            error: self.state.error.is_some(),
+            loading_more: self.state.loading_more,
+            more_error: self.state.more_error.is_some(),
+            has_more: self.state.has_more,
+        };
+        if tail != self.tail {
+            self.tail = tail;
+            self.list.remeasure_items(count..count + 1);
+        }
+    }
+
+    fn render_row(
+        &mut self,
+        index: usize,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if let Some(comment) = self.state.items.get(index) {
+            return div()
+                .w_full()
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .pb_3()
+                .child(self.render_comment(comment, 0, cx))
+                .into_any_element();
+        }
+        self.render_tail(cx)
+    }
+
+    fn render_tail(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.state.items.is_empty() {
+            self.render_initial_state(cx)
+        } else {
+            self.render_footer(cx)
+        }
+    }
+
     fn render_comment(&self, comment: &Comment, depth: usize, cx: &App) -> AnyElement {
         let primary = cx.theme().primary;
         let foreground = cx.theme().foreground;
@@ -195,7 +271,7 @@ impl CommentsView {
                     .gap_3()
                     .child(
                         Avatar::new()
-                            .src(member.avatar_url())
+                            .src(avatar(&member.avatar, 64))
                             .name(member.uname.clone())
                             .size(px(avatar_size)),
                     )
@@ -370,33 +446,19 @@ fn comments_applied(this: &mut CommentsView) {
 
 impl Render for CommentsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_rows();
         let muted = cx.theme().muted_foreground;
-        let border = cx.theme().border;
         let sort_tabs = self.render_sort_tabs(cx);
-        let initial = self.render_initial_state(cx);
-        let footer = self.render_footer(cx);
         let total = if self.state.loaded {
             Some(format!("共 {} 条评论", format_count(self.state.meta.total)))
         } else {
             None
         };
-        let comments = self
-            .state
-            .items
-            .iter()
-            .map(|comment| {
-                div()
-                    .border_b_1()
-                    .border_color(border)
-                    .pb_3()
-                    .child(self.render_comment(comment, 0, cx))
-            })
-            .collect::<Vec<_>>();
 
         v_flex()
             .w_full()
-            .gap_4()
-            .pb_4()
+            .gap_3()
+            .image_cache(rigili_core::image_cache::avatars(cx))
             .child(
                 h_flex()
                     .items_center()
@@ -407,8 +469,98 @@ impl Render for CommentsView {
                         this.child(div().text_xs().text_color(muted).child(total))
                     }),
             )
-            .child(initial)
-            .children(comments)
-            .child(footer)
+            .child(
+                div()
+                    .relative()
+                    .w_full()
+                    .occlude()
+                    .child(
+                        list(self.list.clone(), cx.processor(Self::render_row))
+                            .w_full()
+                            .max_h(COMMENT_MAX_HEIGHT)
+                            .with_sizing_behavior(ListSizingBehavior::Infer),
+                    )
+                    .child(Scrollbar::vertical(&self.list)),
+            )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CommentsView;
+    use gpui_kit::{TestAppContext, px};
+    use rigili_bilibili::{Comment, CommentContent, DynamicItem};
+
+    use crate::shared::test_support::{frames, open};
+
+    fn view() -> CommentsView {
+        CommentsView::new(DynamicItem::default())
+    }
+
+    #[test]
+    fn tracks_rows_as_pages_are_replaced_and_appended() {
+        let mut view = view();
+        assert_eq!(view.list.item_count(), 1);
+
+        view.state.generation = 1;
+        view.state.items = vec![Comment::default(), Comment::default()];
+        view.sync_rows();
+        assert_eq!(view.list.item_count(), 3);
+
+        view.state.items.push(Comment::default());
+        view.sync_rows();
+        assert_eq!(view.list.item_count(), 4);
+
+        view.state.generation = 2;
+        view.state.items.truncate(1);
+        view.sync_rows();
+        assert_eq!(view.list.item_count(), 2);
+    }
+
+    #[gpui_kit::test]
+    fn caps_the_inline_comment_height(cx: &mut TestAppContext) {
+        cx.update(rigili_core::image_cache::init);
+        let (window, view) = open(cx, |_| {
+            let mut view = view();
+            view.state.generation = 1;
+            view.state.loaded = true;
+            view.state.items = (0..40)
+                .map(|_| Comment {
+                    content: CommentContent {
+                        message: "这是一条很长的评论。".repeat(40),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .collect();
+            view
+        });
+
+        frames(cx, window, 4);
+
+        let height = cx.update(|cx| view.read(cx).list.viewport_bounds().size.height);
+        assert!(height > px(0.), "the list should lay out: {height:?}");
+        assert!(height <= px(420.), "the list should be capped: {height:?}");
+    }
+
+    #[gpui_kit::test]
+    fn leaves_short_inline_lists_compact(cx: &mut TestAppContext) {
+        cx.update(rigili_core::image_cache::init);
+        let (window, view) = open(cx, |_| {
+            let mut view = view();
+            view.state.generation = 1;
+            view.state.loaded = true;
+            view.state.items = vec![Comment::default()];
+            view
+        });
+
+        frames(cx, window, 6);
+
+        let height = cx.update(|cx| view.read(cx).list.viewport_bounds().size.height);
+        assert!(height > px(0.), "the list should lay out: {height:?}");
+        assert!(
+            height < px(420.),
+            "a short list should not fill the cap: {height:?}"
+        );
     }
 }
