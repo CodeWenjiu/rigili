@@ -11,7 +11,7 @@ edition = "2024"
 debug = "line-tables-only"
 
 [workspace.dependencies]
-gpui-kit = { version = "0.9.1", features = ["gpui-fast"] }
+gpui-kit = { version = "0.10.0", features = ["gpui-fast"] }
 anyhow = "1"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
