@@ -1,4 +1,4 @@
-rigili_macro::mod_prv!(danmaku, input, native, poll, render);
+rigili_macro::mod_prv!(input, native, poll, render);
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -13,6 +13,7 @@ use rigili_bilibili::{Chapter, VideoShot};
 use rigili_player::{PlaybackPhase, Player, PlayerStatus};
 
 use super::controls::VolumePopup;
+use super::danmaku;
 use crate::request::{Streams, VideoQuality};
 use native::{NativeSurface, create_native_surface};
 
@@ -89,7 +90,7 @@ pub(super) struct PlayerView {
     controls_visible: bool,
     pointer_in_bar: bool,
     volume_popup_open: bool,
-    last_activity: Instant,
+    pub(super) last_activity: Instant,
     title: SharedString,
     chapters: Vec<Chapter>,
     previews: Option<VideoShot>,
@@ -98,13 +99,13 @@ pub(super) struct PlayerView {
     progress_bounds: Option<Bounds<Pixels>>,
     focus: FocusHandle,
     speed_hold: Option<SpeedHold>,
-    danmaku_layer: Entity<danmaku::DanmakuLayer>,
-    danmaku_input: Entity<gpui_kit::component::input::InputState>,
-    danmaku_source: Option<danmaku::DanmakuSource>,
-    danmaku_demand: Arc<danmaku::DanmakuDemand>,
-    danmaku_sending: bool,
-    danmaku_settings_open: bool,
-    danmaku_input_focused: bool,
+    pub(super) danmaku_layer: Entity<danmaku::DanmakuLayer>,
+    pub(super) danmaku_input: Entity<gpui_kit::component::input::InputState>,
+    pub(super) danmaku_source: Option<danmaku::DanmakuSource>,
+    pub(super) danmaku_demand: Arc<danmaku::DanmakuDemand>,
+    pub(super) danmaku_sending: bool,
+    pub(super) danmaku_settings_open: bool,
+    pub(super) danmaku_input_focused: bool,
     last_pump: Instant,
     play_anchor: Option<(f64, Instant)>,
     notice: Option<(Notice, Instant)>,
@@ -367,6 +368,26 @@ impl PlayerView {
         self.player.toggle_pause();
         self.status.paused = !self.status.paused;
         cx.notify();
+    }
+
+    pub(super) fn playback_time(&self) -> f64 {
+        let Some((position, anchor)) = self.play_anchor else {
+            return self.status.time_pos;
+        };
+        let time = if self.status.phase == PlaybackPhase::Playing && !self.status.paused {
+            position + anchor.elapsed().as_secs_f64() * self.status.speed
+        } else {
+            position
+        };
+        if self.status.duration > 0. {
+            time.min(self.status.duration)
+        } else {
+            time
+        }
+    }
+
+    pub(super) fn anchor_clock(&mut self) {
+        self.play_anchor = Some((self.playback_time(), Instant::now()));
     }
 
     pub(super) fn select_speed(&mut self, speed: f64, cx: &mut Context<Self>) {

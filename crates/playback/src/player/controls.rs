@@ -13,7 +13,7 @@ use gpui_kit::*;
 use rigili_bilibili::Chapter;
 use rigili_player::{BufferedRange, PlayerStatus};
 
-use super::danmaku_bar::DanmakuBar;
+use super::danmaku::bar::DanmakuBar;
 use super::surface::PlayerView;
 use crate::request::VideoQuality;
 use crate::settings::DanmakuSettings;

@@ -11,19 +11,19 @@ use crate::shortcuts::{PLAYER, ToggleDanmaku};
 
 use crate::settings::DanmakuSettings;
 
-use super::surface::PlayerView;
+use crate::player::surface::PlayerView;
 
-pub(super) struct DanmakuBar<'a> {
-    pub(super) settings: DanmakuSettings,
-    pub(super) input: &'a Entity<InputState>,
-    pub(super) sending: bool,
-    pub(super) settings_open: bool,
-    pub(super) can_send: bool,
-    pub(super) player: WeakEntity<PlayerView>,
+pub(crate) struct DanmakuBar<'a> {
+    pub(crate) settings: DanmakuSettings,
+    pub(crate) input: &'a Entity<InputState>,
+    pub(crate) sending: bool,
+    pub(crate) settings_open: bool,
+    pub(crate) can_send: bool,
+    pub(crate) player: WeakEntity<PlayerView>,
 }
 
 impl DanmakuBar<'_> {
-    pub(super) fn render(&self, cx: &App) -> impl IntoElement {
+    pub(crate) fn render(&self, cx: &App) -> impl IntoElement {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let primary = theme.primary;
