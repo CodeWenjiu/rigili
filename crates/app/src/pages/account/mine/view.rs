@@ -20,8 +20,8 @@ use rigili_core::{OpenSpace, OpenVideo, Refresh};
 
 use crate::shared::browse::filter;
 use crate::shared::browse::grid::{CardFrame, VideoCard};
+use crate::shared::browse::list::ListScroll;
 use crate::shared::browse::paging::Paged;
-use crate::shared::ui::scroll;
 use crate::shared::ui::tabs::TabStrip;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -181,7 +181,7 @@ pub struct MineView {
     notice: Option<String>,
     user_mid: Option<u64>,
     list_width: Pixels,
-    folder_scroll: scroll::ScrollArea,
+    folder_scroll: ListScroll,
     favorites_keyword: String,
     search: filter::Search,
 }
@@ -239,7 +239,7 @@ impl MineView {
             notice: None,
             user_mid: None,
             list_width: px(0.),
-            folder_scroll: scroll::ScrollArea::new(),
+            folder_scroll: ListScroll::new(),
             favorites_keyword: String::new(),
             search,
         }

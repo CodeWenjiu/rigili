@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use gpui_kit::assets::IconName;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
@@ -9,11 +11,9 @@ use crate::app::platform::theme::cover_scrim;
 use crate::shared::browse::filter;
 use crate::shared::browse::grid::{
     CARD_GAP, CardFrame, CardGrid, CardStyle, FolderCards, VideoCards, card_grid_loading,
-    card_text_height, skeleton_card, video_card_row, video_card_row_indexed,
+    card_text_height, folder_card_height, skeleton_card, video_card_row, video_card_row_indexed,
 };
-use crate::shared::browse::list::{
-    LIST_FOOTER_HEIGHT, Rows, paged_footer, track_element_width, virtual_rows_tracked,
-};
+use crate::shared::browse::list::{LIST_FOOTER_HEIGHT, Rows, paged_footer, virtual_rows_tracked};
 use crate::shared::ui::state_view::{Layout, empty_state, error_state};
 use rigili_bilibili::{FavFolder, thumbnail};
 use rigili_core::format_ymd;
@@ -134,19 +134,26 @@ impl MineView {
         }
 
         let needle = self.search.needle();
-        let visible = filter::matching(
-            folders.iter().filter(|folder| match source {
-                FolderSource::Created => !folder.is_default(),
-                FolderSource::Collected => folder.is_valid(),
-            }),
+        let indices = filter::matching(
+            folders
+                .iter()
+                .enumerate()
+                .filter(|(_, folder)| match source {
+                    FolderSource::Created => !folder.is_default(),
+                    FolderSource::Collected => folder.is_valid(),
+                }),
             needle.as_deref(),
-            |folder, needle| {
+            |item, needle| {
+                let (_, folder) = item;
                 filter::text_matches(&folder.title, needle)
                     || (source == FolderSource::Collected
                         && filter::text_matches(folder.owner(), needle))
             },
-        );
-        if visible.is_empty() {
+        )
+        .into_iter()
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+        if indices.is_empty() {
             let empty = if needle.is_some() {
                 match source {
                     FolderSource::Created => "未找到匹配收藏夹",
@@ -163,36 +170,39 @@ impl MineView {
 
         let columns = FolderCards::columns(self.list_width);
         let width = FolderCards::card_width(self.list_width, columns, window.scale_factor());
-        let known_width = self.list_width;
-        let weak = cx.entity().downgrade();
-        let rows = (0..visible.len().div_ceil(columns))
-            .map(|row| {
-                let start = row * columns;
-                let end = (start + columns).min(visible.len());
-                h_flex()
-                    .gap_x(CARD_GAP)
-                    .children(
-                        visible[start..end]
-                            .iter()
-                            .enumerate()
-                            .map(|(offset, folder)| {
-                                folder_card(folder, start + offset, source, width, cx)
-                            }),
-                    )
-                    .into_any_element()
-            })
-            .collect::<Vec<_>>();
-
-        crate::shared::ui::scroll::attach(
-            div()
-                .id("mine-folder-grid")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .on_prepaint(track_element_width(known_width, weak))
-                .child(v_flex().gap_y_6().children(rows)),
-            &self.folder_scroll,
+        let row_height = folder_card_height(width, window);
+        let indices = Rc::new(indices);
+        let rows = Rows::new(indices.len().div_ceil(columns), row_height);
+        let render_indices = indices.clone();
+        virtual_rows_tracked(
             cx,
+            window,
+            (
+                "mine-folder-grid",
+                matches!(source, FolderSource::Collected) as usize,
+            ),
+            rows,
+            self.list_width,
+            &self.folder_scroll,
+            move |this, range, _window, cx| {
+                let folders = match source {
+                    FolderSource::Created => &this.folders.folders,
+                    FolderSource::Collected => &this.collected.folders,
+                };
+                range
+                    .map(|row| {
+                        let start = row * columns;
+                        let end = (start + columns).min(render_indices.len());
+                        h_flex()
+                            .h(row_height)
+                            .gap_x(CARD_GAP)
+                            .children(render_indices[start..end].iter().map(|&index| {
+                                folder_card(&folders[index], index, source, width, cx)
+                            }))
+                            .into_any_element()
+                    })
+                    .collect()
+            },
         )
         .into_any_element()
     }

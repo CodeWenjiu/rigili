@@ -77,6 +77,13 @@ pub(crate) fn card_height(width: Pixels, text_height: Pixels) -> Pixels {
     px(width.as_f32() * 9. / 16.) + px(CARD_BODY_GAP) + text_height
 }
 
+pub(crate) fn folder_card_height(width: Pixels, window: &Window) -> Pixels {
+    let gap = rems(0.5).to_pixels(window.rem_size());
+    let line = window.line_height();
+    let text = line * 0.875 + gap + line * 0.75;
+    px((width * 9. / 16. + gap + text).as_f32().ceil())
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct CardMetrics {
     pub(crate) width: Pixels,
