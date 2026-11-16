@@ -17,14 +17,17 @@ use gpui_kit::*;
 use rigili_bilibili::{BangumiFollow, Client, FavFolder, NavStat};
 use rigili_core::client;
 use rigili_core::{OpenSpace, OpenVideo, Refresh};
+use serde::{Deserialize, Serialize};
 
+use crate::app::preferences;
 use crate::shared::browse::filter;
 use crate::shared::browse::grid::{CardFrame, VideoCard};
 use crate::shared::browse::list::ListScroll;
 use crate::shared::browse::paging::Paged;
 use crate::shared::ui::tabs::TabStrip;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum MineTab {
     History,
     Offline,
@@ -222,7 +225,7 @@ impl MineView {
             });
         Self {
             client,
-            tab: MineTab::default(),
+            tab: preferences::mine_tab(cx),
             folders: FolderState::new(),
             favorites: Paged::new(),
             history: Paged::new(),
@@ -282,6 +285,7 @@ impl MineView {
             return;
         }
         self.tab = tab;
+        preferences::set_mine_tab(cx, tab);
         self.load_if_needed(cx);
         cx.notify();
     }

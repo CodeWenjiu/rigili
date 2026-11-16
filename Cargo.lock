@@ -6109,6 +6109,8 @@ dependencies = [
  "rigili_macro",
  "rigili_playback",
  "rigili_player",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 

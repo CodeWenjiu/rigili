@@ -7,6 +7,7 @@ use gpui_kit::*;
 use rigili_bilibili::{HotBadge, HotWord};
 
 use super::{HISTORY_COLLAPSED, MainView};
+use crate::app::preferences;
 
 impl MainView {
     pub(crate) fn render_search_panel(
@@ -22,7 +23,7 @@ impl MainView {
         let query = self.search_box.value(cx);
         let query_empty = query.trim().is_empty();
         let has_content = if query_empty {
-            !self.search_box.history.is_empty()
+            !preferences::search_history(cx).is_empty()
                 || !self.search_box.hot.is_empty()
                 || self.search_box.hot_loading
         } else {
@@ -49,7 +50,7 @@ impl MainView {
     fn render_search_idle(&self, weak: &WeakEntity<Self>, cx: &App) -> AnyElement {
         v_flex()
             .gap_4()
-            .when(!self.search_box.history.is_empty(), |this| {
+            .when(!preferences::search_history(cx).is_empty(), |this| {
                 this.child(self.render_history(weak, cx))
             })
             .when(
@@ -61,13 +62,14 @@ impl MainView {
 
     fn render_history(&self, weak: &WeakEntity<Self>, cx: &App) -> AnyElement {
         let muted = cx.theme().muted_foreground;
-        let total = self.search_box.history.keywords().len();
+        let history = preferences::search_history(cx);
+        let total = history.len();
         let visible = if self.search_box.history_expanded {
             total
         } else {
             total.min(HISTORY_COLLAPSED)
         };
-        let keywords = self.search_box.history.keywords()[..visible].to_vec();
+        let keywords = history[..visible].to_vec();
         let expanded = self.search_box.history_expanded;
 
         v_flex()
@@ -92,7 +94,7 @@ impl MainView {
                                 let weak = weak.clone();
                                 move |_, _, cx| {
                                     let _ = weak.update(cx, |this, cx| {
-                                        this.search_box.history.clear();
+                                        preferences::clear_search_history(cx);
                                         this.search_box.history_expanded = false;
                                         cx.notify();
                                     });

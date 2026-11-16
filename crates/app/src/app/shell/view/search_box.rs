@@ -8,7 +8,6 @@ use gpui_kit::*;
 use rigili_bilibili::{HotWord, SearchSuggestion};
 
 use super::MainView;
-use super::search_history::SearchHistory;
 use rigili_core::client;
 use rigili_core::runtime::spawn_api;
 
@@ -22,7 +21,6 @@ pub(super) struct SearchBox {
     open: bool,
     suppress_focus_open: bool,
     suppress_change: bool,
-    history: SearchHistory,
     history_expanded: bool,
     hot: Vec<HotWord>,
     hot_loading: bool,
@@ -44,7 +42,6 @@ impl SearchBox {
             open: false,
             suppress_focus_open: false,
             suppress_change: false,
-            history: SearchHistory::load(),
             history_expanded: false,
             hot: Vec::new(),
             hot_loading: false,
@@ -79,10 +76,6 @@ impl SearchBox {
     pub(super) fn close(&mut self) {
         self.open = false;
         self.active_suggestion = None;
-    }
-
-    pub(super) fn record(&mut self, keyword: &str) {
-        self.history.record(keyword);
     }
 
     pub(super) fn suppress_next_focus_open(&mut self) {

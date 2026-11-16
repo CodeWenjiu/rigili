@@ -1,4 +1,4 @@
-rigili_macro::mod_prv!(chrome, search_box, search_history);
+rigili_macro::mod_prv!(chrome, search_box);
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::*;
@@ -9,6 +9,7 @@ use gpui_kit::*;
 use rigili_core::{OpenLive, OpenSpace, OpenVideo, Refresh};
 
 use super::playback::Playback;
+use crate::app::preferences;
 use crate::app::shortcuts::{FocusPlayer, FocusSearch, MAIN, ReloadPage};
 use crate::pages::account::login;
 use crate::pages::account::message::MessagesView;
@@ -189,7 +190,7 @@ impl MainView {
             return;
         }
 
-        self.search_box.record(&keyword);
+        preferences::record_search(cx, &keyword);
         self.page = Page::Search;
         self.search
             .update(cx, |search, cx| search.search(keyword, cx));
