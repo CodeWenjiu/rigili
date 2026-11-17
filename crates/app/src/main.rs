@@ -2,6 +2,9 @@ rigili_macro::mod_prv!(app, pages, shared);
 
 use crate::app::platform::assets::AppAssets;
 
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() {
     app::platform::gpu::prefer_vulkan();
     install_diagnostics();

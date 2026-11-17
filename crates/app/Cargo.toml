@@ -20,6 +20,7 @@ rigili_playback.workspace = true
 rigili_player.workspace = true
 anyhow.workspace = true
 log.workspace = true
+mimalloc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 futures = "0.3"
