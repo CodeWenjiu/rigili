@@ -25,6 +25,34 @@ run-monitor *args:
 run-monitor-release *args:
     @cargo run --release -p rigili_app --features video-monitor -- {{args}}
 
+# 安装用户级桌面入口与图标；之后任务栏/启动器会按 app_id=rigili 显示图标
+install-desktop:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+    icon_root="$data_home/icons/hicolor"
+    source_icon="packaging/linux/icons/hicolor/scalable/apps/rigili.svg"
+
+    install -Dm644 packaging/linux/rigili.desktop "$data_home/applications/rigili.desktop"
+    install -Dm644 "$source_icon" "$icon_root/scalable/apps/rigili.svg"
+
+    if command -v rsvg-convert >/dev/null 2>&1; then
+        for size in 16 24 32 48 64 128 256 512; do
+            install -d "$icon_root/${size}x${size}/apps"
+            rsvg-convert -w "$size" -h "$size" "$source_icon" \
+                -o "$icon_root/${size}x${size}/apps/rigili.png"
+        done
+    fi
+
+    if command -v gtk-update-icon-cache >/dev/null 2>&1 && [ -f "$icon_root/index.theme" ]; then
+        gtk-update-icon-cache -f -t "$icon_root" >/dev/null
+    fi
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$data_home/applications" >/dev/null
+    fi
+
+    echo "Installed Rigili desktop entry and icons under $data_home"
+
 # 格式化
 fmt:
     @cargo fmt --all

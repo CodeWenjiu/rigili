@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Rigili
+GenericName=Bilibili Client
+Comment=Native Bilibili desktop client for Linux
+Exec=rigili
+Icon=rigili
+Terminal=false
+Categories=AudioVideo;Video;
+Keywords=bilibili;anime;video;
+StartupNotify=false
+StartupWMClass=rigili

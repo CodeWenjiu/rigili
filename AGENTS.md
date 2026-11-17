@@ -50,6 +50,13 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
+桌面图标与启动器入口（用户级安装，不改系统文件）：
+
+```bash
+just install-desktop        # 安装 .desktop 与 hicolor 图标到 $XDG_DATA_HOME
+nix build .#default         # 构建包含 .desktop 与图标的 Nix 包
+```
+
 视频流排障（编译期开关，关闭时零开销，日志输出到 stderr）：
 
 ```bash
