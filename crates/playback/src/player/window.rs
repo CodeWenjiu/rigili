@@ -516,6 +516,12 @@ impl Render for PlayerWindow {
             .on_action(cx.listener(|_, _: &SwitchToMain, _, cx| {
                 cx.emit(FocusMain);
             }))
+            .on_action(
+                cx.listener(|_, _: &rigili_core::ShowShortcuts, window, cx| {
+                    let rows = crate::shortcuts::rows(cx);
+                    rigili_core::open_shortcut_help(window, cx, "播放器快捷键", rows);
+                }),
+            )
             .when(!fullscreen, |this| {
                 this.child(
                     TitleBar::new().child(

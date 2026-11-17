@@ -10,7 +10,7 @@ use rigili_core::{OpenLive, OpenSpace, OpenVideo, Refresh};
 
 use super::playback::Playback;
 use crate::app::preferences;
-use crate::app::shortcuts::{FocusPlayer, FocusSearch, MAIN, ReloadPage};
+use crate::app::shortcuts::{Back, FocusPlayer, FocusSearch, MAIN, ReloadPage, open_help};
 use crate::pages::account::login;
 use crate::pages::account::message::MessagesView;
 use crate::pages::account::mine::MineView;
@@ -18,6 +18,7 @@ use crate::pages::content::home::HomeView;
 use crate::pages::content::search::SearchView;
 use crate::pages::content::space::{CloseSpace, SpaceView};
 use crate::shared::media::preview;
+use rigili_core::ShowShortcuts;
 use rigili_core::image_cache;
 use rigili_playback::PlaybackRequest;
 use search_box::SearchBox;
@@ -257,6 +258,17 @@ impl MainView {
         }
     }
 
+    fn back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.search_box_is_open() {
+            self.dismiss_search_box(window, cx);
+        } else if self.messages_open {
+            self.messages_open = false;
+            cx.notify();
+        } else if !self.spaces.is_empty() {
+            self.close_space(window, cx);
+        }
+    }
+
     fn page_can_refresh(&self, cx: &App) -> bool {
         if !self.spaces.is_empty() {
             return self.space.read(cx).can_refresh();
@@ -329,6 +341,12 @@ impl Render for MainView {
             }))
             .on_action(cx.listener(|this, _: &FocusPlayer, _, cx| {
                 this.focus_player(cx);
+            }))
+            .on_action(cx.listener(|this, _: &Back, window, cx| {
+                this.back(window, cx);
+            }))
+            .on_action(cx.listener(|_, _: &ShowShortcuts, window, cx| {
+                open_help(window, cx);
             }))
             .image_cache(image_cache::get(cx))
             .child(self.render_sidebar(cx))

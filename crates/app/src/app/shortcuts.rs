@@ -1,10 +1,23 @@
 use std::rc::Rc;
 
 use gpui_kit::*;
+use rigili_core::ShowShortcuts;
 
 pub(crate) const MAIN: &str = "Main";
 
-actions!(shell, [ReloadPage, FocusSearch, FocusPlayer]);
+actions!(
+    shell,
+    [
+        /// 刷新当前页
+        ReloadPage,
+        /// 搜索
+        FocusSearch,
+        /// 切换到播放器
+        FocusPlayer,
+        /// 返回上一级
+        Back,
+    ]
+);
 
 struct Command {
     keys: &'static str,
@@ -14,21 +27,51 @@ struct Command {
 
 const COMMANDS: &[Command] = &[
     Command {
+        keys: "/",
+        context: MAIN,
+        action: || Box::new(FocusSearch),
+    },
+    Command {
+        keys: "e",
+        context: MAIN,
+        action: || Box::new(Back),
+    },
+    Command {
         keys: "r",
         context: MAIN,
         action: || Box::new(ReloadPage),
-    },
-    Command {
-        keys: "i",
-        context: MAIN,
-        action: || Box::new(FocusSearch),
     },
     Command {
         keys: "s",
         context: MAIN,
         action: || Box::new(FocusPlayer),
     },
+    Command {
+        keys: "?",
+        context: MAIN,
+        action: || Box::new(ShowShortcuts),
+    },
 ];
+
+pub(crate) fn rows(cx: &App) -> Vec<(String, String)> {
+    let documents = cx.action_documentation();
+    COMMANDS
+        .iter()
+        .map(|command| {
+            let action = (command.action)();
+            let label = documents
+                .get(action.name())
+                .copied()
+                .unwrap_or_else(|| action.name());
+            (rigili_core::display_keys(command.keys), label.to_owned())
+        })
+        .collect()
+}
+
+pub(crate) fn open_help(window: &mut Window, cx: &mut App) {
+    let shortcuts = rows(cx);
+    rigili_core::open_shortcut_help(window, cx, "主界面快捷键", shortcuts);
+}
 
 fn binding_predicate(context: &str) -> KeyBindingContextPredicate {
     let source = format!("{context} && !{}", rigili_core::TEXT_INPUT_CONTEXT);
@@ -57,7 +100,8 @@ pub(crate) fn bind(cx: &mut App) {
 mod tests {
     use std::collections::BTreeSet;
 
-    use gpui_kit::{KeyBindingContextPredicate, KeyContext, Keystroke};
+    use gpui_kit::{KeyBinding, KeyBindingContextPredicate, KeyContext, Keystroke, Modifiers};
+    use rigili_core::ShowShortcuts;
 
     use super::{COMMANDS, MAIN, binding_predicate};
 
@@ -89,7 +133,42 @@ mod tests {
             .iter()
             .map(|command| command.keys)
             .collect::<BTreeSet<_>>();
-        assert_eq!(keys, BTreeSet::from(["r", "i", "s"]));
+        assert_eq!(keys, BTreeSet::from(["r", "s", "e", "?", "/"]));
+    }
+
+    #[test]
+    fn question_mark_binding_accepts_shift_slash() {
+        let binding = KeyBinding::new("?", ShowShortcuts, Some(MAIN));
+        let typed = Keystroke {
+            key: "/".into(),
+            key_char: Some("?".into()),
+            modifiers: Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+        };
+
+        assert!(binding.match_keystrokes(&[typed]).is_some());
+    }
+
+    #[gpui_kit::test]
+    fn every_command_has_a_documented_action(cx: &mut gpui_kit::TestAppContext) {
+        let documents = cx.update(|cx| cx.action_documentation().clone());
+        for command in COMMANDS {
+            let action = (command.action)();
+            assert!(
+                documents.contains_key(action.name()),
+                "missing documentation for {}",
+                action.name()
+            );
+        }
+
+        let rows = cx.update(|cx| super::rows(cx));
+        assert_eq!(rows.len(), COMMANDS.len());
+        assert!(
+            rows.iter()
+                .all(|(keys, label)| !keys.is_empty() && !label.is_empty())
+        );
     }
 
     #[test]

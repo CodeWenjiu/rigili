@@ -7,20 +7,35 @@ pub(crate) const PLAYER: &str = "Player";
 actions!(
     player,
     [
+        /// 播放 / 暂停
         TogglePlayback,
+        /// 后退 5 秒
         SeekBack,
+        /// 后退历史
         HistoryBack,
+        /// 前进历史
         HistoryForward,
+        /// 减速
         SpeedDown,
+        /// 加速
         SpeedUp,
+        /// 上一个分P
         PreviousPage,
+        /// 下一个分P
         NextPage,
+        /// 静音
         ToggleMute,
+        /// 全屏
         ToggleFullscreen,
+        /// 视频信息
         ToggleInfo,
+        /// 评论
         ToggleComments,
+        /// 弹幕开关
         ToggleDanmaku,
+        /// 重新加载
         Reload,
+        /// 回到主窗口
         SwitchToMain,
     ]
 );
@@ -107,6 +122,11 @@ const COMMANDS: &[Command] = &[
         context: PLAYER,
         action: || Box::new(SwitchToMain),
     },
+    Command {
+        keys: "?",
+        context: PLAYER,
+        action: || Box::new(rigili_core::ShowShortcuts),
+    },
 ];
 
 fn binding_predicate(context: &str) -> KeyBindingContextPredicate {
@@ -130,6 +150,21 @@ pub fn bind(cx: &mut App) {
         })
         .collect::<Vec<_>>();
     cx.bind_keys(bindings);
+}
+
+pub fn rows(cx: &App) -> Vec<(String, String)> {
+    let documents = cx.action_documentation();
+    COMMANDS
+        .iter()
+        .map(|command| {
+            let action = (command.action)();
+            let label = documents
+                .get(action.name())
+                .copied()
+                .unwrap_or_else(|| action.name());
+            (rigili_core::display_keys(command.keys), label.to_owned())
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -164,6 +199,26 @@ mod tests {
         }
 
         assert!(COMMANDS.iter().all(|command| command.context == PLAYER));
+    }
+
+    #[gpui_kit::test]
+    fn every_command_has_a_documented_action(cx: &mut gpui_kit::TestAppContext) {
+        let documents = cx.update(|cx| cx.action_documentation().clone());
+        for command in COMMANDS {
+            let action = (command.action)();
+            assert!(
+                documents.contains_key(action.name()),
+                "missing documentation for {}",
+                action.name()
+            );
+        }
+
+        let rows = cx.update(|cx| super::rows(cx));
+        assert_eq!(rows.len(), COMMANDS.len());
+        assert!(
+            rows.iter()
+                .all(|(keys, label)| !keys.is_empty() && !label.is_empty())
+        );
     }
 
     #[test]
