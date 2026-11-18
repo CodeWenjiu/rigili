@@ -9,7 +9,7 @@ rigili_macro::mod_prv!(
     render
 );
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use gpui_kit::base::{TextSelection, TextSelectionHandle};
@@ -137,6 +137,10 @@ pub(super) struct InfoPanel {
     comments_error: Option<String>,
     comments_more_loading: bool,
     comments_more_error: Option<String>,
+    comments_pages: VecDeque<usize>,
+    comments_first_page: u32,
+    comments_earlier_loading: bool,
+    comments_earlier_error: Option<String>,
     draft: Option<Entity<TextareaState>>,
     _draft_sub: Option<Subscription>,
     comment_sending: bool,
@@ -251,6 +255,10 @@ impl InfoPanel {
             comments_error: None,
             comments_more_loading: false,
             comments_more_error: None,
+            comments_pages: VecDeque::new(),
+            comments_first_page: 1,
+            comments_earlier_loading: false,
+            comments_earlier_error: None,
             draft: None,
             _draft_sub: None,
             comment_sending: false,

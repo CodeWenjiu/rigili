@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use gpui_kit::assets::IconName;
 use gpui_kit::base::SelectableText;
 use gpui_kit::component::avatar::Avatar;
@@ -22,6 +24,8 @@ use super::{
     COMMENT_AVATAR, COMMENT_MAX_LEN, InfoEvent, InfoPanel, NESTED_COMMENT_AVATAR,
     NESTED_COMMENT_LIMIT,
 };
+
+const COMMENT_RETAIN_PAGES: usize = 12;
 
 #[derive(Default)]
 pub(super) struct ReplyThread {
@@ -66,6 +70,10 @@ impl InfoPanel {
         self.comments_error = None;
         self.comments_more_loading = false;
         self.comments_more_error = None;
+        self.comments_pages.clear();
+        self.comments_first_page = 1;
+        self.comments_earlier_loading = false;
+        self.comments_earlier_error = None;
         self.reply_threads.clear();
         self.reply_target = None;
         self.reply_draft = None;
@@ -127,6 +135,10 @@ impl InfoPanel {
         self.comments_more_error = None;
         self.comments.clear();
         self.comments_more = false;
+        self.comments_pages.clear();
+        self.comments_first_page = 1;
+        self.comments_earlier_loading = false;
+        self.comments_earlier_error = None;
         self.reply_threads.clear();
         self.reply_target = None;
         self.reply_error = None;
@@ -154,6 +166,9 @@ impl InfoPanel {
                         } = page;
                         this.comments = replies.unwrap_or_default();
                         this.comments_page = if info.num == 0 { 1 } else { info.num };
+                        if !this.comments.is_empty() {
+                            this.comments_pages.push_back(this.comments.len());
+                        }
                         this.comments_total = info.count.max(info.acount);
                         this.comments_more = !this.comments.is_empty()
                             && (this.comments.len() as u64) < this.comments_total;
@@ -207,6 +222,10 @@ impl InfoPanel {
                         let count = added.len();
                         this.comments.extend(added);
                         this.comments_list.splice(start..start, count);
+                        if count > 0 {
+                            this.comments_pages.push_back(count);
+                            this.trim_front_pages();
+                        }
                         this.comments_page = if info.num == 0 { requested } else { info.num };
                         this.comments_total = this.comments_total.max(info.count.max(info.acount));
                         this.comments_more = this.comments_more
@@ -221,6 +240,129 @@ impl InfoPanel {
                 cx.notify();
             },
         );
+    }
+
+    fn trim_front_pages(&mut self) {
+        let (pages_dropped, dropped) = drain_front_pages(&mut self.comments_pages);
+        let dropped = dropped.min(self.comments.len());
+        if dropped == 0 {
+            return;
+        }
+        let top = self.comments_list.logical_scroll_top();
+        let roots: Vec<u64> = self
+            .comments
+            .drain(0..dropped)
+            .map(|comment| comment.rpid)
+            .collect();
+        for root in roots {
+            self.reply_threads.remove(&root);
+        }
+        self.comments_first_page = self.comments_first_page.saturating_add(pages_dropped);
+        self.comments_list.splice(0..dropped, 0);
+        self.comments_list.scroll_to(ListOffset {
+            item_ix: top.item_ix.saturating_sub(dropped),
+            offset_in_item: top.offset_in_item,
+        });
+    }
+
+    fn trim_back_pages(&mut self) {
+        let (pages_dropped, dropped) = drain_back_pages(&mut self.comments_pages);
+        let dropped = dropped.min(self.comments.len());
+        if dropped == 0 {
+            return;
+        }
+        let start = self.comments.len() - dropped;
+        let roots: Vec<u64> = self
+            .comments
+            .drain(start..)
+            .map(|comment| comment.rpid)
+            .collect();
+        for root in roots {
+            self.reply_threads.remove(&root);
+        }
+        self.comments_list.splice(start..start + dropped, 0);
+        self.comments_page = self.comments_page.saturating_sub(pages_dropped);
+        self.comments_more = true;
+    }
+
+    fn load_earlier_comments(&mut self, cx: &mut Context<Self>) {
+        if self.comments_loading || self.comments_earlier_loading || self.comments_first_page <= 1 {
+            return;
+        }
+        let Some(details) = self.details.clone() else {
+            return;
+        };
+        let Ok(client) = client::get(cx) else {
+            return;
+        };
+        let aid = details.aid;
+        let requested = self.comments_first_page - 1;
+        self.comments_earlier_loading = true;
+        self.comments_earlier_error = None;
+        cx.notify();
+
+        spawn_api(
+            cx,
+            async move {
+                client
+                    .comments(1, &aid.to_string(), requested, CommentSort::Hot)
+                    .await
+            },
+            move |this, result, cx| {
+                if this.details.as_ref().map(|details| details.aid) != Some(aid) {
+                    return;
+                }
+                this.comments_earlier_loading = false;
+                match result {
+                    Ok(page) => {
+                        let CommentPage {
+                            page: info,
+                            replies,
+                        } = page;
+                        let added = replies.unwrap_or_default();
+                        let count = added.len();
+                        this.comments_total = this.comments_total.max(info.count.max(info.acount));
+                        if count > 0 {
+                            let top = this.comments_list.logical_scroll_top();
+                            this.comments.splice(0..0, added);
+                            this.comments_pages.push_front(count);
+                            this.comments_first_page = requested;
+                            this.comments_list.splice(0..0, count);
+                            this.comments_list.scroll_to(ListOffset {
+                                item_ix: top.item_ix + count,
+                                offset_in_item: top.offset_in_item,
+                            });
+                            this.trim_back_pages();
+                        } else {
+                            this.comments_first_page = requested;
+                        }
+                    }
+                    Err(error) => {
+                        this.comments_earlier_error = Some(api_task_error_message(error, cx))
+                    }
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    fn maybe_load_earlier_comments(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let top = self.comments_list.logical_scroll_top();
+        if top.item_ix > 0 {
+            self.comments_earlier_error = None;
+            return;
+        }
+        if self.comments_first_page <= 1
+            || self.comments_loading
+            || self.comments_earlier_loading
+            || self.comments_earlier_error.is_some()
+        {
+            return;
+        }
+        let weak = cx.entity().downgrade();
+        window.defer(cx, move |_, cx| {
+            let _ = weak.update(cx, |this, cx| this.load_earlier_comments(cx));
+        });
     }
 
     fn load_next_replies(&mut self, root: u64, cx: &mut Context<Self>) {
@@ -732,6 +874,7 @@ impl InfoPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        self.maybe_load_earlier_comments(window, cx);
         let draft = self.comment_draft(window, cx);
         v_flex()
             .flex_1()
@@ -1382,12 +1525,39 @@ impl InfoPanel {
     }
 }
 
+fn drain_front_pages(pages: &mut VecDeque<usize>) -> (u32, usize) {
+    let mut pages_dropped = 0;
+    let mut items_dropped = 0;
+    while pages.len() > COMMENT_RETAIN_PAGES {
+        let Some(size) = pages.pop_front() else {
+            break;
+        };
+        pages_dropped += 1;
+        items_dropped += size;
+    }
+    (pages_dropped, items_dropped)
+}
+
+fn drain_back_pages(pages: &mut VecDeque<usize>) -> (u32, usize) {
+    let mut pages_dropped = 0;
+    let mut items_dropped = 0;
+    while pages.len() > COMMENT_RETAIN_PAGES {
+        let Some(size) = pages.pop_back() else {
+            break;
+        };
+        pages_dropped += 1;
+        items_dropped += size;
+    }
+    (pages_dropped, items_dropped)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::EmoteTarget;
+    use super::{COMMENT_RETAIN_PAGES, EmoteTarget, drain_back_pages, drain_front_pages};
     use crate::info::{InfoPanel, InfoSelections};
     use gpui_kit::prelude::*;
     use gpui_kit::{Bounds, TestAppContext, WindowBounds, WindowOptions, px, size};
+    use std::collections::VecDeque;
 
     #[gpui_kit::test]
     fn opens_one_emote_picker_at_a_time(cx: &mut TestAppContext) {
@@ -1429,5 +1599,20 @@ mod tests {
             panel.close_emote_picker(EmoteTarget::Comment);
             assert_eq!(panel.emote_target, None);
         });
+    }
+
+    #[test]
+    fn retains_a_bounded_page_window() {
+        let mut pages = VecDeque::from(vec![20; COMMENT_RETAIN_PAGES]);
+        assert_eq!(drain_front_pages(&mut pages), (0, 0));
+        assert_eq!(pages.len(), COMMENT_RETAIN_PAGES);
+
+        let mut pages = VecDeque::from(vec![20; COMMENT_RETAIN_PAGES + 2]);
+        assert_eq!(drain_front_pages(&mut pages), (2, 40));
+        assert_eq!(pages.len(), COMMENT_RETAIN_PAGES);
+
+        let mut pages = VecDeque::from(vec![20; COMMENT_RETAIN_PAGES + 3]);
+        assert_eq!(drain_back_pages(&mut pages), (3, 60));
+        assert_eq!(pages.len(), COMMENT_RETAIN_PAGES);
     }
 }
