@@ -233,17 +233,17 @@ impl DanmakuState {
             let red = ((item.color >> 16) & 0xff) as u8;
             let green = ((item.color >> 8) & 0xff) as u8;
             let blue = (item.color & 0xff) as u8;
+            let font_size = item.font_size * device_scale;
             let _ = writeln!(
                 out,
-                "{{\\an7\\pos({:.1},{:.1})\\fn{}\\fs{:.1}\\c&H{:02X}{:02X}{:02X}&\\alpha&H{:02X}&\\bord0\\shad0}}{}",
+                "{{\\an7\\pos({:.1},{:.1})\\fn{}\\fs{font_size:.1}\\c&H{:02X}{:02X}{:02X}&\\3c&H000000&\\bord{:.1}\\shad0\\alpha&H{alpha:02X}&}}{}",
                 item.position.0 * device_scale,
                 item.position.1 * device_scale,
                 self.font_family,
-                item.font_size * device_scale,
                 blue,
                 green,
                 red,
-                alpha,
+                outline_width(font_size),
                 escape_ass(&item.text)
             );
         }
@@ -329,6 +329,12 @@ fn is_discontinuity(last: f64, time: f64) -> bool {
     time < last - SEEK_BACK || time > last + SEEK_FORWARD
 }
 
+// Danmaku sit on arbitrary video frames, so the glyphs need their own dark edge
+// to stay legible where the background happens to share their colour.
+fn outline_width(font_size: f32) -> f32 {
+    (font_size * 0.08).max(1.)
+}
+
 fn active_limit(lanes: usize) -> usize {
     (lanes * ACTIVE_PER_LANE).clamp(MIN_ACTIVE, MAX_ACTIVE)
 }
@@ -375,7 +381,10 @@ fn is_wide(ch: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{DanmakuState, MAX_ACTIVE, MIN_ACTIVE, active_limit, escape_ass, is_discontinuity};
+    use super::{
+        DanmakuState, MAX_ACTIVE, MIN_ACTIVE, active_limit, escape_ass, is_discontinuity,
+        outline_width,
+    };
     use crate::settings::DanmakuSettings;
     use rigili_bilibili::{Danmaku, DanmakuMode};
     use std::sync::Arc;
@@ -480,7 +489,17 @@ mod tests {
         assert!(ass.contains("\\an7"));
         assert!(ass.contains("\\pos("));
         assert!(ass.contains("\\c&H0000FF&"));
+        assert!(ass.contains("\\3c&H000000&"));
+        assert!(ass.contains("\\bord"));
+        assert!(!ass.contains("\\bord0"));
         assert!(ass.ends_with("}hi\n"), "{ass}");
+    }
+
+    #[test]
+    fn outlines_scale_with_the_rendered_font_size() {
+        assert!((outline_width(25.) - 2.).abs() < 0.01);
+        assert!((outline_width(50.) - 4.).abs() < 0.01);
+        assert_eq!(outline_width(4.), 1.);
     }
 
     #[test]
