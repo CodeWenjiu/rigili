@@ -271,6 +271,10 @@ impl PlayerView {
         self.focus.focus(window, cx);
     }
 
+    pub(super) fn status(&self) -> &PlayerStatus {
+        &self.status
+    }
+
     pub(super) fn text_input_focused(&self, window: &Window, cx: &App) -> bool {
         self.danmaku_input
             .read(cx)
@@ -278,7 +282,13 @@ impl PlayerView {
             .is_focused(window)
     }
 
-    pub(super) fn load_streams(&mut self, streams: Streams, live: bool, cx: &mut Context<Self>) {
+    pub(super) fn load_streams(
+        &mut self,
+        streams: Streams,
+        live: bool,
+        start: Option<f64>,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(hold) = self.speed_hold.take() {
             self.status.speed = hold.previous;
             self.player.set_speed(hold.previous);
@@ -306,12 +316,14 @@ impl PlayerView {
         self.qualities = streams.qualities;
         self.status = PlayerStatus {
             phase: PlaybackPhase::Loading,
+            time_pos: start.unwrap_or_default(),
             volume: self.status.volume,
             muted: self.status.muted,
             speed: self.status.speed,
             ..PlayerStatus::default()
         };
-        self.player.load(&streams.video, streams.audio.as_deref());
+        self.player
+            .load(&streams.video, streams.audio.as_deref(), start);
         self.native_requested = self.native.is_some() && !self.native_failed;
         self.native_bounds = None;
         if self.native_requested {

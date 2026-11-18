@@ -1,4 +1,4 @@
-rigili_macro::mod_prv!(info, media);
+rigili_macro::mod_prv!(info, media, watch);
 
 use std::sync::Arc;
 
@@ -39,6 +39,7 @@ pub struct PlayerWindow {
     show_info: bool,
     generation: u64,
     danmaku_task: Option<Task<()>>,
+    watch_task: Option<Task<()>>,
     _info_sub: Subscription,
     _player_sub: Subscription,
     _focus_sub: Subscription,
@@ -95,6 +96,7 @@ impl PlayerWindow {
             show_info: true,
             generation: 0,
             danmaku_task: None,
+            watch_task: None,
             _info_sub: info_sub,
             _player_sub: player_sub,
             _focus_sub: focus_sub,
@@ -103,6 +105,7 @@ impl PlayerWindow {
             view.history.open(request.source.clone());
             view.start(request, cx);
         }
+        view.spawn_watch_report(window, cx);
         view
     }
 
@@ -209,6 +212,11 @@ impl PlayerWindow {
                             let related = resolved.related;
                             let pages = resolved.info.pages.clone();
                             let title: SharedString = resolved.info.title.clone().into();
+                            let start = watch::resume_position(
+                                resolved.player_info.last_play_time,
+                                duration as f64,
+                            );
+                            let chapters = resolved.player_info.chapters();
                             this.title = title.clone();
                             this.player
                                 .update(cx, |player, cx| player.set_title(title, cx));
@@ -229,10 +237,10 @@ impl PlayerWindow {
                             });
                             this.player.update(cx, |player, cx| {
                                 player.set_pages(pages, cid, cx);
-                                player.load_streams(resolved.streams, false, cx)
+                                player.set_chapters(chapters, cx);
+                                player.load_streams(resolved.streams, false, start, cx)
                             });
                             this.load_previews(bvid.clone(), cid, cx);
-                            this.load_chapters(bvid.clone(), cid, cx);
                             this.load_danmaku(bvid, aid, cid, duration, cx);
                             this.load_follow_status(owner_mid, cx);
                             this.load_interactions(aid, cx);
@@ -258,7 +266,7 @@ impl PlayerWindow {
                         Ok(url) => {
                             this.info.update(cx, |info, cx| info.clear(cx));
                             this.player.update(cx, |player, cx| {
-                                player.load_streams(Streams::single(url), true, cx)
+                                player.load_streams(Streams::single(url), true, None, cx)
                             });
                         }
                         Err(error) => this.handle_error(error, cx),
@@ -314,29 +322,37 @@ impl PlayerWindow {
         cx.notify();
 
         let preview_bvid = bvid.clone();
-        let chapters_bvid = bvid.clone();
         let danmaku_bvid = bvid.clone();
         let preferred = crate::settings::current(cx).preferred_quality;
         let aid = self.info.read(cx).aid().unwrap_or_default();
         let duration = self.info.read(cx).page_duration(cid).unwrap_or_default();
         spawn_api(
             cx,
-            async move { resolve_streams(&client, &bvid, cid, preferred).await },
+            async move {
+                let (streams, player_info) = tokio::join!(
+                    resolve_streams(&client, &bvid, cid, preferred),
+                    client.player_info(&bvid, cid)
+                );
+                streams.map(|streams| (streams, player_info.unwrap_or_default()))
+            },
             move |this, result, cx| {
                 if this.generation != generation {
                     return;
                 }
                 this.loading = false;
                 match result {
-                    Ok(streams) => {
+                    Ok((streams, player_info)) => {
+                        let start =
+                            watch::resume_position(player_info.last_play_time, duration as f64);
+                        let chapters = player_info.chapters();
                         this.history.remember_cid(cid);
                         this.info.update(cx, |info, cx| info.select(cid, cx));
                         this.player.update(cx, |player, cx| {
                             player.set_selected_page(cid, cx);
-                            player.load_streams(streams, false, cx)
+                            player.set_chapters(chapters, cx);
+                            player.load_streams(streams, false, start, cx)
                         });
                         this.load_previews(preview_bvid, cid, cx);
-                        this.load_chapters(chapters_bvid, cid, cx);
                         this.load_danmaku(danmaku_bvid, aid, cid, duration, cx);
                     }
                     Err(error) => {

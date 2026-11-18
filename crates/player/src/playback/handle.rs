@@ -115,11 +115,11 @@ impl Player {
         }
     }
 
-    pub fn load(&self, video: &str, audio: Option<&str>) {
+    pub fn load(&self, video: &str, audio: Option<&str>, start: Option<f64>) {
         self.send(Command::Load {
             video: video.to_owned(),
             audio: audio.map(str::to_owned),
-            start: None,
+            start: start.map(|start| start.max(0.0)),
             paused: false,
         });
     }
@@ -347,7 +347,7 @@ mod tests {
             .filter(|path| !path.is_empty());
         let player = Player::new();
         player.set_viewport(VideoSize::new(1280, 720));
-        player.load(&path, audio.as_deref());
+        player.load(&path, audio.as_deref(), None);
 
         wait_until(&player, Duration::from_secs(5), |status| {
             status.duration > 0.0
@@ -390,7 +390,7 @@ mod tests {
         player.toggle_pause();
         wait_until(&player, Duration::from_secs(2), |status| !status.paused);
 
-        player.load(&path, audio.as_deref());
+        player.load(&path, audio.as_deref(), None);
         wait_until(&player, Duration::from_secs(5), |status| {
             status.duration > 0.0 && status.time_pos < 1.0
         });

@@ -191,7 +191,7 @@ impl PreviewSurface {
                 player.set_volume(0.0);
                 player
             })
-            .load(&video, None);
+            .load(&video, None, None);
 
         let generation = self.generation;
         self.poll = Some(cx.spawn_in(window, async move |surface, cx| {

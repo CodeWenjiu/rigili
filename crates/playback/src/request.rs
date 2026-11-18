@@ -1,7 +1,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use rigili_bilibili::{ApiError, Client, Dash, DashVideo, PlayUrl, RecommendVideo, VideoInfo};
+use rigili_bilibili::{
+    ApiError, Client, Dash, DashVideo, PlayUrl, PlayerInfo, RecommendVideo, VideoInfo,
+};
 use tokio::task::JoinSet;
 
 const PROBE_FAST_ENOUGH: Duration = Duration::from_millis(500);
@@ -42,6 +44,7 @@ pub(super) struct Resolved {
     pub(super) owner_likes: u64,
     pub(super) cid: u64,
     pub(super) streams: Streams,
+    pub(super) player_info: PlayerInfo,
 }
 
 pub(crate) struct Streams {
@@ -81,7 +84,17 @@ pub(super) async fn resolve(
     let detail = client.video_detail(&bvid).await?;
     let info = detail.view;
     let cid = cid.unwrap_or(info.cid);
-    let streams = resolve_streams(&client, &bvid, cid, preferred_quality).await?;
+    let (streams, player_info) = tokio::join!(
+        resolve_streams(&client, &bvid, cid, preferred_quality),
+        client.player_info(&bvid, cid)
+    );
+    let streams = streams?;
+    let player_info = player_info.unwrap_or_else(|error| {
+        // Chapters and the resume point are a bonus; a failed call must not
+        // keep the video from playing.
+        rigili_monitor::monitor!("stream", "player info {bvid}/{cid} failed: {error}");
+        PlayerInfo::default()
+    });
     rigili_monitor::monitor!(
         "stream",
         "resolved {bvid} cid {cid} in {:?}",
@@ -94,6 +107,7 @@ pub(super) async fn resolve(
         owner_likes: detail.card.like_num,
         cid,
         streams,
+        player_info,
     })
 }
 

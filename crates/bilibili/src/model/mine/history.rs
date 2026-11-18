@@ -1,5 +1,27 @@
 use serde::Deserialize;
 
+/// Playback progress posted to the web heartbeat. This is what creates and
+/// advances an entry in the site's watch history; reading history from
+/// `/x/web-interface/history/cursor` does not.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WatchReport {
+    pub aid: u64,
+    pub bvid: String,
+    pub cid: u64,
+    /// Current position, in seconds.
+    pub played: u64,
+    /// Length of this part, in seconds.
+    pub duration: u64,
+    /// Unix seconds when this part started playing.
+    pub started_at: u64,
+    /// Seconds elapsed since the previous report.
+    pub realtime: u64,
+    /// Position carried by the previous report.
+    pub last: u64,
+    /// Furthest position reached in this part.
+    pub max: u64,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct HistoryPage {
     #[serde(default)]

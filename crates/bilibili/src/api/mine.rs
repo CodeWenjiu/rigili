@@ -1,6 +1,6 @@
 use crate::{
     ApiError, BangumiFollows, Client, CreatedFolder, FavFolders, FavItems, HistoryPage, NavStat,
-    WatchLater,
+    WatchLater, WatchReport,
 };
 
 const NAV_STAT_URL: &str = "https://api.bilibili.com/x/web-interface/nav/stat";
@@ -13,6 +13,7 @@ const FOLDER_ADD_URL: &str = "https://api.bilibili.com/x/v3/fav/folder/add";
 const FOLDER_SORT_URL: &str = "https://api.bilibili.com/x/v3/fav/folder/sort";
 const BANGUMI_FOLLOW_URL: &str = "https://api.bilibili.com/x/space/bangumi/follow/list";
 const HISTORY_URL: &str = "https://api.bilibili.com/x/web-interface/history/cursor";
+const HISTORY_REPORT_URL: &str = "https://api.bilibili.com/x/click-interface/web/heartbeat";
 const WATCH_LATER_URL: &str = "https://api.bilibili.com/x/v2/history/toview";
 const WATCH_LATER_ADD_URL: &str = "https://api.bilibili.com/x/v2/history/toview/add";
 const WATCH_LATER_DEL_URL: &str = "https://api.bilibili.com/x/v2/history/toview/del";
@@ -138,6 +139,30 @@ impl Client {
                 ("max", max.to_string()),
                 ("view_at", view_at.to_string()),
                 ("business", String::new()),
+            ],
+        )
+        .await
+    }
+
+    pub async fn report_history(&self, report: &WatchReport) -> Result<(), ApiError> {
+        self.post_form_ack(
+            HISTORY_REPORT_URL,
+            &[
+                ("aid", report.aid.to_string()),
+                ("bvid", report.bvid.clone()),
+                ("cid", report.cid.to_string()),
+                ("mid", self.account_uid()?.to_string()),
+                ("csrf", self.csrf()?),
+                ("played_time", report.played.to_string()),
+                ("realtime", report.realtime.to_string()),
+                ("start_ts", report.started_at.to_string()),
+                ("type", "3".to_owned()),
+                ("sub_type", "0".to_owned()),
+                ("dt", "2".to_owned()),
+                ("play_type", "0".to_owned()),
+                ("video_duration", report.duration.to_string()),
+                ("last_play_progress_time", report.last.to_string()),
+                ("max_play_progress_time", report.max.to_string()),
             ],
         )
         .await

@@ -81,6 +81,9 @@ pub struct VideoPage {
 pub struct PlayerInfo {
     #[serde(default)]
     pub view_points: Vec<ViewPoint>,
+    /// Milliseconds into the requested part where the viewer stopped last time.
+    #[serde(default)]
+    pub last_play_time: f64,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
