@@ -40,9 +40,9 @@ const IDLE_WAIT: Duration = Duration::from_millis(100);
 const MAX_OUTPUT_EDGE: u32 = 2560;
 
 const PLAYBACK_CACHE: &[(&str, &str)] = &[
-    ("cache-secs", "30"),
-    ("demuxer-max-bytes", "64MiB"),
-    ("demuxer-max-back-bytes", "16MiB"),
+    ("cache-secs", "20"),
+    ("demuxer-max-bytes", "32MiB"),
+    ("demuxer-max-back-bytes", "8MiB"),
 ];
 
 // Previews are short and always visible at once, so a large read-ahead only
