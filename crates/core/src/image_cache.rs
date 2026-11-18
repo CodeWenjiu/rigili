@@ -4,8 +4,8 @@ use gpui_kit::*;
 
 // Decoded thumbnails dominate RSS while scrolling, so bound the cache by
 // decoded bytes instead of entries; this also frees the matching GPU texture.
-const COVER_BUDGET_BYTES: usize = 64 * 1024 * 1024;
-const COVER_MAX_ENTRIES: usize = 512;
+const COVER_BUDGET_BYTES: usize = 32 * 1024 * 1024;
+const COVER_MAX_ENTRIES: usize = 256;
 // Avatars are many and cheap after resizing, but they must not evict covers.
 const AVATAR_BUDGET_BYTES: usize = 16 * 1024 * 1024;
 const AVATAR_MAX_ENTRIES: usize = 512;
