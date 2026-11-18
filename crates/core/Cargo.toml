@@ -5,10 +5,14 @@ edition.workspace = true
 publish = false
 
 [dependencies]
+futures = "0.3"
 gpui-kit.workspace = true
 rigili_bilibili.workspace = true
 rigili_macro.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
 image = { version = "0.25", default-features = false }

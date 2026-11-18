@@ -108,6 +108,9 @@
             mold
             rustToolchain
 
+            # Comment pictures copy through the Wayland clipboard
+            wl-clipboard
+
             # Desktop entry and icon installation
             librsvg
             desktop-file-utils
@@ -203,6 +206,7 @@
             preFixup = ''
               wrapProgram $out/bin/rigili \
                 --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath ctx.appLibs} \
+                --prefix PATH : ${lib.makeBinPath [ pkgs.wl-clipboard ]} \
                 --run 'if [ -z "''${VK_ICD_FILENAMES:-}" ] && [ -d /run/opengl-driver/share/vulkan/icd.d ]; then export VK_ICD_FILENAMES="$(find /run/opengl-driver/share/vulkan/icd.d -name "*.json" -print | paste -sd: -)"; fi'
             '';
 

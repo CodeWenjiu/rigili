@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+use super::null_or_default;
 
 fn deserialize_id<'de, D>(deserializer: D) -> Result<u64, D::Error>
 where
@@ -124,6 +126,18 @@ pub struct CommentContent {
     pub message: String,
     #[serde(default)]
     pub emote: Option<HashMap<String, CommentEmote>>,
+    #[serde(default, deserialize_with = "null_or_default")]
+    pub pictures: Vec<CommentPicture>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct CommentPicture {
+    #[serde(default)]
+    pub img_src: String,
+    #[serde(default)]
+    pub img_width: u32,
+    #[serde(default)]
+    pub img_height: u32,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -140,7 +154,7 @@ pub struct EmotePanel {
     pub packages: Option<Vec<EmotePackage>>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct EmotePackage {
     #[serde(default)]
     pub text: String,
@@ -150,7 +164,7 @@ pub struct EmotePackage {
     pub emote: Option<Vec<EmoteItem>>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct EmoteItem {
     #[serde(default)]
     pub text: String,
@@ -183,7 +197,7 @@ mod tests {
                         "avatar": "http://i0.hdslb.com/face.jpg",
                         "level_info": {"current_level": 5}
                     },
-                    "content": {"message": "第一条评论", "emote": {"[doge]": {"text": "[doge]", "url": "https://i0.hdslb.com/bfs/emote/doge.png"}}},
+                    "content": {"message": "第一条评论", "emote": {"[doge]": {"text": "[doge]", "url": "https://i0.hdslb.com/bfs/emote/doge.png"}}, "pictures": [{"img_src": "//i0.hdslb.com/bfs/new_dyn/a.png", "img_width": 800, "img_height": 600}]},
                     "like": 12,
                     "action": 1,
                     "ctime": 1762646400,
@@ -220,6 +234,13 @@ mod tests {
             .and_then(|emotes| emotes.get("[doge]"))
             .expect("comment emote");
         assert_eq!(emote.url, "https://i0.hdslb.com/bfs/emote/doge.png");
+        assert_eq!(items[0].content.pictures.len(), 1);
+        assert_eq!(
+            items[0].content.pictures[0].img_src,
+            "//i0.hdslb.com/bfs/new_dyn/a.png"
+        );
+        assert_eq!(items[0].content.pictures[0].img_width, 800);
+        assert_eq!(items[0].content.pictures[0].img_height, 600);
         assert_eq!(items[0].reply_control.time_desc, "1天前发布");
         assert_eq!(items[0].replies().len(), 1);
         assert_eq!(items[0].replies()[0].rpid, 2);
@@ -228,6 +249,11 @@ mod tests {
         let empty: CommentPage =
             serde_json::from_str(r#"{"page": {"count": 0}}"#).expect("empty comment fixture");
         assert!(empty.into_replies().is_empty());
+
+        let null: Comment =
+            serde_json::from_str(r#"{"content": {"message": "纯文字", "pictures": null}}"#)
+                .expect("null pictures fixture");
+        assert!(null.content.pictures.is_empty());
     }
 
     #[test]

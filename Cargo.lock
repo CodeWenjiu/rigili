@@ -6162,10 +6162,13 @@ dependencies = [
 name = "rigili_core"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "gpui-kit",
  "image",
  "rigili_bilibili",
  "rigili_macro",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 

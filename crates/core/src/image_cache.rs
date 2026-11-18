@@ -21,37 +21,90 @@ const AVATAR_MAX_ENTRIES: usize = 512;
 // screen, which read as the grid reloading from scratch.
 const RELATED_BUDGET_BYTES: usize = 8 * 1024 * 1024;
 const RELATED_MAX_ENTRIES: usize = 64;
+// A panel's emote sets are a few hundred tiny pictures that users browse while
+// composing. Sharing the avatar tier let comment avatars evict what the picker
+// had just shown, so opening it again refetched those images; an account's
+// static set fits here instead. The byte budget still binds on animated sets,
+// which decode to frames times a picture.
+const EMOTE_BUDGET_BYTES: usize = 32 * 1024 * 1024;
+const EMOTE_MAX_ENTRIES: usize = 1024;
+// Comment pictures are user-uploaded photos: the list draws 160px thumbnails
+// and the viewer a 1280px copy, so bytes bind long before the entry cap. Kept
+// apart from emotes so a few full-size views cannot evict a whole panel.
+const COMMENT_PICTURE_BUDGET_BYTES: usize = 32 * 1024 * 1024;
+const COMMENT_PICTURE_MAX_ENTRIES: usize = 128;
+
+const TIER_COUNT: usize = 5;
+
+#[repr(usize)]
+#[derive(Clone, Copy)]
+enum Tier {
+    Covers,
+    Avatars,
+    Related,
+    Emotes,
+    CommentPictures,
+}
+
+impl Tier {
+    const ALL: [Self; TIER_COUNT] = [
+        Self::Covers,
+        Self::Avatars,
+        Self::Related,
+        Self::Emotes,
+        Self::CommentPictures,
+    ];
+
+    fn limits(self) -> (usize, usize) {
+        match self {
+            Self::Covers => (COVER_MIN_BUDGET_BYTES, COVER_DEFAULT_ENTRIES),
+            Self::Avatars => (AVATAR_BUDGET_BYTES, AVATAR_MAX_ENTRIES),
+            Self::Related => (RELATED_BUDGET_BYTES, RELATED_MAX_ENTRIES),
+            Self::Emotes => (EMOTE_BUDGET_BYTES, EMOTE_MAX_ENTRIES),
+            Self::CommentPictures => (COMMENT_PICTURE_BUDGET_BYTES, COMMENT_PICTURE_MAX_ENTRIES),
+        }
+    }
+
+    fn cached(self, cx: &App) -> Entity<LruImageCache> {
+        cx.global::<ImageCacheState>().tiers[self as usize].clone()
+    }
+}
 
 struct ImageCacheState {
-    covers: Entity<LruImageCache>,
-    avatars: Entity<LruImageCache>,
-    related: Entity<LruImageCache>,
+    tiers: [Entity<LruImageCache>; TIER_COUNT],
 }
 
 impl Global for ImageCacheState {}
 
 pub fn init(cx: &mut App) {
-    let covers = LruImageCache::with_limits(cx, COVER_MIN_BUDGET_BYTES, COVER_DEFAULT_ENTRIES);
-    let avatars = LruImageCache::with_limits(cx, AVATAR_BUDGET_BYTES, AVATAR_MAX_ENTRIES);
-    let related = LruImageCache::with_limits(cx, RELATED_BUDGET_BYTES, RELATED_MAX_ENTRIES);
-    cx.set_global(ImageCacheState {
-        covers,
-        avatars,
-        related,
+    let tiers = Tier::ALL.map(|tier| {
+        let (budget_bytes, max_entries) = tier.limits();
+        LruImageCache::with_limits(cx, budget_bytes, max_entries)
     });
+    cx.set_global(ImageCacheState { tiers });
 }
 
 pub fn get(cx: &App) -> Entity<LruImageCache> {
-    cx.global::<ImageCacheState>().covers.clone()
+    Tier::Covers.cached(cx)
 }
 
 pub fn avatars(cx: &App) -> Entity<LruImageCache> {
-    cx.global::<ImageCacheState>().avatars.clone()
+    Tier::Avatars.cached(cx)
 }
 
 /// The playback page's related tiles, kept apart from the grid tier.
 pub fn related(cx: &App) -> Entity<LruImageCache> {
-    cx.global::<ImageCacheState>().related.clone()
+    Tier::Related.cached(cx)
+}
+
+/// Emote images, kept apart from the avatars that share the comment list.
+pub fn emotes(cx: &App) -> Entity<LruImageCache> {
+    Tier::Emotes.cached(cx)
+}
+
+/// Pictures posted in comments, kept apart from the emotes beside them.
+pub fn comment_pictures(cx: &App) -> Entity<LruImageCache> {
+    Tier::CommentPictures.cached(cx)
 }
 
 /// Sizes the cover tier against what the grid actually draws.
@@ -237,7 +290,14 @@ fn decoded_bytes(image: &RenderImage) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{cover_budget, decoded_bytes};
+    use super::{Tier, cover_budget, decoded_bytes};
+
+    #[test]
+    fn tiers_are_indexed_in_declaration_order() {
+        for (index, tier) in Tier::ALL.iter().enumerate() {
+            assert_eq!(*tier as usize, index);
+        }
+    }
     use gpui_kit::RenderImage;
     use image::{Frame, Rgba, RgbaImage};
 

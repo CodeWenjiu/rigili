@@ -21,6 +21,11 @@ pub fn thumbnail(url: &str, width: u32) -> String {
 
 /// Builds a square avatar URL for a Bilibili profile image.
 pub fn avatar(url: &str, size: u32) -> String {
+    square(url, size)
+}
+
+/// Builds a square, center-cropped URL for an arbitrary Bilibili image.
+pub fn square(url: &str, size: u32) -> String {
     let (prefix, rest) = image_parts(url);
     let mut out = String::with_capacity(prefix.len() + rest.len() + 24);
     out.push_str(prefix);
@@ -29,14 +34,28 @@ pub fn avatar(url: &str, size: u32) -> String {
     out
 }
 
-/// Builds a width-only URL for wide images such as space banners.
-pub fn banner(url: &str, width: u32) -> String {
+/// Builds a width-only URL that keeps the image's aspect ratio.
+pub fn scaled(url: &str, width: u32) -> String {
+    resized(url, width, "webp")
+}
+
+/// Builds a width-only PNG URL that keeps the image's aspect ratio.
+pub fn scaled_png(url: &str, width: u32) -> String {
+    resized(url, width, "png")
+}
+
+fn resized(url: &str, width: u32, format: &str) -> String {
     let (prefix, rest) = image_parts(url);
-    let mut out = String::with_capacity(prefix.len() + rest.len() + 16);
+    let mut out = String::with_capacity(prefix.len() + rest.len() + 24);
     out.push_str(prefix);
     out.push_str(rest);
-    let _ = write!(out, "@{width}w_1c.webp");
+    let _ = write!(out, "@{width}w_1c.{format}");
     out
+}
+
+/// Builds a width-only URL for wide images such as space banners.
+pub fn banner(url: &str, width: u32) -> String {
+    scaled(url, width)
 }
 
 fn image_parts(url: &str) -> (&'static str, &str) {
@@ -56,7 +75,7 @@ fn image_parts(url: &str) -> (&'static str, &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{avatar, banner, normalize_url, thumbnail};
+    use super::{avatar, banner, normalize_url, scaled, scaled_png, square, thumbnail};
 
     #[test]
     fn normalizes_protocol_relative_urls() {
@@ -105,6 +124,26 @@ mod tests {
         assert_eq!(
             avatar("//i1.hdslb.com/bfs/face/a.jpg", 96),
             "https://i1.hdslb.com/bfs/face/a.jpg@96w_96h_1c.webp"
+        );
+    }
+
+    #[test]
+    fn builds_square_and_scaled_urls_for_comment_pictures() {
+        assert_eq!(
+            square("//i0.hdslb.com/bfs/new_dyn/a.png", 192),
+            "https://i0.hdslb.com/bfs/new_dyn/a.png@192w_192h_1c.webp"
+        );
+        assert_eq!(
+            scaled("http://i0.hdslb.com/bfs/new_dyn/a.png", 1280),
+            "https://i0.hdslb.com/bfs/new_dyn/a.png@1280w_1c.webp"
+        );
+        assert_eq!(
+            scaled("//i0.hdslb.com/bfs/new_dyn/a.png@320w_1c.webp", 1280),
+            "https://i0.hdslb.com/bfs/new_dyn/a.png@1280w_1c.webp"
+        );
+        assert_eq!(
+            scaled_png("//i0.hdslb.com/bfs/new_dyn/a.png@320w_1c.webp", 800),
+            "https://i0.hdslb.com/bfs/new_dyn/a.png@800w_1c.png"
         );
     }
 }

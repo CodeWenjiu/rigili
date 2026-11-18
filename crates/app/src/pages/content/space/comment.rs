@@ -304,6 +304,13 @@ impl CommentsView {
                                     .child(div().text_xs().text_color(muted).child(time)),
                             )
                             .child(message)
+                            .when(!comment.content.pictures.is_empty(), |this| {
+                                this.child(rigili_core::comment_picture::grid(
+                                    comment.rpid,
+                                    &comment.content.pictures,
+                                    cx,
+                                ))
+                            })
                             .child(
                                 h_flex()
                                     .items_center()

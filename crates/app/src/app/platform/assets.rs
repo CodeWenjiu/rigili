@@ -22,6 +22,7 @@ icon_assets!(
         Radio,
         Share,
         Share2,
+        Sticker,
         Tv,
         Volume,
         Volume1,
@@ -60,6 +61,7 @@ mod tests {
         assert!(AppAssets.load("icons/flame.svg").unwrap().is_some());
         assert!(AppAssets.load("icons/house.svg").unwrap().is_some());
         assert!(AppAssets.load("icons/share.svg").unwrap().is_some());
+        assert!(AppAssets.load("icons/sticker.svg").unwrap().is_some());
         assert!(AppAssets.load("icons/list-video.svg").unwrap().is_some());
         assert!(AppAssets.load("icons/zoom-in.svg").unwrap().is_none());
     }
@@ -86,6 +88,7 @@ mod tests {
             IconName::Radio,
             IconName::RefreshCw,
             IconName::Share2,
+            IconName::Sticker,
             IconName::Tv,
             IconName::Volume,
             IconName::Volume1,

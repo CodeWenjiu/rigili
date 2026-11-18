@@ -91,6 +91,7 @@ mod tests {
                     url: "//i0.hdslb.com/doge.png".into(),
                 },
             )])),
+            pictures: Vec::new(),
         };
 
         assert_eq!(
