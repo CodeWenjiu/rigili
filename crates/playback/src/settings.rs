@@ -53,6 +53,10 @@ pub(crate) struct PlaybackSettings {
     pub(crate) danmaku: DanmakuSettings,
     pub(crate) speed: f64,
     pub(crate) preferred_quality: Option<u32>,
+    /// `None` until the user changes it, so a fresh profile keeps mpv's own default.
+    pub(crate) volume: Option<f64>,
+    /// `None` until the user toggles it; `Some(false)` is a deliberate unmute.
+    pub(crate) mute: Option<bool>,
     #[serde(skip)]
     dirty: bool,
 }
@@ -63,6 +67,8 @@ impl Default for PlaybackSettings {
             danmaku: DanmakuSettings::default(),
             speed: 1.0,
             preferred_quality: None,
+            volume: None,
+            mute: None,
             dirty: false,
         }
     }
@@ -116,6 +122,10 @@ impl PlaybackSettings {
         } else {
             self.speed = 1.0;
         }
+        self.volume = self
+            .volume
+            .filter(|volume| volume.is_finite())
+            .map(|volume| volume.clamp(0.0, 100.0));
     }
 
     fn load_from(dir: &Path) -> Self {
@@ -193,6 +203,8 @@ mod tests {
             },
             speed: 2.0,
             preferred_quality: Some(80),
+            volume: Some(42.0),
+            mute: Some(true),
             dirty: false,
         };
         settings.save_to(&dir).expect("save");
@@ -206,7 +218,7 @@ mod tests {
         let dir = temp_dir("invalid");
         fs::write(
             dir.join(super::FILE_NAME),
-            r#"{"danmaku":{"opacity":4.0,"font_scale":0.1},"speed":12.0}"#,
+            r#"{"danmaku":{"opacity":4.0,"font_scale":0.1},"speed":12.0,"volume":140.0}"#,
         )
         .expect("write");
 
@@ -214,6 +226,7 @@ mod tests {
         assert_eq!(loaded.danmaku.opacity, 1.0);
         assert_eq!(loaded.danmaku.font_scale, 0.5);
         assert_eq!(loaded.speed, 4.0);
+        assert_eq!(loaded.volume, Some(100.0));
 
         let mut danmaku = DanmakuSettings {
             scroll_seconds: f64::NAN,

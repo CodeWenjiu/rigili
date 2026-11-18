@@ -129,13 +129,15 @@ impl PlayerView {
         self.player.set_osd(overlay);
     }
     pub(super) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let persisted = crate::settings::current(cx);
+        let initial_volume = persisted.volume.unwrap_or(100.);
         let progress = cx.new(|_| SliderState::new().min(0.0).max(1.0).step(0.1));
         let volume = cx.new(|_| {
             SliderState::new()
                 .min(0.0)
                 .max(100.0)
                 .step(1.0)
-                .default_value(100.0)
+                .default_value(initial_volume as f32)
         });
 
         let mut subscriptions = vec![cx.subscribe_in(
@@ -144,7 +146,6 @@ impl PlayerView {
             |this, _, event: &SliderEvent, window, cx| this.on_volume(event, window, cx),
         )];
         let volume_popup = cx.new(|cx| VolumePopup::new(volume.clone(), cx));
-        let persisted = crate::settings::current(cx);
         let font_family = cx.theme().font_family.clone();
         let danmaku_layer = danmaku::DanmakuLayer::new(persisted.danmaku, font_family);
 
@@ -194,9 +195,21 @@ impl PlayerView {
             .find(|value| (value - persisted.speed).abs() < 1e-3)
             .unwrap_or(1.0);
         player.set_speed(speed);
+        if let Some(volume) = persisted.volume {
+            player.set_volume(volume);
+        }
+        if let Some(muted) = persisted.mute {
+            player.set_muted(muted);
+        }
         let status_source = player.status();
         let mut status = (*status_source).clone();
         status.speed = speed;
+        if let Some(volume) = persisted.volume {
+            status.volume = volume;
+        }
+        if let Some(muted) = persisted.mute {
+            status.muted = muted;
+        }
         let native = create_native_surface(window);
 
         Self {
@@ -563,6 +576,7 @@ impl PlayerView {
         let muted = !self.status.muted;
         self.status.muted = muted;
         self.player.set_muted(muted);
+        crate::settings::update(cx, |settings| settings.mute = Some(muted));
         self.last_activity = Instant::now();
         cx.notify();
     }
