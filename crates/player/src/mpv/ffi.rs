@@ -131,6 +131,11 @@ unsafe extern "C" {
         data: *const c_char,
     ) -> c_int;
     pub(super) fn mpv_command(ctx: *mut MpvHandle, args: *const *const c_char) -> c_int;
+    pub(super) fn mpv_command_node(
+        ctx: *mut MpvHandle,
+        args: *mut MpvNode,
+        result: *mut MpvNode,
+    ) -> c_int;
     pub(super) fn mpv_command_async(
         ctx: *mut MpvHandle,
         reply_userdata: u64,

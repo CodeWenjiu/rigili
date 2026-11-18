@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    VideoSize,
+    OsdOverlay, VideoSize,
     mpv::RenderWake,
     native::{NATIVE_SLOTS, NativeFrame},
 };
@@ -54,6 +54,7 @@ pub(super) enum Command {
     SetMute(bool),
     SetSpeed(f64),
     SetViewport(VideoSize),
+    SetOsd(Option<OsdOverlay>),
     Shutdown,
 }
 
@@ -171,6 +172,11 @@ impl Player {
         drop(viewport);
 
         self.send(Command::SetViewport(size));
+    }
+
+    /// Replaces the external ASS overlay drawn over the video, or clears it.
+    pub fn set_osd(&self, overlay: Option<OsdOverlay>) {
+        self.send(Command::SetOsd(overlay));
     }
 
     pub fn take_frame(&self) -> Option<VideoFrame> {

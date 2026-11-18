@@ -206,7 +206,7 @@ fn danmaku_settings_group(
                 .on_click(move |index, _, cx| {
                     let value = options[*index].0;
                     let _ = weak.update(cx, |this, cx| {
-                        let settings = apply(this.danmaku_settings(cx), value);
+                        let settings = apply(this.danmaku_settings(), value);
                         this.apply_danmaku_settings(settings, cx);
                     });
                 }),

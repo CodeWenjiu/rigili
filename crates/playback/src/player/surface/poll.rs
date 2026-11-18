@@ -8,6 +8,7 @@ use image::RgbaImage;
 use rigili_core::cursor;
 use rigili_player::{BufferedRange, PlaybackPhase, PlayerStatus, VideoFrame};
 
+use super::native::contain_rect;
 use super::{IDLE_POLL_INTERVAL, PAUSED_POLL_INTERVAL, POLL_INTERVAL, PlayerView};
 
 impl PlayerView {
@@ -26,7 +27,7 @@ impl PlayerView {
             rigili_monitor::monitor!(
                 "ui",
                 "pump interval {interval:?} (active danmaku {})",
-                self.danmaku_layer.read(cx).active_count()
+                self.danmaku_layer.active_count()
             );
         }
 
@@ -77,18 +78,23 @@ impl PlayerView {
 
         if let Some(area) = self.video_bounds.get() {
             let time = self.playback_time();
-            let scale = self.status.video_size.map_or(1.0, |size| {
-                (f32::from(area.size.width) / size.width as f32)
-                    .min(f32::from(area.size.height) / size.height as f32)
-            });
+            let (width, height, scale) = match self.status.video_size {
+                Some(video) => {
+                    let rect = contain_rect(area, video);
+                    let width = f32::from(rect.size.width);
+                    let height = f32::from(rect.size.height);
+                    (width, height, width / video.width as f32)
+                }
+                None => (f32::from(area.size.width), f32::from(area.size.height), 1.0),
+            };
             let started = Instant::now();
-            self.update_danmaku(time, area, scale, window, cx);
+            self.update_danmaku(time, width, height, scale, window.scale_factor());
             let elapsed = started.elapsed();
             if elapsed > Duration::from_millis(2) {
                 rigili_monitor::monitor!(
                     "danmaku",
                     "update {elapsed:?} ({} active)",
-                    self.danmaku_layer.read(cx).active_count()
+                    self.danmaku_layer.active_count()
                 );
             }
         }

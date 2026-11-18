@@ -185,7 +185,7 @@ pub(super) fn create_native_surface(window: &mut Window) -> Option<NativeSurface
     })
 }
 
-fn contain_rect(area: Bounds<Pixels>, source: VideoSize) -> Bounds<Pixels> {
+pub(super) fn contain_rect(area: Bounds<Pixels>, source: VideoSize) -> Bounds<Pixels> {
     let area_width = f32::from(area.size.width);
     let area_height = f32::from(area.size.height);
     let scale = (area_width / source.width as f32).min(area_height / source.height as f32);

@@ -3,17 +3,17 @@ use std::{
     ptr::{NonNull, null_mut},
 };
 
-use crate::{VideoSize, playback::BufferedRange};
+use crate::{OsdOverlay, VideoSize, playback::BufferedRange};
 
 use super::{
     error::{MpvError, c_string, check},
     ffi::{
         MPV_FORMAT_DOUBLE, MPV_FORMAT_FLAG, MPV_FORMAT_INT64, MPV_FORMAT_NODE,
         MPV_FORMAT_NODE_ARRAY, MPV_FORMAT_NODE_MAP, MPV_FORMAT_STRING, MpvEvent, MpvHandle,
-        MpvNode, MpvNodeValue, mpv_abort_async_command, mpv_command, mpv_command_async, mpv_create,
-        mpv_free, mpv_free_node_contents, mpv_get_property, mpv_initialize,
-        mpv_request_log_messages, mpv_set_option_string, mpv_set_property, mpv_terminate_destroy,
-        mpv_wait_event,
+        MpvNode, MpvNodeList, MpvNodeValue, mpv_abort_async_command, mpv_command,
+        mpv_command_async, mpv_command_node, mpv_create, mpv_free, mpv_free_node_contents,
+        mpv_get_property, mpv_initialize, mpv_request_log_messages, mpv_set_option_string,
+        mpv_set_property, mpv_terminate_destroy, mpv_wait_event,
     },
 };
 
@@ -105,6 +105,82 @@ impl Mpv {
 
     pub(crate) fn abort_async_command(&self, userdata: u64) {
         unsafe { mpv_abort_async_command(self.handle.as_ptr(), userdata) };
+    }
+
+    pub(crate) fn set_osd_overlay(&self, overlay: Option<&OsdOverlay>) -> Result<(), MpvError> {
+        let (format, data, res_x, res_y) = match overlay {
+            Some(overlay) => (
+                Arg::Text("ass-events"),
+                Arg::Text(overlay.data.as_str()),
+                Arg::Int(i64::from(overlay.width)),
+                Arg::Int(i64::from(overlay.height)),
+            ),
+            None => (Arg::Text("none"), Arg::Text(""), Arg::Int(0), Arg::Int(0)),
+        };
+        self.command_map(&[
+            ("name", Arg::Text("osd-overlay")),
+            ("id", Arg::Int(0)),
+            ("format", format),
+            ("data", data),
+            ("res_x", res_x),
+            ("res_y", res_y),
+            ("z", Arg::Int(0)),
+        ])
+    }
+
+    fn command_map(&self, args: &[(&str, Arg<'_>)]) -> Result<(), MpvError> {
+        let keys = args
+            .iter()
+            .map(|(key, _)| c_string(key))
+            .collect::<Result<Vec<_>, _>>()?;
+        let texts = args
+            .iter()
+            .map(|(_, arg)| match arg {
+                Arg::Text(text) => c_string(text).map(Some),
+                Arg::Int(_) => Ok(None),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut key_pointers = keys
+            .iter()
+            .map(|key| key.as_ptr().cast_mut())
+            .collect::<Vec<_>>();
+        let mut values = args
+            .iter()
+            .zip(&texts)
+            .map(|((_, arg), text)| match arg {
+                Arg::Text(_) => MpvNode {
+                    value: MpvNodeValue {
+                        string: text
+                            .as_ref()
+                            .map(|text| text.as_ptr().cast_mut())
+                            .unwrap_or(std::ptr::null_mut()),
+                    },
+                    format: MPV_FORMAT_STRING,
+                },
+                Arg::Int(value) => MpvNode {
+                    value: MpvNodeValue { int64: *value },
+                    format: MPV_FORMAT_INT64,
+                },
+            })
+            .collect::<Vec<_>>();
+
+        let mut list = MpvNodeList {
+            num: values.len() as c_int,
+            values: values.as_mut_ptr(),
+            keys: key_pointers.as_mut_ptr(),
+        };
+        let mut root = MpvNode {
+            value: MpvNodeValue { list: &mut list },
+            format: MPV_FORMAT_NODE_MAP,
+        };
+        let mut result = MpvNode {
+            value: MpvNodeValue { int64: 0 },
+            format: 0,
+        };
+        let code = unsafe { mpv_command_node(self.handle.as_ptr(), &mut root, &mut result) };
+        unsafe { mpv_free_node_contents(&mut result) };
+        check(code)
     }
 
     pub(crate) fn set_property_double(&self, name: &str, value: f64) -> Result<(), MpvError> {
@@ -260,6 +336,11 @@ fn command_pointers(args: &[&str]) -> Result<(Vec<CString>, Vec<*const c_char>),
     Ok((strings, pointers))
 }
 
+enum Arg<'a> {
+    Text(&'a str),
+    Int(i64),
+}
+
 fn seekable_ranges(node: &MpvNode) -> Vec<BufferedRange> {
     let Some(ranges) = map_get(node, b"seekable-ranges") else {
         return Vec::new();
@@ -334,5 +415,23 @@ pub(crate) struct CacheState {
 impl Drop for Mpv {
     fn drop(&mut self) {
         unsafe { mpv_terminate_destroy(self.handle.as_ptr()) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Mpv;
+    use crate::OsdOverlay;
+
+    #[test]
+    fn accepts_an_external_ass_overlay() {
+        let mpv = Mpv::new(&[]).expect("mpv");
+        let overlay = OsdOverlay {
+            data: "{\\an7\\pos(10,10)}hello".to_owned(),
+            width: 1280,
+            height: 720,
+        };
+        mpv.set_osd_overlay(Some(&overlay)).expect("set overlay");
+        mpv.set_osd_overlay(None).expect("clear overlay");
     }
 }

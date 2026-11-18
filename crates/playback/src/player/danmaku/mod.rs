@@ -13,6 +13,7 @@ use gpui_kit::*;
 use rigili_bilibili::{Client, Danmaku};
 use rigili_core::api_task_error_message;
 use rigili_core::runtime::spawn_api;
+use rigili_player::OsdOverlay;
 
 use crate::player::surface::PlayerView;
 use crate::settings::DanmakuSettings;
@@ -77,35 +78,27 @@ impl DanmakuLayer {
         }
     }
 
-    pub(super) fn update(
-        &mut self,
-        time: f64,
-        area: Bounds<Pixels>,
-        scale: f32,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn update(&mut self, time: f64, width: f32, height: f32, scale: f32) -> bool {
         if !self.state.settings().enabled {
-            return;
+            return false;
         }
-        if self.state.update(time, area, scale, window) {
-            cx.notify();
-        }
+        self.state.update(time, width, height, scale)
     }
 
-    pub(super) fn clear(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn ass(&self, device_scale: f32) -> String {
+        self.state.ass(device_scale)
+    }
+
+    pub(super) fn clear(&mut self) {
         self.state.clear();
-        cx.notify();
     }
 
-    pub(super) fn set_sorted(&mut self, items: Arc<Vec<Danmaku>>, cx: &mut Context<Self>) {
+    pub(super) fn set_sorted(&mut self, items: Arc<Vec<Danmaku>>) {
         self.state.set_sorted(items);
-        cx.notify();
     }
 
-    pub(super) fn seek(&mut self, time: f64, cx: &mut Context<Self>) {
+    pub(super) fn seek(&mut self, time: f64) {
         self.state.seek(time);
-        cx.notify();
     }
 
     pub(super) fn settings(&self) -> DanmakuSettings {
@@ -116,66 +109,57 @@ impl DanmakuLayer {
         self.state.active_count()
     }
 
-    pub(super) fn set_settings(
-        &mut self,
-        settings: DanmakuSettings,
-        time: f64,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn set_settings(&mut self, settings: DanmakuSettings, time: f64) {
         self.state.update_settings(settings, time);
-        cx.notify();
-    }
-}
-
-impl Render for DanmakuLayer {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        if self.state.settings().enabled {
-            self.state.render().into_any_element()
-        } else {
-            div().absolute().size_full().into_any_element()
-        }
     }
 }
 
 impl PlayerView {
     pub(crate) fn clear_danmaku(&mut self, cx: &mut Context<Self>) {
         self.danmaku_demand.set_position(0.);
-        self.danmaku_layer.update(cx, |layer, cx| layer.clear(cx));
+        self.danmaku_layer.clear();
+        self.set_danmaku_overlay(None);
+        cx.notify();
     }
 
     pub(crate) fn set_danmaku(&mut self, items: Arc<Vec<Danmaku>>, cx: &mut Context<Self>) {
-        self.danmaku_layer
-            .update(cx, |layer, cx| layer.set_sorted(items, cx));
+        self.danmaku_layer.set_sorted(items);
+        cx.notify();
     }
 
     pub(super) fn update_danmaku(
         &mut self,
         time: f64,
-        area: Bounds<Pixels>,
+        width: f32,
+        height: f32,
         scale: f32,
-        window: &Window,
-        cx: &mut Context<Self>,
+        device_scale: f32,
     ) {
-        self.danmaku_layer
-            .update(cx, |layer, cx| layer.update(time, area, scale, window, cx));
+        if self.danmaku_layer.update(time, width, height, scale) {
+            self.set_danmaku_overlay(Some(OsdOverlay {
+                data: self.danmaku_layer.ass(device_scale),
+                width: (width * device_scale).round() as u32,
+                height: (height * device_scale).round() as u32,
+            }));
+        }
     }
 
     pub(super) fn seek_danmaku(&mut self, time: f64, cx: &mut Context<Self>) {
         self.danmaku_demand.set_position(time);
-        self.danmaku_layer
-            .update(cx, |layer, cx| layer.seek(time, cx));
+        self.danmaku_layer.seek(time);
+        cx.notify();
     }
 
     pub(crate) fn danmaku_demand(&self) -> Arc<DanmakuDemand> {
         self.danmaku_demand.clone()
     }
 
-    pub(crate) fn danmaku_settings(&self, cx: &App) -> DanmakuSettings {
-        self.danmaku_layer.read(cx).settings()
+    pub(crate) fn danmaku_settings(&self) -> DanmakuSettings {
+        self.danmaku_layer.settings()
     }
 
     pub(crate) fn toggle_danmaku(&mut self, cx: &mut Context<Self>) {
-        let mut settings = self.danmaku_settings(cx);
+        let mut settings = self.danmaku_settings();
         settings.enabled = !settings.enabled;
         self.apply_danmaku_settings(settings, cx);
     }
@@ -187,8 +171,10 @@ impl PlayerView {
     ) {
         let time = self.playback_time();
         self.danmaku_demand.set_enabled(settings.enabled);
-        self.danmaku_layer
-            .update(cx, |layer, cx| layer.set_settings(settings, time, cx));
+        self.danmaku_layer.set_settings(settings, time);
+        if !settings.enabled {
+            self.set_danmaku_overlay(None);
+        }
         crate::settings::update(cx, |persisted| persisted.danmaku = settings);
         self.last_activity = Instant::now();
         cx.notify();

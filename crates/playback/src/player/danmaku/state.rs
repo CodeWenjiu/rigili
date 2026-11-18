@@ -1,9 +1,5 @@
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{fmt::Write as _, sync::Arc};
 
-use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::{Danmaku, DanmakuMode};
 
@@ -18,24 +14,27 @@ const SPAWN_GRACE: f64 = 0.5;
 const SEEK_BACK: f64 = 1.0;
 const SEEK_FORWARD: f64 = 1.0;
 const TIME_EPSILON: f64 = 0.001;
+
 #[derive(Default)]
 pub(super) struct DanmakuState {
     items: Arc<Vec<Danmaku>>,
     cursor: usize,
     last_time: Option<f64>,
-    area: Option<Bounds<Pixels>>,
+    area: Option<(f32, f32)>,
     scale: f32,
     lane_height: f32,
     lanes: Vec<f64>,
-    active: Rc<RefCell<Vec<ActiveDanmaku>>>,
+    active: Vec<ActiveDanmaku>,
     settings: DanmakuSettings,
     font_family: SharedString,
+    dirty: bool,
 }
 
 struct ActiveDanmaku {
-    line: ShapedLine,
-    line_height: Pixels,
-    position: Point<Pixels>,
+    text: String,
+    font_size: f32,
+    color: u32,
+    position: (f32, f32),
     width: f32,
     start: f64,
     expires: f64,
@@ -57,18 +56,21 @@ impl DanmakuState {
         self.items = items;
         let time = self.last_time.unwrap_or(0.);
         self.cursor = self.items.partition_point(|item| item.time < time);
+        self.dirty = true;
     }
 
     pub(super) fn clear(&mut self) {
         self.items = Arc::new(Vec::new());
         self.cursor = 0;
         self.last_time = None;
-        self.active.borrow_mut().clear();
+        self.active.clear();
         self.lanes.fill(0.);
+        self.dirty = true;
     }
 
     pub(super) fn seek(&mut self, time: f64) {
         self.reset_at(time);
+        self.dirty = true;
     }
 
     fn active_limit(&self) -> usize {
@@ -80,7 +82,7 @@ impl DanmakuState {
     }
 
     pub(super) fn active_count(&self) -> usize {
-        self.active.borrow().len()
+        self.active.len()
     }
 
     pub(super) fn update_settings(&mut self, settings: DanmakuSettings, time: f64) {
@@ -88,44 +90,44 @@ impl DanmakuState {
             return;
         }
         self.settings = settings;
-        self.active.borrow_mut().clear();
+        self.active.clear();
         self.apply_metrics();
         self.reset_at(time);
+        self.dirty = true;
     }
 
     fn apply_metrics(&mut self) {
-        let Some(area) = self.area else {
+        let Some((_, height)) = self.area else {
             return;
         };
-        let height = f32::from(area.size.height);
         self.lane_height = (self.scale * self.settings.font_scale * 25. * 1.5).max(1.);
         let lanes = (height * self.settings.area_ratio / self.lane_height).floor() as usize;
         self.lanes = vec![0.; lanes.max(1)];
     }
 
-    fn lane_y(&self, lane: usize, area: Bounds<Pixels>, bottom: bool) -> Pixels {
+    fn lane_y(&self, lane: usize, bottom: bool) -> f32 {
         if bottom {
-            area.origin.y + px(f32::from(area.size.height) - (lane as f32 + 1.) * self.lane_height)
+            let height = self.area.map_or(0., |(_, height)| height);
+            height - (lane as f32 + 1.) * self.lane_height
         } else {
-            area.origin.y + px(lane as f32 * self.lane_height)
+            lane as f32 * self.lane_height
         }
     }
 
-    fn layout_active(&mut self, active: &mut Vec<ActiveDanmaku>, time: f64, area: Bounds<Pixels>) {
+    fn layout_active(&mut self, active: &mut Vec<ActiveDanmaku>, time: f64, width: f32) {
         let count = self.lanes.len();
         active.retain(|item| item.lane < count);
-        let width = f32::from(area.size.width);
         let speed = self.settings.scroll_seconds;
 
         for item in active.iter_mut() {
-            let y = self.lane_y(item.lane, area, item.bottom);
+            let y = self.lane_y(item.lane, item.bottom);
             let x = if item.scroll {
                 let elapsed = (time - item.start).max(0.) as f32;
-                area.origin.x + px(width - elapsed / speed as f32 * (width + item.width))
+                width - elapsed / speed as f32 * (width + item.width)
             } else {
-                area.origin.x + px((width - item.width) / 2.)
+                (width - item.width) / 2.
             };
-            item.position = point(x, y);
+            item.position = (x, y);
 
             let free_at = if item.scroll {
                 item.start + f64::from(item.width) * speed / f64::from(width + item.width) + 0.15
@@ -138,31 +140,23 @@ impl DanmakuState {
         }
     }
 
-    pub(super) fn update(
-        &mut self,
-        time: f64,
-        area: Bounds<Pixels>,
-        scale: f32,
-        window: &Window,
-    ) -> bool {
-        let width = f32::from(area.size.width);
-        let height = f32::from(area.size.height);
+    pub(super) fn update(&mut self, time: f64, width: f32, height: f32, scale: f32) -> bool {
         if width <= 0. || height <= 0. {
             return false;
         }
 
         let scale = scale.clamp(0.7, 1.6);
-        let resized = self.area.is_none_or(|last| last != area);
+        let resized = self.area.is_none_or(|last| last != (width, height));
         let rescaled = (self.scale - scale).abs() > f32::EPSILON;
-        self.area = Some(area);
+        self.area = Some((width, height));
 
-        let mut active = std::mem::take(&mut *self.active.borrow_mut());
-        let mut changed = false;
+        let mut active = std::mem::take(&mut self.active);
+        let mut changed = std::mem::take(&mut self.dirty);
 
         if resized || rescaled {
             self.scale = scale;
             self.apply_metrics();
-            self.layout_active(&mut active, time, area);
+            self.layout_active(&mut active, time, width);
             changed = true;
         }
 
@@ -173,8 +167,8 @@ impl DanmakuState {
                 .get(self.cursor)
                 .is_some_and(|item| item.time <= time);
             if !resized && !rescaled && (time - last).abs() < TIME_EPSILON && !backlog {
-                *self.active.borrow_mut() = active;
-                return false;
+                self.active = active;
+                return changed;
             }
             if is_discontinuity(last, time) {
                 rigili_monitor::monitor!("danmaku", "discontinuity {last:.3} -> {time:.3}");
@@ -190,8 +184,7 @@ impl DanmakuState {
             if item.scroll {
                 let elapsed = (time - item.start).max(0.) as f32;
                 let speed = self.settings.scroll_seconds as f32;
-                let x = width - elapsed / speed * (width + item.width);
-                item.position = point(area.origin.x + px(x), item.position.y);
+                item.position.0 = width - elapsed / speed * (width + item.width);
             }
         }
         let before = active.len();
@@ -220,7 +213,7 @@ impl DanmakuState {
                 continue;
             }
             let item = item.clone();
-            if self.spawn(&item, time, area, window, &mut active) {
+            if self.spawn(&item, time, width, &mut active) {
                 changed = true;
                 spawned += 1;
                 if spawned >= MAX_SPAWN_PER_UPDATE {
@@ -229,58 +222,36 @@ impl DanmakuState {
             }
         }
 
-        *self.active.borrow_mut() = active;
+        self.active = active;
         changed
     }
 
-    pub(super) fn render(&self) -> impl IntoElement {
-        let active = self.active.clone();
-        let clip = self.area;
-        canvas(
-            |_, _, _| {},
-            move |_, _, window, cx| {
-                let Some(clip) = clip else {
-                    return;
-                };
-                window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
-                    let started = Instant::now();
-                    let items = active.borrow();
-                    let left = clip.origin.x;
-                    let top = clip.origin.y;
-                    let right = left + clip.size.width;
-                    let bottom = top + clip.size.height;
-                    for item in items.iter() {
-                        if item.position.x + px(item.width) <= left
-                            || item.position.x >= right
-                            || item.position.y + item.line_height <= top
-                            || item.position.y >= bottom
-                        {
-                            continue;
-                        }
-                        let _ = item.line.paint(
-                            item.position,
-                            item.line_height,
-                            TextAlign::Left,
-                            None,
-                            window,
-                            cx,
-                        );
-                    }
-                    let elapsed = started.elapsed();
-                    let count = items.len();
-                    drop(items);
-                    if elapsed > Duration::from_millis(3) {
-                        rigili_monitor::monitor!("danmaku", "paint {count} items in {elapsed:?}");
-                    }
-                });
-            },
-        )
-        .absolute()
-        .size_full()
+    pub(super) fn ass(&self, device_scale: f32) -> String {
+        let alpha = ((1. - self.settings.opacity.clamp(0.05, 1.)) * 255.).round() as u8;
+        let mut out = String::with_capacity(self.active.len() * 64);
+        for item in &self.active {
+            let red = ((item.color >> 16) & 0xff) as u8;
+            let green = ((item.color >> 8) & 0xff) as u8;
+            let blue = (item.color & 0xff) as u8;
+            let _ = writeln!(
+                out,
+                "{{\\an7\\pos({:.1},{:.1})\\fn{}\\fs{:.1}\\c&H{:02X}{:02X}{:02X}&\\alpha&H{:02X}&\\bord0\\shad0}}{}",
+                item.position.0 * device_scale,
+                item.position.1 * device_scale,
+                self.font_family,
+                item.font_size * device_scale,
+                blue,
+                green,
+                red,
+                alpha,
+                escape_ass(&item.text)
+            );
+        }
+        out
     }
 
     fn reset_at(&mut self, time: f64) {
-        self.active.borrow_mut().clear();
+        self.active.clear();
         self.lanes.fill(0.);
         self.cursor = self.items.partition_point(|item| item.time < time);
         self.last_time = Some(time);
@@ -290,31 +261,12 @@ impl DanmakuState {
         &mut self,
         item: &Danmaku,
         now: f64,
-        area: Bounds<Pixels>,
-        window: &Window,
+        width: f32,
         active: &mut Vec<ActiveDanmaku>,
     ) -> bool {
-        let width = f32::from(area.size.width);
         let font_size =
             (item.font_size.max(18) as f32 * self.scale * self.settings.font_scale).clamp(14., 64.);
-        let line_height = px(font_size * 1.4);
-        let text: SharedString = item.text.clone().into();
-        let mut font = window.text_style().font();
-        if !self.font_family.is_empty() {
-            font.family = self.font_family.clone();
-        }
-        let run = TextRun {
-            len: text.len(),
-            font,
-            color: danmaku_color(item.color, self.settings.opacity),
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let line = window
-            .text_system()
-            .shape_line(text, px(font_size), &[run], None);
-        let text_width = f32::from(line.width());
+        let text_width = estimate_width(&item.text, font_size);
         let scrolling = !matches!(item.mode, DanmakuMode::Top | DanmakuMode::Bottom);
 
         let free_for = if scrolling {
@@ -327,22 +279,21 @@ impl DanmakuState {
             return false;
         };
         let bottom = item.mode == DanmakuMode::Bottom;
-        let y = self.lane_y(lane, area, bottom);
+        let y = self.lane_y(lane, bottom);
 
         let x = match item.mode {
-            DanmakuMode::Top | DanmakuMode::Bottom => area.origin.x + px((width - text_width) / 2.),
+            DanmakuMode::Top | DanmakuMode::Bottom => (width - text_width) / 2.,
             _ => {
                 let elapsed = (now - item.time).max(0.) as f32;
-                let x =
-                    width - elapsed / self.settings.scroll_seconds as f32 * (width + text_width);
-                area.origin.x + px(x)
+                width - elapsed / self.settings.scroll_seconds as f32 * (width + text_width)
             }
         };
 
         active.push(ActiveDanmaku {
-            line,
-            line_height,
-            position: point(x, y),
+            text: item.text.clone(),
+            font_size,
+            color: item.color,
+            position: (x, y),
             width: text_width,
             start: item.time,
             expires: item.time
@@ -382,20 +333,52 @@ fn active_limit(lanes: usize) -> usize {
     (lanes * ACTIVE_PER_LANE).clamp(MIN_ACTIVE, MAX_ACTIVE)
 }
 
-fn danmaku_color(rgb: u32, opacity: f32) -> Hsla {
-    Rgba {
-        r: ((rgb >> 16) & 0xff) as f32 / 255.,
-        g: ((rgb >> 8) & 0xff) as f32 / 255.,
-        b: (rgb & 0xff) as f32 / 255.,
-        a: opacity.clamp(0.05, 1.0),
+fn escape_ass(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '\\' => {}
+            '{' => out.push_str("\\{"),
+            '}' => out.push_str("\\}"),
+            '\n' | '\r' => out.push(' '),
+            _ => out.push(ch),
+        }
     }
-    .into()
+    out
+}
+
+// libass needs a text width before anything is rendered, and shaping it here
+// would mean carrying a text system into the player thread.
+fn estimate_width(text: &str, font_size: f32) -> f32 {
+    let units: f32 = text.chars().map(char_units).sum();
+    units * font_size / 2.
+}
+
+fn char_units(ch: char) -> f32 {
+    if is_wide(ch) { 2. } else { 1. }
+}
+
+fn is_wide(ch: char) -> bool {
+    matches!(
+        u32::from(ch),
+        0x1100..=0x115F
+            | 0x2E80..=0xA4CF
+            | 0xAC00..=0xD7A3
+            | 0xF900..=0xFAFF
+            | 0xFE30..=0xFE4F
+            | 0xFF00..=0xFF60
+            | 0xFFE0..=0xFFE6
+            | 0x1F300..=0x1FAFF
+            | 0x20000..=0x3FFFD
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::DanmakuSettings;
-    use super::{DanmakuState, MAX_ACTIVE, MIN_ACTIVE, active_limit, is_discontinuity};
+    use super::{DanmakuState, MAX_ACTIVE, MIN_ACTIVE, active_limit, escape_ass, is_discontinuity};
+    use crate::settings::DanmakuSettings;
+    use rigili_bilibili::{Danmaku, DanmakuMode};
+    use std::sync::Arc;
 
     #[test]
     fn detects_only_real_seeks() {
@@ -427,8 +410,8 @@ mod tests {
             ..DanmakuSettings::default()
         };
         state.update_settings(settings, 5.0);
-        assert!(state.active.borrow().is_empty());
-        assert!(!state.settings().enabled);
+        assert!(state.active.is_empty());
+        assert!(!state.settings.enabled);
     }
 
     #[test]
@@ -441,8 +424,6 @@ mod tests {
 
     #[test]
     fn keeps_the_cursor_when_items_are_replaced() {
-        use rigili_bilibili::{Danmaku, DanmakuMode};
-
         let item = |time| Danmaku {
             time,
             mode: DanmakuMode::Scroll,
@@ -454,14 +435,56 @@ mod tests {
             last_time: Some(5.0),
             ..DanmakuState::default()
         };
-        state.set_sorted(std::sync::Arc::new(vec![
-            item(0.0),
-            item(1.0),
-            item(6.0),
-            item(9.0),
-        ]));
+        state.set_sorted(Arc::new(vec![item(0.0), item(1.0), item(6.0), item(9.0)]));
 
         assert_eq!(state.cursor, 2);
         assert_eq!(state.active_count(), 0);
+    }
+
+    #[test]
+    fn seeking_requests_one_redraw() {
+        let mut state = DanmakuState {
+            area: Some((1280., 720.)),
+            scale: 1.,
+            last_time: Some(3.),
+            ..DanmakuState::default()
+        };
+        state.apply_metrics();
+        state.seek(3.);
+
+        assert!(state.update(3., 1280., 720., 1.));
+        assert!(!state.update(3., 1280., 720., 1.));
+    }
+
+    #[test]
+    fn writes_ass_events_with_position_and_colour() {
+        let mut state = DanmakuState {
+            area: Some((1280., 720.)),
+            scale: 1.,
+            ..DanmakuState::default()
+        };
+        state.apply_metrics();
+
+        let mut active = Vec::new();
+        let item = Danmaku {
+            time: 1.0,
+            mode: DanmakuMode::Scroll,
+            font_size: 25,
+            color: 0x00ff_0000,
+            text: "hi".into(),
+        };
+        assert!(state.spawn(&item, 1.0, 1280., &mut active));
+        state.active = active;
+
+        let ass = state.ass(1.);
+        assert!(ass.contains("\\an7"));
+        assert!(ass.contains("\\pos("));
+        assert!(ass.contains("\\c&H0000FF&"));
+        assert!(ass.ends_with("}hi\n"), "{ass}");
+    }
+
+    #[test]
+    fn escapes_ass_override_braces() {
+        assert_eq!(escape_ass("a{b}c\\d"), "a\\{b\\}cd");
     }
 }

@@ -10,7 +10,7 @@ use gpui_kit::component::slider::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::{Chapter, VideoPage, VideoShot};
-use rigili_player::{PlaybackPhase, Player, PlayerStatus};
+use rigili_player::{OsdOverlay, PlaybackPhase, Player, PlayerStatus};
 
 use super::controls::VolumePopup;
 use super::danmaku;
@@ -103,7 +103,7 @@ pub(super) struct PlayerView {
     progress_bounds: Option<Bounds<Pixels>>,
     focus: FocusHandle,
     speed_hold: Option<SpeedHold>,
-    pub(super) danmaku_layer: Entity<danmaku::DanmakuLayer>,
+    pub(super) danmaku_layer: danmaku::DanmakuLayer,
     pub(super) danmaku_input: Entity<gpui_kit::component::input::InputState>,
     pub(super) danmaku_source: Option<danmaku::DanmakuSource>,
     pub(super) danmaku_demand: Arc<danmaku::DanmakuDemand>,
@@ -125,6 +125,9 @@ pub(super) enum PlayerEvent {
 impl EventEmitter<PlayerEvent> for PlayerView {}
 
 impl PlayerView {
+    pub(super) fn set_danmaku_overlay(&mut self, overlay: Option<OsdOverlay>) {
+        self.player.set_osd(overlay);
+    }
     pub(super) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let progress = cx.new(|_| SliderState::new().min(0.0).max(1.0).step(0.1));
         let volume = cx.new(|_| {
@@ -143,7 +146,7 @@ impl PlayerView {
         let volume_popup = cx.new(|cx| VolumePopup::new(volume.clone(), cx));
         let persisted = crate::settings::current(cx);
         let font_family = cx.theme().font_family.clone();
-        let danmaku_layer = cx.new(|_| danmaku::DanmakuLayer::new(persisted.danmaku, font_family));
+        let danmaku_layer = danmaku::DanmakuLayer::new(persisted.danmaku, font_family);
 
         let progress_sub = Some(cx.subscribe_in(
             &progress,

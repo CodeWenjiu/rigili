@@ -359,6 +359,7 @@ impl State {
                     status.error = None;
                 });
                 lock(frame_slot).take();
+                let _ = mpv.set_osd_overlay(None);
 
                 if let Err(error) = mpv.command(&["loadfile", video.as_str(), "replace"]) {
                     rigili_monitor::monitor!("mpv", "loadfile failed: {error}");
@@ -390,6 +391,7 @@ impl State {
             }
             Command::Stop => {
                 self.generation = self.generation.wrapping_add(1);
+                let _ = mpv.set_osd_overlay(None);
                 self.pending_audio.take();
                 self.pending_seek = None;
                 self.pending_pause = false;
@@ -453,6 +455,12 @@ impl State {
                     self.viewport = size;
                     self.needs_redraw = true;
                 }
+            }
+            Command::SetOsd(overlay) => {
+                if let Err(error) = mpv.set_osd_overlay(overlay.as_ref()) {
+                    rigili_monitor::monitor!("mpv", "cannot update the OSD overlay: {error}");
+                }
+                self.needs_redraw = true;
             }
             Command::Shutdown => return ControlFlow::Break(()),
         }
