@@ -56,6 +56,9 @@ pub struct Comment {
     pub content: CommentContent,
     #[serde(default)]
     pub like: u64,
+    /// Bit 0 reports whether the signed-in user already liked the comment.
+    #[serde(default)]
+    pub action: u8,
     #[serde(default)]
     pub ctime: i64,
     #[serde(default)]
@@ -69,6 +72,25 @@ pub struct Comment {
 impl Comment {
     pub fn replies(&self) -> &[Comment] {
         self.replies.as_deref().unwrap_or_default()
+    }
+
+    pub fn liked(&self) -> bool {
+        self.action & 1 != 0
+    }
+
+    /// Applies the like the site will record, so the count and the highlight
+    /// move before the request lands.
+    pub fn set_liked(&mut self, liked: bool) {
+        if self.liked() == liked {
+            return;
+        }
+        if liked {
+            self.action |= 1;
+            self.like = self.like.saturating_add(1);
+        } else {
+            self.action &= !1;
+            self.like = self.like.saturating_sub(1);
+        }
     }
 }
 
@@ -146,7 +168,7 @@ pub struct CommentControl {
 
 #[cfg(test)]
 mod tests {
-    use super::{CommentPage, EmotePanel};
+    use super::{Comment, CommentPage, EmotePanel};
 
     #[test]
     fn parses_comments_and_tolerates_missing_replies() {
@@ -163,6 +185,7 @@ mod tests {
                     },
                     "content": {"message": "第一条评论", "emote": {"[doge]": {"text": "[doge]", "url": "https://i0.hdslb.com/bfs/emote/doge.png"}}},
                     "like": 12,
+                    "action": 1,
                     "ctime": 1762646400,
                     "rcount": 1,
                     "reply_control": {"time_desc": "1天前发布", "location": "IP属地：北京"},
@@ -189,6 +212,7 @@ mod tests {
             "https://i0.hdslb.com/face.jpg"
         );
         assert_eq!(items[0].content.message, "第一条评论");
+        assert!(items[0].liked());
         let emote = items[0]
             .content
             .emote
@@ -204,6 +228,26 @@ mod tests {
         let empty: CommentPage =
             serde_json::from_str(r#"{"page": {"count": 0}}"#).expect("empty comment fixture");
         assert!(empty.into_replies().is_empty());
+    }
+
+    #[test]
+    fn liking_moves_the_count_once_in_each_direction() {
+        let mut comment = Comment::default();
+        assert!(!comment.liked());
+
+        comment.set_liked(true);
+        assert!(comment.liked());
+        assert_eq!(comment.like, 1);
+
+        comment.set_liked(true);
+        assert_eq!(comment.like, 1);
+
+        comment.set_liked(false);
+        assert!(!comment.liked());
+        assert_eq!(comment.like, 0);
+
+        comment.set_liked(false);
+        assert_eq!(comment.like, 0);
     }
 
     #[test]

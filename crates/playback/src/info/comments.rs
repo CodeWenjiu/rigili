@@ -456,6 +456,72 @@ impl InfoPanel {
         cx.notify();
     }
 
+    /// Applies the like to every copy of a comment: the list keeps preview
+    /// replies and the expanded thread separately, and either can render.
+    fn set_comment_liked(&mut self, rpid: u64, like: bool) -> bool {
+        let mut found = false;
+        for comment in &mut self.comments {
+            if comment.rpid == rpid {
+                comment.set_liked(like);
+                found = true;
+            }
+            if let Some(replies) = comment.replies.as_mut() {
+                for reply in replies {
+                    if reply.rpid == rpid {
+                        reply.set_liked(like);
+                        found = true;
+                    }
+                }
+            }
+        }
+        for thread in self.reply_threads.values_mut() {
+            for reply in &mut thread.replies {
+                if reply.rpid == rpid {
+                    reply.set_liked(like);
+                    found = true;
+                }
+            }
+        }
+        found
+    }
+
+    fn toggle_comment_like(
+        &mut self,
+        root: u64,
+        rpid: u64,
+        aid: u64,
+        like: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Ok(client) = client::get(cx) else {
+            return;
+        };
+        if !self.set_comment_liked(rpid, like) {
+            return;
+        }
+        self.touch_comment_row(root);
+        cx.notify();
+
+        let window_handle = window.window_handle();
+        spawn_api(
+            cx,
+            async move { client.like_comment(aid, rpid, like).await },
+            move |this, result, cx| {
+                let Err(error) = result else {
+                    return;
+                };
+                this.set_comment_liked(rpid, !like);
+                this.touch_comment_row(root);
+                let message = api_task_error_message(error, cx);
+                let _ = window_handle.update(cx, |_, window, cx| {
+                    window.push_notification(Notification::error(message), cx);
+                });
+                cx.notify();
+            },
+        );
+    }
+
     fn reply_draft(
         &mut self,
         window: &mut Window,
@@ -1400,6 +1466,17 @@ impl InfoPanel {
             .as_ref()
             .is_some_and(|target| target.parent == comment.rpid);
         let logged_in = client::get(cx).is_ok_and(|client| client.has_session());
+        let liked = comment.liked();
+        let like_count = format_count(comment.like);
+        let like_target = self.aid().filter(|_| logged_in);
+        // Four states of its own: the text button variant repaints its own
+        // foreground on hover, which would drop the liked colour.
+        let like_color = if liked { primary } else { muted };
+        let like_hover = if liked {
+            primary.mix_oklab(foreground, 0.25)
+        } else {
+            foreground
+        };
 
         v_flex()
             .gap_2()
@@ -1477,13 +1554,41 @@ impl InfoPanel {
                                     .gap_3()
                                     .text_xs()
                                     .text_color(muted)
-                                    .child(
-                                        h_flex()
+                                    .child(match like_target {
+                                        Some(aid) => Button::new(("comment-like", comment.rpid))
+                                            .text()
+                                            .small()
+                                            .group("comment-like")
+                                            .child(
+                                                h_flex()
+                                                    .items_center()
+                                                    .gap_1()
+                                                    .text_color(like_color)
+                                                    .group_hover("comment-like", move |this| {
+                                                        this.text_color(like_hover)
+                                                    })
+                                                    .child(
+                                                        Icon::new(IconName::ThumbsUp)
+                                                            .with_size(px(14.)),
+                                                    )
+                                                    .child(like_count),
+                                            )
+                                            .on_click(cx.listener({
+                                                let rpid = comment.rpid;
+                                                move |this, _, window, cx| {
+                                                    this.toggle_comment_like(
+                                                        root, rpid, aid, !liked, window, cx,
+                                                    );
+                                                }
+                                            }))
+                                            .into_any_element(),
+                                        None => h_flex()
                                             .items_center()
                                             .gap_1()
                                             .child(Icon::new(IconName::ThumbsUp).with_size(px(14.)))
-                                            .child(format_count(comment.like)),
-                                    )
+                                            .child(like_count)
+                                            .into_any_element(),
+                                    })
                                     .when(comment.rcount > 0, |this| {
                                         this.child(format!(
                                             "{} 条回复",

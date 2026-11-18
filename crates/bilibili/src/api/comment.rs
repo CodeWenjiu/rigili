@@ -3,6 +3,7 @@ use crate::{ApiError, Client, CommentPage, EmotePanel};
 const COMMENTS_URL: &str = "https://api.bilibili.com/x/v2/reply";
 const REPLIES_URL: &str = "https://api.bilibili.com/x/v2/reply/reply";
 const ADD_URL: &str = "https://api.bilibili.com/x/v2/reply/add";
+const LIKE_URL: &str = "https://api.bilibili.com/x/v2/reply/action";
 const EMOTE_PANEL_URL: &str = "https://api.bilibili.com/x/emote/user/panel/web";
 const PAGE_SIZE: u32 = 20;
 
@@ -91,5 +92,19 @@ impl Client {
         }
         form.push(("csrf", self.csrf()?));
         self.post_form_ack(ADD_URL, &form).await
+    }
+
+    pub async fn like_comment(&self, aid: u64, rpid: u64, like: bool) -> Result<(), ApiError> {
+        self.post_form_ack(
+            LIKE_URL,
+            &[
+                ("type", "1".to_owned()),
+                ("oid", aid.to_string()),
+                ("rpid", rpid.to_string()),
+                ("action", if like { "1" } else { "0" }.to_owned()),
+                ("csrf", self.csrf()?),
+            ],
+        )
+        .await
     }
 }
