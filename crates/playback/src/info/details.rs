@@ -186,6 +186,7 @@ impl InfoPanel {
 
         let related = (!self.related.is_empty()).then(|| {
             v_flex()
+                .image_cache(rigili_core::image_cache::related(cx))
                 .gap_1()
                 .children(self.related.iter().enumerate().map(|(index, video)| {
                     let bvid = video.bvid.clone();

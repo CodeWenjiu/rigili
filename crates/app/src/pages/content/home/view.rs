@@ -103,6 +103,14 @@ impl HomeItem {
             _ => None,
         }
     }
+
+    pub(crate) fn cover(&self) -> Option<&str> {
+        match self {
+            Self::Video(video) => Some(video.cover()),
+            Self::Live(live) => Some(live.cover.as_str()),
+            Self::Pgc(pgc) => Some(pgc.cover.as_str()),
+        }
+    }
 }
 
 impl From<LiveRoom> for HomeItem {
@@ -126,6 +134,8 @@ pub struct HomeView {
     opening: Option<u64>,
     notice: Option<String>,
     list_width: Pixels,
+    hovered: Option<SharedString>,
+    prefetched: Option<(HomeTab, usize, usize)>,
 }
 
 impl EventEmitter<OpenVideo> for HomeView {}
@@ -155,6 +165,8 @@ impl HomeView {
             opening: None,
             notice: None,
             list_width: px(0.),
+            hovered: None,
+            prefetched: None,
         };
         match error {
             Some(error) => {
@@ -165,6 +177,14 @@ impl HomeView {
             None => view.load_tab(HomeTab::Recommend, cx),
         }
         view
+    }
+
+    pub(crate) fn set_hovered(&mut self, id: Option<SharedString>, cx: &mut Context<Self>) {
+        if self.hovered == id {
+            return;
+        }
+        self.hovered = id;
+        cx.notify();
     }
 
     pub(crate) fn state(&self, tab: HomeTab) -> &TabState {

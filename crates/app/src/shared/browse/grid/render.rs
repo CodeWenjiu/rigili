@@ -30,6 +30,19 @@ pub(crate) struct MediaCard<'a> {
     pub(crate) overlay: CardOverlay<'a>,
     pub(crate) author: Option<MediaAuthor>,
     pub(crate) video: Option<MediaVideo>,
+    pub(crate) chrome: CoverChrome,
+}
+
+/// How the cover's hover chrome joins the tree. A grid that tracks hover
+/// skips it for every card but the one under the pointer, which keeps the
+/// per-frame element count down while scrolling.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CoverChrome {
+    Hidden,
+    Shown,
+    /// Dimmed and revealed by the cover's own hover, for lists that do not
+    /// track hover themselves.
+    OnHover,
 }
 
 #[derive(Clone)]
@@ -71,6 +84,7 @@ pub(crate) fn media_card(
         overlay,
         author,
         video,
+        chrome,
     } = card;
 
     if video.is_some() {
@@ -121,6 +135,9 @@ pub(crate) fn media_card(
         Some(author) => navigate(author.on_click),
         None => navigate(on_open.clone()),
     };
+    let reveal_now = chrome == CoverChrome::Shown;
+    let reveal_on_hover = chrome == CoverChrome::OnHover;
+    let chrome_visible = reveal_now || reveal_on_hover;
 
     v_flex()
         .w(width)
@@ -156,39 +173,43 @@ pub(crate) fn media_card(
                         .size_full()
                         .object_fit(ObjectFit::Cover),
                 )
-                .child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .bg(hsla(0., 0., 0., 0.28))
-                        .opacity(0.)
-                        .group_hover("media-cover", |this| this.opacity(1.)),
-                )
-                .when(preview.is_none(), |this| {
-                    this.child(
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .flex()
-                            .items_center()
-                            .justify_center()
+                .when(chrome_visible, |this| {
+                    let scrim = div().absolute().inset_0().bg(hsla(0., 0., 0., 0.28));
+                    this.child(if reveal_on_hover {
+                        scrim
                             .opacity(0.)
                             .group_hover("media-cover", |this| this.opacity(1.))
-                            .child(
-                                div()
-                                    .size(px(40.))
-                                    .rounded_full()
-                                    .bg(Hsla::white().opacity(0.92))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(
-                                        Icon::new(IconName::Play)
-                                            .with_size(px(18.))
-                                            .text_color(Hsla::black().opacity(0.72)),
-                                    ),
-                            ),
-                    )
+                    } else {
+                        scrim
+                    })
+                })
+                .when(chrome_visible && preview.is_none(), |this| {
+                    let play = div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            div()
+                                .size(px(40.))
+                                .rounded_full()
+                                .bg(Hsla::white().opacity(0.92))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(
+                                    Icon::new(IconName::Play)
+                                        .with_size(px(18.))
+                                        .text_color(Hsla::black().opacity(0.72)),
+                                ),
+                        );
+                    this.child(if reveal_on_hover {
+                        play.opacity(0.)
+                            .group_hover("media-cover", |this| this.opacity(1.))
+                    } else {
+                        play
+                    })
                 })
                 .when_some(preview.clone(), |this, preview| this.child(preview))
                 .when_some(overlay.badge, |this, badge| {
@@ -316,8 +337,8 @@ pub(crate) enum VideoCardKind {
 pub(crate) fn video_card<V>(
     card: &VideoCard,
     kind: VideoCardKind,
-    style: CardStyle,
-    metrics: CardMetrics,
+    frame: super::CardFrame,
+    chrome: CoverChrome,
     window: &mut Window,
     cx: &mut Context<V>,
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -325,6 +346,7 @@ pub(crate) fn video_card<V>(
 where
     V: EventEmitter<OpenSpace> + 'static,
 {
+    let super::CardFrame { style, metrics } = frame;
     let views = card.views();
     let danmaku = card.danmaku();
     let duration = card.duration();
@@ -370,6 +392,7 @@ where
                 trailing: (!duration.is_empty()).then_some(duration),
                 badge: None,
             },
+            chrome,
         },
         style,
         metrics.width,
@@ -446,8 +469,8 @@ where
     video_card(
         card,
         VideoCardKind::Default,
-        style,
-        metrics,
+        super::CardFrame { style, metrics },
+        CoverChrome::OnHover,
         window,
         cx,
         on_open,
@@ -480,6 +503,7 @@ pub(crate) fn live_card(
             },
             author: None,
             video: None,
+            chrome: CoverChrome::OnHover,
         },
         style,
         metrics.width,
@@ -517,6 +541,7 @@ pub(crate) fn pgc_card(
             },
             author: None,
             video: None,
+            chrome: CoverChrome::OnHover,
         },
         style,
         metrics.width,

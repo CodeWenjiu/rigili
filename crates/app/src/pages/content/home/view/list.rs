@@ -4,11 +4,14 @@ use gpui_kit::*;
 
 use super::{HomeItem, HomeTab, HomeView};
 use crate::shared::browse::grid::{
-    CARD_GAP, CardFrame, CardGrid, CardStyle, VideoCardKind, VideoCards, card_grid_loading,
-    card_text_height, live_card, pgc_card, video_card, with_opening_overlay,
+    CARD_GAP, CardFrame, CardGrid, CardStyle, CoverChrome, VideoCardKind, VideoCards,
+    card_grid_loading, card_text_height, live_card, pgc_card, thumb_bytes, video_card,
+    with_opening_overlay,
 };
 use crate::shared::browse::list::{LIST_FOOTER_HEIGHT, Rows, paged_footer, virtual_rows_tracked};
 use crate::shared::ui::state_view::{Layout, empty_state, error_state};
+use rigili_bilibili::thumbnail;
+use rigili_core::image_cache;
 
 impl HomeView {
     fn render_row(
@@ -38,15 +41,28 @@ impl HomeView {
                     this.open_target(target.clone(), cx);
                 });
                 if let HomeItem::Video(video) = item {
-                    video_card(
+                    let id = video.id().clone();
+                    let chrome = if self.hovered.as_ref() == Some(&id) {
+                        CoverChrome::Shown
+                    } else {
+                        CoverChrome::Hidden
+                    };
+                    let card = video_card(
                         video,
                         VideoCardKind::Default,
-                        frame.style,
-                        frame.metrics,
+                        frame,
+                        chrome,
                         window,
                         cx,
                         on_open,
-                    )
+                    );
+                    div()
+                        .id(gpui_kit::ElementId::NamedInteger(id.clone(), 9))
+                        .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                            this.set_hovered(hovered.then(|| id.clone()), cx);
+                        }))
+                        .child(card)
+                        .into_any_element()
                 } else {
                     home_card(item, is_opening, frame, window, cx, on_open)
                 }
@@ -78,6 +94,16 @@ impl HomeView {
         let footer = state.footer_visible();
         let sizes = Rows::new(rows, metrics.height()).footer_if(footer, LIST_FOOTER_HEIGHT);
 
+        let row_height = f32::from(metrics.height()).max(1.);
+        let viewport_rows =
+            (f32::from(window.viewport_size().height) / row_height).ceil() as usize + 1;
+        image_cache::tune(
+            cx,
+            window,
+            columns * viewport_rows,
+            thumb_bytes(metrics.thumb_width),
+        );
+
         virtual_rows_tracked(
             cx,
             window,
@@ -86,8 +112,11 @@ impl HomeView {
             self.list_width,
             &self.state(tab).scroll,
             move |this, range, window, cx| {
+                let first = range.start;
+                let last = range.end;
+                let count = range.len();
                 this.maybe_load_more(tab, range.end.saturating_sub(1), rows, cx);
-                range
+                let elements = range
                     .map(|row| {
                         if footer && row == rows {
                             this.render_footer(tab, cx)
@@ -95,9 +124,61 @@ impl HomeView {
                             this.render_row(tab, row, columns, frame, window, cx)
                         }
                     })
-                    .collect()
+                    .collect::<Vec<_>>();
+                if this.prefetched != Some((tab, first, last)) {
+                    let forward = match this.prefetched {
+                        Some((previous, previous_first, _)) => {
+                            previous != tab || first >= previous_first
+                        }
+                        None => true,
+                    };
+                    this.prefetched = Some((tab, first, last));
+                    let ahead = if forward {
+                        last..(last + count).min(rows)
+                    } else {
+                        first.saturating_sub(count)..first
+                    };
+                    Self::prefetch_covers(
+                        &this.state(tab).items,
+                        columns,
+                        frame.metrics.thumb_width,
+                        ahead,
+                        image_cache::room(cx),
+                        window,
+                        cx,
+                    );
+                }
+                elements
             },
         )
+    }
+
+    fn prefetch_covers(
+        items: &[HomeItem],
+        columns: usize,
+        thumb_width: u32,
+        rows: std::ops::Range<usize>,
+        room: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut room = room;
+        for row in rows {
+            let start = row * columns;
+            if start >= items.len() || room == 0 {
+                return;
+            }
+            let stop = (start + columns).min(items.len());
+            for item in &items[start..stop] {
+                if room == 0 {
+                    return;
+                }
+                if let Some(cover) = item.cover() {
+                    image_cache::prefetch(cx, window, &thumbnail(cover, thumb_width));
+                    room -= 1;
+                }
+            }
+        }
     }
 
     pub(super) fn render_content(

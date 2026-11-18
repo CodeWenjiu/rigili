@@ -20,6 +20,7 @@ impl Render for InfoPanel {
         };
 
         v_flex()
+            .image_cache(rigili_core::image_cache::avatars(cx))
             .id("info-panel")
             .test_support()
             .w(INFO_WIDTH)
@@ -80,6 +81,7 @@ mod tests {
     #[gpui_kit::test]
     fn keeps_the_panel_mounted_without_details(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
+        cx.update(rigili_core::image_cache::init);
         let (window, _) = cx.update(|cx| {
             gpui_kit::open_window(
                 WindowOptions {
@@ -110,6 +112,7 @@ mod tests {
     #[gpui_kit::test]
     fn keeps_the_comments_tab_when_clearing(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
+        cx.update(rigili_core::image_cache::init);
         let (_, panel) = cx.update(|cx| {
             gpui_kit::open_window(
                 WindowOptions {

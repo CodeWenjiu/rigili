@@ -7,8 +7,8 @@ use rigili_bilibili::BangumiFollow;
 use super::{CardRow, MineView};
 use crate::shared::browse::filter;
 use crate::shared::browse::grid::{
-    BangumiCards, CARD_GAP, CardFrame, CardGrid, CardMetrics, CardOverlay, CardStyle, MediaCard,
-    card_grid_loading, card_text_height, media_card, with_opening_overlay,
+    BangumiCards, CARD_GAP, CardFrame, CardGrid, CardMetrics, CardOverlay, CardStyle, CoverChrome,
+    MediaCard, card_grid_loading, card_text_height, media_card, with_opening_overlay,
 };
 use crate::shared::browse::list::{LIST_FOOTER_HEIGHT, Rows, paged_footer, virtual_rows_tracked};
 use crate::shared::browse::season::SeasonOpener;
@@ -204,6 +204,7 @@ fn bangumi_card(
             thumb_width: metrics.thumb_width,
             author: None,
             video: None,
+            chrome: CoverChrome::OnHover,
             overlay: CardOverlay {
                 leading: score.as_deref().map(|score| (IconName::Star, score)),
                 secondary: None,

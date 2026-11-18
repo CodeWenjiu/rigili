@@ -8,7 +8,7 @@ use super::cards::{ROW_HEIGHT, article_row, user_block_height, user_row};
 use super::items::SearchItem;
 use super::{SearchLayout, SearchTab, SearchView};
 use crate::shared::browse::grid::{
-    CARD_GAP, CardFrame, CardGrid, CardMetrics, CardStyle, VideoCardKind, VideoCards,
+    CARD_GAP, CardFrame, CardGrid, CardMetrics, CardStyle, CoverChrome, VideoCardKind, VideoCards,
     card_grid_loading, card_text_height, live_card, pgc_card, video_card,
 };
 use crate::shared::browse::list::{LIST_FOOTER_HEIGHT, Rows, paged_footer, virtual_rows_tracked};
@@ -54,8 +54,8 @@ impl SearchView {
                     video_card(
                         video,
                         VideoCardKind::Search,
-                        style,
-                        metrics,
+                        CardFrame { style, metrics },
+                        CoverChrome::OnHover,
                         window,
                         cx,
                         on_open,

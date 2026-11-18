@@ -1562,6 +1562,7 @@ mod tests {
     #[gpui_kit::test]
     fn opens_one_emote_picker_at_a_time(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
+        cx.update(rigili_core::image_cache::init);
         let (_, panel) = cx.update(|cx| {
             gpui_kit::open_window(
                 WindowOptions {

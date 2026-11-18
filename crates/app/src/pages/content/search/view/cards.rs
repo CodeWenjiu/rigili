@@ -7,8 +7,8 @@ use rigili_bilibili::thumbnail;
 
 use super::items::{ArticleItem, UserItem};
 use crate::shared::browse::grid::{
-    CardGrid, CardOverlay, CardStyle, MediaCard as CardLayout, MediaVideo, VideoCard, VideoCards,
-    card_height,
+    CardGrid, CardOverlay, CardStyle, CoverChrome, MediaCard as CardLayout, MediaVideo, VideoCard,
+    VideoCards, card_height,
 };
 
 pub(crate) const ROW_HEIGHT: Pixels = px(96.);
@@ -178,6 +178,7 @@ pub(crate) fn preview_card(
                 bvid: video.id().clone(),
                 cid: video.cid(),
             }),
+            chrome: CoverChrome::OnHover,
             overlay: CardOverlay {
                 leading: Some((IconName::Play, video.views())),
                 secondary: None,

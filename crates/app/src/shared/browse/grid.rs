@@ -84,6 +84,13 @@ pub(crate) fn folder_card_height(width: Pixels, window: &Window) -> Pixels {
     px((width * 9. / 16. + gap + text).as_f32().ceil())
 }
 
+/// Decoded bytes of one thumbnail at the width the CDN is asked for, so the
+/// image cache can size itself against what the grid actually draws.
+pub(crate) fn thumb_bytes(thumb_width: u32) -> usize {
+    let height = thumb_width * 9 / 16;
+    thumb_width as usize * height as usize * 4
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct CardMetrics {
     pub(crate) width: Pixels,
@@ -106,7 +113,9 @@ impl CardMetrics {
 fn thumbnail_width(card_width: Pixels, scale_factor: f32) -> u32 {
     const BUCKET: u32 = 32;
     const MIN_WIDTH: u32 = 160;
-    const MAX_WIDTH: u32 = 960;
+    // Decoding and texture upload scale with the pixel count, so keep requests
+    // below the size a 320px card needs at 2x.
+    const MAX_WIDTH: u32 = 640;
 
     let device_width = (card_width.as_f32() * scale_factor).ceil().max(0.) as u32;
     device_width
@@ -171,7 +180,10 @@ impl CardStyle {
 
 #[cfg(test)]
 mod tests {
-    use super::{CARD_GAP, CardGrid, FolderCards, VideoCards, round_to_device_pixel};
+    use super::{
+        CARD_GAP, CardGrid, FolderCards, VideoCards, round_to_device_pixel, thumb_bytes,
+        thumbnail_width,
+    };
     use gpui_kit::px;
 
     #[test]
@@ -210,6 +222,20 @@ mod tests {
         assert!(
             card_width.as_f32() * columns as f32 + gap * (columns - 1) as f32 <= width.as_f32()
         );
+    }
+
+    #[test]
+    fn caps_thumbnail_requests_at_the_bucket_limit() {
+        assert_eq!(thumbnail_width(px(50.), 1.), 160);
+        assert_eq!(thumbnail_width(px(300.), 1.), 320);
+        assert_eq!(thumbnail_width(px(300.), 2.), 608);
+        assert_eq!(thumbnail_width(px(900.), 2.), 640);
+    }
+
+    #[test]
+    fn thumbnail_bytes_follow_the_requested_size() {
+        assert_eq!(thumb_bytes(320), 320 * 180 * 4);
+        assert_eq!(thumb_bytes(640), 640 * 360 * 4);
     }
 
     #[test]
