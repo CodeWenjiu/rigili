@@ -26,8 +26,30 @@ fn tune_allocator() {
     }
 }
 
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn trim_c_heaps() {
+    // mpv, ffmpeg and Mesa hand multi-megabyte buffers back to glibc, which keeps
+    // the pages in its arenas long after playback ends. Nothing else in the
+    // process returns them, so sweep them on a timer instead of paying the peak
+    // for the rest of the session.
+    std::thread::Builder::new()
+        .name("malloc-trim".into())
+        .spawn(|| {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                // SAFETY: `malloc_trim` only walks glibc's arena free lists.
+                unsafe { libc::malloc_trim(0) };
+            }
+        })
+        .ok();
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn trim_c_heaps() {}
+
 fn main() {
     tune_allocator();
+    trim_c_heaps();
     app::platform::gpu::prefer_vulkan();
     install_diagnostics();
     let platform = gpui_kit::platform::current_platform(false);
