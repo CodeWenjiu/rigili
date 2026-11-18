@@ -17,6 +17,16 @@ run *args:
 run-release *args:
     @cargo run --release -p rigili_app -- {{args}}
 
+# 用 heaptrack 采样内存；关闭窗口后打印峰值/泄漏报告，并附 mimalloc 统计
+mem-profile *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release -p rigili_app
+    mkdir -p target/mem
+    rm -f target/mem/heaptrack.zst
+    MIMALLOC_SHOW_STATS=1 heaptrack -o target/mem/heaptrack --record-only target/release/rigili {{args}}
+    heaptrack_print -f target/mem/heaptrack.zst -p 1 -l 1 -a 0 -T 0 | tee target/mem/report.txt
+
 # 运行应用并开启视频流监视；RIGILI_MPV_LOG=debug just run-monitor 可提高 mpv 日志级别
 run-monitor *args:
     @cargo run -p rigili_app --features video-monitor -- {{args}}
