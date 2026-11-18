@@ -11,6 +11,7 @@ use rigili_player::{Player, VideoFrame, VideoSize};
 
 const HOVER_DELAY: Duration = Duration::from_millis(400);
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
+const PLAYER_LINGER: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub(crate) struct PreviewSource {
@@ -151,23 +152,23 @@ impl Render for PreviewSlot {
 }
 
 struct PreviewSurface {
-    player: Player,
+    player: Option<Player>,
     frame: Option<Arc<RenderImage>>,
     owner: Option<WeakEntity<PreviewSlot>>,
     generation: u64,
     poll: Option<Task<()>>,
+    teardown: Option<Task<()>>,
 }
 
 impl PreviewSurface {
     fn new() -> Self {
-        let player = Player::new_software();
-        player.set_volume(0.0);
         Self {
-            player,
+            player: None,
             frame: None,
             owner: None,
             generation: 0,
             poll: None,
+            teardown: None,
         }
     }
 
@@ -180,10 +181,17 @@ impl PreviewSurface {
     ) {
         self.generation += 1;
         self.owner = Some(owner);
+        self.teardown = None;
         if let Some(frame) = self.frame.take() {
             cx.drop_image(frame, Some(window));
         }
-        self.player.load(&video, None);
+        self.player
+            .get_or_insert_with(|| {
+                let player = Player::new_software();
+                player.set_volume(0.0);
+                player
+            })
+            .load(&video, None);
 
         let generation = self.generation;
         self.poll = Some(cx.spawn_in(window, async move |surface, cx| {
@@ -217,12 +225,24 @@ impl PreviewSurface {
         self.owner = None;
         self.generation += 1;
         self.poll = None;
+        self.teardown = None;
         if let Some(frame) = self.frame.take() {
             cx.drop_image(frame, window);
         }
-        if !self.player.status().paused {
-            self.player.toggle_pause();
+        if let Some(player) = &self.player {
+            player.stop();
         }
+
+        let generation = self.generation;
+        self.teardown = Some(cx.spawn(async move |surface, cx| {
+            cx.background_executor().timer(PLAYER_LINGER).await;
+            let _ = surface.update(cx, |surface, cx| {
+                if surface.generation == generation && surface.owner.is_none() {
+                    surface.player = None;
+                    cx.notify();
+                }
+            });
+        }));
         cx.notify();
     }
 
@@ -235,7 +255,10 @@ impl PreviewSurface {
             self.clear(Some(window), cx);
             return;
         }
-        let Some(frame) = self.player.take_frame() else {
+        let Some(player) = &self.player else {
+            return;
+        };
+        let Some(frame) = player.take_frame() else {
             return;
         };
         let Some(image) = render_image(frame) else {
@@ -263,6 +286,9 @@ impl Render for PreviewSurface {
             .child(
                 canvas(
                     move |bounds, window, _| {
+                        let Some(player) = &player else {
+                            return;
+                        };
                         let scale = window.scale_factor();
                         player.set_viewport(VideoSize::new(
                             (f32::from(bounds.size.width) * scale).round().max(0.) as u32,

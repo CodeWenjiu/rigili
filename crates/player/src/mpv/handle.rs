@@ -25,9 +25,6 @@ const OPTIONS: &[(&str, &str)] = &[
     ("idle", "yes"),
     ("keep-open", "yes"),
     ("cache", "yes"),
-    ("cache-secs", "30"),
-    ("demuxer-max-bytes", "64MiB"),
-    ("demuxer-max-back-bytes", "16MiB"),
     // Software output scales on the CPU; mpv's lanczos default is too costly.
     ("zimg-scaler", "bilinear"),
     ("terminal", "no"),
@@ -39,6 +36,9 @@ const OPTIONS: &[(&str, &str)] = &[
     ("osd-level", "0"),
     ("input-default-bindings", "no"),
     ("input-vo-keyboard", "no"),
+    // The bundled Lua scripts (stats, console, context menu, ...) cost a thread
+    // and a VM per player and are unused here.
+    ("load-scripts", "no"),
     ("user-agent", USER_AGENT),
     ("referrer", "https://www.bilibili.com/"),
 ];
@@ -48,12 +48,12 @@ pub(crate) struct Mpv {
 }
 
 impl Mpv {
-    pub(crate) fn new() -> Result<Self, MpvError> {
+    pub(crate) fn new(cache: &[(&str, &str)]) -> Result<Self, MpvError> {
         let handle = NonNull::new(unsafe { mpv_create() })
             .ok_or_else(|| MpvError::invalid_argument("mpv_create returned null"))?;
         let mpv = Self { handle };
 
-        for (name, value) in OPTIONS {
+        for (name, value) in OPTIONS.iter().chain(cache) {
             mpv.set_option_string(name, value)?;
         }
         let log_level = crate::monitor::log_level();

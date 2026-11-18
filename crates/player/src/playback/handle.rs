@@ -48,6 +48,7 @@ pub(super) enum Command {
         paused: bool,
     },
     TogglePause,
+    Stop,
     Seek(f64),
     SetVolume(f64),
     SetMute(bool),
@@ -134,6 +135,11 @@ impl Player {
 
     pub fn toggle_pause(&self) {
         self.send(Command::TogglePause);
+    }
+
+    /// Unloads the current file so mpv releases its demuxer and decoder buffers.
+    pub fn stop(&self) {
+        self.send(Command::Stop);
     }
 
     pub fn seek(&self, seconds: f64) {

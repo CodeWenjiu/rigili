@@ -39,6 +39,20 @@ const IDLE_WAIT: Duration = Duration::from_millis(100);
 // before it reaches the renderer.
 const MAX_OUTPUT_EDGE: u32 = 2560;
 
+const PLAYBACK_CACHE: &[(&str, &str)] = &[
+    ("cache-secs", "30"),
+    ("demuxer-max-bytes", "64MiB"),
+    ("demuxer-max-back-bytes", "16MiB"),
+];
+
+// Previews are short and always visible at once, so a large read-ahead only
+// pins demuxer memory behind the home feed.
+const PREVIEW_CACHE: &[(&str, &str)] = &[
+    ("cache-secs", "8"),
+    ("demuxer-max-bytes", "16MiB"),
+    ("demuxer-max-back-bytes", "4MiB"),
+];
+
 pub(super) fn run_worker(
     receiver: mpsc::Receiver<Command>,
     backend: RenderBackend,
@@ -47,7 +61,10 @@ pub(super) fn run_worker(
     status: Arc<StatusSlot>,
     native: Arc<NativeSlot>,
 ) {
-    let mpv = match Mpv::new() {
+    let mpv = match Mpv::new(match backend {
+        RenderBackend::GpuPreferred => PLAYBACK_CACHE,
+        RenderBackend::Software => PREVIEW_CACHE,
+    }) {
         Ok(mpv) => mpv,
         Err(error) => {
             mutate_status(&status, |status| {
@@ -370,6 +387,31 @@ impl State {
                     }
                     mutate_status(status, |status| status.paused = !paused);
                 }
+            }
+            Command::Stop => {
+                self.generation = self.generation.wrapping_add(1);
+                self.pending_audio.take();
+                self.pending_seek = None;
+                self.pending_pause = false;
+                self.loading = false;
+                self.load_started = None;
+                self.first_frame_at = None;
+                self.first_frame_logged = false;
+                self.current_entry = None;
+                self.has_frame = false;
+                self.native_frame = false;
+                self.needs_redraw = false;
+                lock(frame_slot).take();
+                let stopped = mpv.command(&["stop"]);
+                mutate_status(status, |status| {
+                    status.phase = PlaybackPhase::Idle;
+                    status.paused = false;
+                    status.time_pos = 0.0;
+                    status.duration = 0.0;
+                    status.buffered.clear();
+                    status.video_size = None;
+                    status.error = stopped.err().map(|error| error.to_string());
+                });
             }
             Command::Seek(seconds) => {
                 let target = format!("{seconds:.3}");
