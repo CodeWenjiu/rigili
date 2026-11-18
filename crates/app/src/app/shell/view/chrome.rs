@@ -361,7 +361,12 @@ impl MainView {
                                     .id("search-popover-content")
                                     .role(Role::Dialog)
                                     .tab_group()
-                                    .track_focus(&focus)
+                                    // Tracking the field's focus handle here would
+                                    // move its focus node to this panel, which is
+                                    // a sibling of the input; key bindings resolve
+                                    // along that node's contexts, so backspace and
+                                    // the other editing keys would stop reaching
+                                    // the input.
                                     .on_mouse_down_out(cx.listener(|this, _, window, cx| {
                                         this.dismiss_search_box(window, cx);
                                     }))
