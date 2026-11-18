@@ -41,6 +41,7 @@ pub struct PlayerWindow {
     danmaku_task: Option<Task<()>>,
     _info_sub: Subscription,
     _player_sub: Subscription,
+    _focus_sub: Subscription,
 }
 
 impl EventEmitter<OpenSpace> for PlayerWindow {}
@@ -68,6 +69,15 @@ impl PlayerWindow {
         let player_sub = cx.subscribe(&player, |this, _, event: &PlayerEvent, cx| match event {
             PlayerEvent::SelectPage(cid) => this.select_page(*cid, cx),
         });
+        // Key bindings are looked up along the focused node's context stack, so
+        // once the focused element unmounts (the auto-hiding bar, a comment row
+        // scrolled away) the stack is empty and every player shortcut silently
+        // stops matching until something focuses an element again.
+        let focus_sub = cx.on_focus_lost(window, |this, window, cx| {
+            rigili_monitor::monitor!("player", "focus lost, returning to the video surface");
+            this.player
+                .update(cx, |player, cx| player.focus_player(window, cx));
+        });
         let (client, error) = match client::get(cx) {
             Ok(client) => (Some(client), None),
             Err(error) => (None, Some(api_error_message(error))),
@@ -87,6 +97,7 @@ impl PlayerWindow {
             danmaku_task: None,
             _info_sub: info_sub,
             _player_sub: player_sub,
+            _focus_sub: focus_sub,
         };
         if view.client.is_some() {
             view.history.open(request.source.clone());
