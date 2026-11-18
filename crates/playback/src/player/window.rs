@@ -37,7 +37,6 @@ pub struct PlayerWindow {
     is_live: bool,
     error: Option<String>,
     show_info: bool,
-    fullscreen_info: bool,
     generation: u64,
     danmaku_task: Option<Task<()>>,
     _info_sub: Subscription,
@@ -84,7 +83,6 @@ impl PlayerWindow {
             is_live: false,
             error,
             show_info: true,
-            fullscreen_info: false,
             generation: 0,
             danmaku_task: None,
             _info_sub: info_sub,
@@ -134,15 +132,10 @@ impl PlayerWindow {
         self.start(request, cx);
     }
 
-    pub(crate) fn toggle_panel(&mut self, tab: InfoTab, window: &Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_panel(&mut self, tab: InfoTab, cx: &mut Context<Self>) {
         let current = self.info.read(cx).tab();
-        let visible = if window.is_fullscreen() {
-            &mut self.fullscreen_info
-        } else {
-            &mut self.show_info
-        };
-        *visible = panel_visibility(*visible, current, tab);
-        if *visible {
+        self.show_info = panel_visibility(self.show_info, current, tab);
+        if self.show_info {
             self.info.update(cx, |info, cx| info.show_tab(tab, cx));
         }
         cx.notify();
@@ -419,12 +412,7 @@ impl Render for PlayerWindow {
         let fullscreen = window.is_fullscreen();
         let client_decorated = matches!(window.window_decorations(), Decorations::Client { .. });
         let wide_enough = window.viewport_size().width >= INFO_MIN_WINDOW;
-        let panel_open = if fullscreen {
-            self.fullscreen_info
-        } else {
-            self.show_info
-        };
-        let show_info = panel_open && !self.is_live && (fullscreen || wide_enough);
+        let show_info = self.show_info && !self.is_live && (fullscreen || wide_enough);
         let title = self.title.clone();
         let weak = cx.entity().downgrade();
         let can_go_back = self.history.can_back();
@@ -500,11 +488,11 @@ impl Render for PlayerWindow {
                 this.player
                     .update(cx, |player, cx| player.toggle_fullscreen(window, cx));
             }))
-            .on_action(cx.listener(|this, _: &ToggleInfo, window, cx| {
-                this.toggle_panel(InfoTab::Info, window, cx);
+            .on_action(cx.listener(|this, _: &ToggleInfo, _, cx| {
+                this.toggle_panel(InfoTab::Info, cx);
             }))
-            .on_action(cx.listener(|this, _: &ToggleComments, window, cx| {
-                this.toggle_panel(InfoTab::Comments, window, cx);
+            .on_action(cx.listener(|this, _: &ToggleComments, _, cx| {
+                this.toggle_panel(InfoTab::Comments, cx);
             }))
             .on_action(cx.listener(|this, _: &ToggleDanmaku, _, cx| {
                 this.player
