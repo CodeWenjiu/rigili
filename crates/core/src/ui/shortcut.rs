@@ -62,6 +62,8 @@ fn label(part: &str) -> String {
         "end" => "End".into(),
         "pageup" => "PageUp".into(),
         "pagedown" => "PageDown".into(),
+        "{" => "Shift+[".into(),
+        "}" => "Shift+]".into(),
         other => other.to_uppercase(),
     }
 }

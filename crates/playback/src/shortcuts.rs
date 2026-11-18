@@ -68,12 +68,14 @@ const COMMANDS: &[Command] = &[
         action: || Box::new(SpeedUp),
     },
     Command {
-        keys: "shift-[",
+        // Shift+[ arrives as the symbol itself: the platform folds the shift
+        // into the keysym and drops the modifier, so `shift-[` never matches.
+        keys: "{",
         context: PLAYER,
         action: || Box::new(PreviousPage),
     },
     Command {
-        keys: "shift-]",
+        keys: "}",
         context: PLAYER,
         action: || Box::new(NextPage),
     },
@@ -171,7 +173,7 @@ pub fn rows(cx: &App) -> Vec<(String, String)> {
 mod tests {
     use std::collections::BTreeSet;
 
-    use gpui_kit::{KeyBindingContextPredicate, KeyContext, Keystroke};
+    use gpui_kit::{KeyBinding, KeyBindingContextPredicate, KeyContext, Keystroke, Modifiers};
 
     use super::{COMMANDS, PLAYER, binding_predicate};
 
@@ -219,6 +221,35 @@ mod tests {
             rows.iter()
                 .all(|(keys, label)| !keys.is_empty() && !label.is_empty())
         );
+    }
+
+    #[gpui_kit::test]
+    fn page_shortcuts_match_the_shifted_symbol(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(gpui_kit::init);
+        let page_commands = COMMANDS
+            .iter()
+            .filter(|command| matches!(command.keys, "{" | "}"))
+            .collect::<Vec<_>>();
+        assert_eq!(page_commands.len(), 2);
+
+        for command in page_commands {
+            let typed = Keystroke {
+                key: command.keys.to_owned(),
+                key_char: Some(command.keys.to_owned()),
+                modifiers: Modifiers::none(),
+            };
+            let binding = cx
+                .update(|cx| {
+                    KeyBinding::load(command.keys, (command.action)(), None, false, None, cx)
+                })
+                .expect("static keystroke");
+            assert_eq!(
+                binding.match_keystrokes(&[typed]),
+                Some(false),
+                "{} does not match the keystroke the platform reports",
+                command.keys
+            );
+        }
     }
 
     #[test]
