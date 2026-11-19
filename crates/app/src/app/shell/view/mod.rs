@@ -131,9 +131,14 @@ impl MainView {
             this.close_space(window, cx);
         });
 
+        let main_window = window.window_handle();
         cx.on_window_closed({
             let weak = cx.entity().downgrade();
             move |cx, window_id| {
+                if window_id == main_window.window_id() {
+                    cx.quit();
+                    return;
+                }
                 let _ = weak.update(cx, |this, cx| {
                     let closed = this
                         .playback
