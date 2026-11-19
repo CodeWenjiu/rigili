@@ -332,7 +332,7 @@ fn is_discontinuity(last: f64, time: f64) -> bool {
 // Danmaku sit on arbitrary video frames, so the glyphs need their own dark edge
 // to stay legible where the background happens to share their colour.
 fn outline_width(font_size: f32) -> f32 {
-    (font_size * 0.08).max(1.)
+    (font_size * 0.04).max(1.)
 }
 
 fn active_limit(lanes: usize) -> usize {
@@ -497,8 +497,8 @@ mod tests {
 
     #[test]
     fn outlines_scale_with_the_rendered_font_size() {
-        assert!((outline_width(25.) - 2.).abs() < 0.01);
-        assert!((outline_width(50.) - 4.).abs() < 0.01);
+        assert!((outline_width(25.) - 1.).abs() < 0.01);
+        assert!((outline_width(50.) - 2.).abs() < 0.01);
         assert_eq!(outline_width(4.), 1.);
     }
 
