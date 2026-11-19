@@ -243,11 +243,13 @@ pub(super) fn run_worker(
 
         let update = render.update();
         let info = render.next_frame_info();
-        let ready = if state.has_frame {
-            info.present
-        } else {
-            info.present && !info.redraw
-        };
+        // Once a frame exists, an OSD redraw can reuse it. Gating those on a new
+        // video frame tied the overlay to the video's frame rate.
+        let ready = ready_to_render(
+            state.has_frame || state.native_frame,
+            info.present,
+            info.redraw,
+        );
         if (state.needs_redraw || update & MPV_RENDER_UPDATE_FRAME != 0) && ready {
             let render_started = Instant::now();
             if native.enabled() {
@@ -608,6 +610,10 @@ fn push_frame(
     }
 }
 
+fn ready_to_render(rendered: bool, present: bool, redraw: bool) -> bool {
+    rendered || (present && !redraw)
+}
+
 fn target_dimensions(source: VideoSize, viewport: VideoSize, max_edge: Option<u32>) -> VideoSize {
     if source.width == 0 || source.height == 0 || viewport.width < 2 || viewport.height < 2 {
         return VideoSize::default();
@@ -667,6 +673,15 @@ fn update_status(mpv: &Mpv, status: &StatusSlot, loading: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn osd_redraws_reuse_the_frame_after_the_first_one() {
+        assert!(!ready_to_render(false, false, false));
+        assert!(!ready_to_render(false, true, true));
+        assert!(ready_to_render(false, true, false));
+        assert!(ready_to_render(true, false, false));
+        assert!(ready_to_render(true, true, true));
+    }
 
     #[test]
     fn target_dimensions_fit_the_viewport() {

@@ -261,3 +261,77 @@ impl Drop for RenderContext {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        thread,
+        time::{Duration, Instant},
+    };
+
+    use super::*;
+    use crate::OsdOverlay;
+
+    const MPV_RENDER_UPDATE_FRAME: u64 = 1;
+    const PROBE_SECONDS: u64 = 3;
+    const OSD_INTERVAL: Duration = Duration::from_millis(16);
+
+    #[test]
+    #[ignore = "requires RIGILI_TEST_VIDEO and a working libmpv"]
+    fn osd_updates_render_faster_than_the_video_frames() {
+        let path = std::env::var("RIGILI_TEST_VIDEO").expect("RIGILI_TEST_VIDEO");
+        // The null sink still drives the audio clock that "audio" sync waits on.
+        let mpv = Mpv::new(&[("ao", "null")]).expect("mpv");
+        let render =
+            RenderContext::new(&mpv, Arc::new(RenderWake::default())).expect("render context");
+        mpv.command(&["loadfile", path.as_str(), "replace"])
+            .expect("loadfile");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let size = loop {
+            let _ = mpv.wait_event(0.0);
+            if let Some(size) = mpv.video_size() {
+                break size;
+            }
+            assert!(Instant::now() < deadline, "the video never configured");
+            thread::sleep(Duration::from_millis(5));
+        };
+        let fps = mpv
+            .get_property_double("container-fps")
+            .expect("container-fps");
+
+        let mut buffer = vec![0u8; size.width as usize * size.height as usize * 4];
+        let mut next_overlay = Instant::now();
+        let mut sequence = 0u32;
+        let mut renders = 0u32;
+        let started = Instant::now();
+
+        while started.elapsed() < Duration::from_secs(PROBE_SECONDS) {
+            let mut osd_changed = false;
+            if Instant::now() >= next_overlay {
+                sequence += 1;
+                let _ = mpv.set_osd_overlay(Some(&OsdOverlay {
+                    data: format!("{{\\an7\\pos(20,40)\\fs28}}probe {sequence}\n"),
+                    width: size.width,
+                    height: size.height,
+                }));
+                osd_changed = true;
+                next_overlay = Instant::now() + OSD_INTERVAL;
+            }
+
+            let _ = mpv.wait_event(0.0);
+            let update = render.update();
+            if osd_changed || update & MPV_RENDER_UPDATE_FRAME != 0 {
+                let _ = render.render(size.width, size.height, size.width * 4, buffer.as_mut_ptr());
+                renders += 1;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+
+        let achieved = f64::from(renders) / PROBE_SECONDS as f64;
+        assert!(
+            achieved > fps * 1.2,
+            "{achieved:.1} renders/s for a {fps:.1} fps video: the render call waits for the next video frame"
+        );
+    }
+}

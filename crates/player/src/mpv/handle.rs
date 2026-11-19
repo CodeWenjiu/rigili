@@ -34,6 +34,9 @@ const OPTIONS: &[(&str, &str)] = &[
     ("audio-display", "no"),
     ("osc", "no"),
     ("osd-level", "0"),
+    // With "audio" sync mpv otherwise sleeps inside the render call until the
+    // next video frame is due, which pins every OSD redraw to the frame rate.
+    ("video-timing-offset", "0"),
     ("input-default-bindings", "no"),
     ("input-vo-keyboard", "no"),
     // The bundled Lua scripts (stats, console, context menu, ...) cost a thread
