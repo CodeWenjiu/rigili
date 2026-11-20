@@ -6,7 +6,8 @@ rigili_macro::mod_prv!(
     favorite,
     header,
     interaction,
-    render
+    render,
+    triple
 );
 
 use std::collections::{HashMap, VecDeque};
@@ -20,6 +21,7 @@ use rigili_bilibili::{ArchiveRelation, Comment, RecommendVideo, VideoInfo, Video
 use rigili_core::{format_count, format_datetime};
 
 use comments::{EmoteTarget, ReplyTarget, ReplyThread};
+use details::LikePress;
 use interaction::{CoinState, FlagState, ToggleState};
 
 pub(crate) use details::short_label;
@@ -122,6 +124,10 @@ pub(super) struct InfoPanel {
     like: ToggleState,
     coin: CoinState,
     favorite: ToggleState,
+    triple_busy: bool,
+    like_press: Option<LikePress>,
+    like_hold: Option<Task<()>>,
+    like_press_generation: u64,
     share_count: u64,
     tab: InfoTab,
     comment_count: u64,
@@ -237,6 +243,10 @@ impl InfoPanel {
             like: ToggleState::default(),
             coin: CoinState::default(),
             favorite: ToggleState::default(),
+            triple_busy: false,
+            like_press: None,
+            like_hold: None,
+            like_press_generation: 0,
             share_count: 0,
             tab: InfoTab::Info,
             comment_count: 0,

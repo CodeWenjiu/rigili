@@ -1,12 +1,17 @@
+use std::time::{Duration, Instant};
+
 use gpui_kit::assets::IconName;
 use gpui_kit::base::SelectableText;
 use gpui_kit::component::button::*;
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::scroll::Scrollbar;
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::{RecommendVideo, VideoPage, avatar, thumbnail};
+use rigili_core::client;
 use rigili_core::video::{VideoCard, video_meta, video_title};
 use rigili_core::{format_count, format_duration};
 
@@ -16,7 +21,88 @@ use super::{
     InfoEvent, InfoPanel, RELATED_THUMB_HEIGHT, RELATED_THUMB_WIDTH, VideoDetails, dialog,
 };
 
+const TRIPLE_HOLD: Duration = Duration::from_millis(500);
+
+pub(super) struct LikePress {
+    at: Instant,
+    fired: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LikeClick {
+    Triple,
+    Like,
+    Ignore,
+}
+
+fn like_click(press: Option<&LikePress>, now: Instant) -> LikeClick {
+    match press {
+        None => LikeClick::Like,
+        Some(press) if press.fired => LikeClick::Ignore,
+        Some(press) if now.duration_since(press.at) >= TRIPLE_HOLD => LikeClick::Triple,
+        Some(_) => LikeClick::Like,
+    }
+}
+
 impl InfoPanel {
+    fn begin_like_press(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.like_press = None;
+        if self.like.busy
+            || self.triple_busy
+            || !client::get(cx).is_ok_and(|client| client.has_session())
+        {
+            return;
+        }
+        let generation = self.like_press_generation.wrapping_add(1);
+        self.like_press_generation = generation;
+        self.like_press = Some(LikePress {
+            at: Instant::now(),
+            fired: false,
+        });
+        self.like_hold = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(TRIPLE_HOLD).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                if this.like_press_generation != generation {
+                    return;
+                }
+                let Some(press) = this.like_press.as_mut() else {
+                    return;
+                };
+                if press.fired {
+                    return;
+                }
+                press.fired = true;
+                this.triple(window, cx);
+            });
+        }));
+    }
+
+    fn finish_like_press(
+        &mut self,
+        aid: u64,
+        like: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.like_hold = None;
+        let Some(press) = self.like_press.take() else {
+            self.toggle_like(aid, like, cx);
+            return;
+        };
+        match like_click(Some(&press), Instant::now()) {
+            LikeClick::Triple => self.triple(window, cx),
+            LikeClick::Like => self.toggle_like(aid, like, cx),
+            LikeClick::Ignore => {}
+        }
+    }
+
+    fn toggle_like(&mut self, aid: u64, like: bool, cx: &mut Context<Self>) {
+        if self.like.busy || self.triple_busy {
+            return;
+        }
+        cx.emit(InfoEvent::ToggleLike { aid, like });
+    }
+
     fn toggle_description(&mut self, cx: &mut Context<Self>) {
         self.description_expanded = !self.description_expanded;
         cx.notify();
@@ -98,9 +184,15 @@ impl InfoPanel {
         let owner_mid = details.owner_mid;
         let followed = self.follow.active;
         let liked = self.like.active;
-        let like_busy = self.like.busy;
         let coins_given = self.coin.given;
         let favorited = self.favorite.active;
+        let triple = self.triple_plan();
+        let triple_busy = self.triple_busy;
+        let triple_hint: &'static str = if triple.is_empty() {
+            "已点赞、投币并收藏"
+        } else {
+            "长按点赞，一键三连"
+        };
         let share_url = format!("https://www.bilibili.com/video/{}", details.bvid);
 
         let owner_meta: SharedString = match (self.followers, self.owner_likes) {
@@ -343,23 +435,32 @@ impl InfoPanel {
                                             IconName::ThumbsUp,
                                             format_count(self.like.count).into(),
                                             liked,
+                                            triple_busy,
                                             self.like.busy,
                                             cx,
                                         )
-                                        .on_click({
-                                            let weak = weak.clone();
-                                            move |_, _, cx| {
-                                                if like_busy {
-                                                    return;
-                                                }
-                                                let _ = weak.update(cx, |_, cx| {
-                                                    cx.emit(InfoEvent::ToggleLike {
-                                                        aid,
-                                                        like: !liked,
-                                                    });
-                                                });
-                                            }
-                                        }),
+                                        .tooltip(move |window, cx| {
+                                            Tooltip::new(triple_hint).build(window, cx)
+                                        })
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, window, cx| {
+                                                this.begin_like_press(window, cx)
+                                            }),
+                                        )
+                                        .on_click(
+                                            cx.listener(
+                                                move |this, event: &ClickEvent, window, cx| {
+                                                    match event {
+                                                        ClickEvent::Mouse(_) => this
+                                                            .finish_like_press(
+                                                                aid, !liked, window, cx,
+                                                            ),
+                                                        _ => this.toggle_like(aid, !liked, cx),
+                                                    }
+                                                },
+                                            ),
+                                        ),
                                     )
                                     .child(
                                         action_button(
@@ -367,6 +468,7 @@ impl InfoPanel {
                                             IconName::Coins,
                                             format_count(self.coin.count).into(),
                                             coins_given > 0,
+                                            false,
                                             coins_given >= 2,
                                             cx,
                                         )
@@ -405,6 +507,7 @@ impl InfoPanel {
                                             format_count(self.favorite.count).into(),
                                             favorited,
                                             false,
+                                            false,
                                             cx,
                                         )
                                         .on_click({
@@ -433,6 +536,7 @@ impl InfoPanel {
                                         IconName::Download,
                                         "缓存".into(),
                                         false,
+                                        false,
                                         true,
                                         cx,
                                     ))
@@ -441,6 +545,7 @@ impl InfoPanel {
                                             ("share", aid),
                                             IconName::Share2,
                                             format_count(self.share_count).into(),
+                                            false,
                                             false,
                                             false,
                                             cx,
@@ -478,6 +583,7 @@ fn action_button(
     icon: IconName,
     label: SharedString,
     active: bool,
+    busy: bool,
     dimmed: bool,
     cx: &App,
 ) -> Stateful<Div> {
@@ -496,10 +602,20 @@ fn action_button(
         .rounded(theme.radius)
         .cursor_pointer()
         .opacity(if dimmed { 0.45 } else { 1. })
-        .when(!dimmed, |this| {
+        .when(!dimmed && !busy, |this| {
             this.hover(move |this| this.bg(theme.accent))
         })
-        .child(Icon::new(icon).size(px(22.)).text_color(color))
+        .child(
+            div()
+                .h(px(22.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .when(busy, |this| this.child(Spinner::new().small().color(color)))
+                .when(!busy, |this| {
+                    this.child(Icon::new(icon).size(px(22.)).text_color(color))
+                }),
+        )
         .child(div().text_xs().text_color(color).child(label))
 }
 
@@ -619,7 +735,7 @@ pub(crate) fn short_label(page: &VideoPage) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{SelectableText, short_label};
+    use super::{LikeClick, LikePress, SelectableText, TRIPLE_HOLD, like_click, short_label};
     use crate::info::InfoSelections;
     use gpui_kit::base::{TextSelection, TextSelectionHandle};
     use gpui_kit::component::*;
@@ -630,8 +746,23 @@ mod tests {
         TestSupportExt as _, Window, WindowBounds, WindowOptions, div, point, px, size,
     };
     use rigili_bilibili::VideoPage;
+    use std::time::Instant;
 
     const BVID: &str = "BV1TgWp6MEHJ";
+
+    #[test]
+    fn only_a_held_press_asks_for_a_triple() {
+        let now = Instant::now();
+        let press = |fired| LikePress { at: now, fired };
+
+        assert_eq!(like_click(None, now), LikeClick::Like);
+        assert_eq!(like_click(Some(&press(false)), now), LikeClick::Like);
+        assert_eq!(
+            like_click(Some(&press(false)), now + TRIPLE_HOLD),
+            LikeClick::Triple
+        );
+        assert_eq!(like_click(Some(&press(true)), now), LikeClick::Ignore);
+    }
 
     struct Fixture {
         selection: TextSelectionHandle,
