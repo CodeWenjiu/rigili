@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::SelectableText;
@@ -52,6 +52,18 @@ pub(super) enum EmoteTarget {
     Reply,
 }
 
+/// One row of the virtual comment list.
+///
+/// Replies used to render inside their comment, so a thread with hundreds of
+/// them was a single enormous list item that defeated the virtualization.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CommentRow {
+    Comment(usize),
+    Reply { root: usize, reply: usize },
+    Control(usize),
+    Tail,
+}
+
 impl EmoteTarget {
     fn slot(self) -> u64 {
         match self {
@@ -94,28 +106,94 @@ impl InfoPanel {
         self.reset_comment_rows();
     }
 
-    fn reset_comment_rows(&self) {
-        self.comments_list.reset(self.comments.len() + 1);
+    fn reset_comment_rows(&mut self) {
+        let count = self.rebuild_comment_rows();
+        self.comments_list.reset(count);
     }
 
-    fn touch_comment_row(&self, root: u64) {
-        if let Some(index) = self
-            .comments
-            .iter()
-            .position(|comment| comment.rpid == root)
-        {
-            self.comments_list.remeasure_items(index..index + 1);
+    fn rebuild_comment_rows(&mut self) -> usize {
+        self.comment_rows = build_comment_rows(&self.comments, &self.reply_threads);
+        self.comment_rows.len()
+    }
+
+    fn rows_for_comment(&self, index: usize) -> usize {
+        self.comments
+            .get(index)
+            .map_or(0, |comment| rows_for_comment(comment, &self.reply_threads))
+    }
+
+    fn comment_row_start(&self, index: usize) -> usize {
+        comment_row_start(&self.comments, &self.reply_threads, index)
+    }
+
+    fn list_thread_shape(&self, index: usize, start: usize) -> (usize, bool) {
+        let mut replies = 0;
+        let mut control = false;
+        for row in self.comment_rows.iter().skip(start + 1) {
+            match row {
+                CommentRow::Reply { root, .. } if *root == index => replies += 1,
+                CommentRow::Control(root) if *root == index => control = true,
+                _ => break,
+            }
+        }
+        (replies, control)
+    }
+
+    fn ends_thread(&self, row: usize) -> bool {
+        !matches!(
+            self.comment_rows.get(row + 1),
+            Some(CommentRow::Reply { .. } | CommentRow::Control(_))
+        )
+    }
+
+    /// Applies a thread change at `index` to the list.
+    ///
+    /// The rows of the thread are spliced so the count and the measurements
+    /// stay in step with the comments. The rows the thread had are read from
+    /// the list itself: callers may already have changed the data (`rcount`,
+    /// the thread map) before getting here.
+    fn sync_thread(&mut self, index: usize) {
+        let start = self.comment_row_start(index);
+        let Some(comment) = self.comments.get(index) else {
+            return;
+        };
+        let (replies, control) = thread_shape(comment, &self.reply_threads);
+        let was = self.list_thread_shape(index, start);
+        let rows = self.rebuild_comment_rows();
+        let (at, removed, added) = thread_splice(start, was, (replies, control));
+        if removed != added {
+            self.comments_list.splice(at..at + removed, added);
+        }
+        let end = (start + 1 + replies + usize::from(control)).min(rows);
+        if start < end {
+            self.comments_list.remeasure_items(start..end);
+        }
+    }
+
+    fn touch_row(&self, row: usize) {
+        if row < self.comments_list.item_count() {
+            self.comments_list.remeasure_items(row..row + 1);
+        }
+    }
+
+    fn row_of_rpid(&self, rpid: u64) -> Option<usize> {
+        row_of_rpid(&self.comments, &self.reply_threads, rpid)
+    }
+
+    fn touch_row_of(&self, rpid: u64) {
+        if let Some(row) = self.row_of_rpid(rpid) {
+            self.touch_row(row);
         }
     }
 
     fn touch_reply_row(&self) {
         if let Some(target) = &self.reply_target {
-            self.touch_comment_row(target.root);
+            self.touch_row_of(target.parent);
         }
     }
 
     fn touch_comment_tail(&self) {
-        let index = self.comments.len();
+        let index = self.comment_rows.len().saturating_sub(1);
         if index < self.comments_list.item_count() {
             self.comments_list.remeasure_items(index..index + 1);
         }
@@ -228,10 +306,12 @@ impl InfoPanel {
                             replies,
                         } = page;
                         let added = replies.unwrap_or_default();
-                        let start = this.comments.len();
                         let count = added.len();
                         this.comments.extend(added);
-                        this.comments_list.splice(start..start, count);
+                        let previous = this.comment_rows.len();
+                        let rows = this.rebuild_comment_rows();
+                        this.comments_list
+                            .splice(previous - 1..previous - 1, rows - (previous - 1));
                         if count > 0 {
                             this.comments_pages.push_back(count);
                             this.trim_front_pages();
@@ -259,6 +339,7 @@ impl InfoPanel {
             return;
         }
         let top = self.comments_list.logical_scroll_top();
+        let dropped_rows: usize = (0..dropped).map(|index| self.rows_for_comment(index)).sum();
         let roots: Vec<u64> = self
             .comments
             .drain(0..dropped)
@@ -268,9 +349,10 @@ impl InfoPanel {
             self.reply_threads.remove(&root);
         }
         self.comments_first_page = self.comments_first_page.saturating_add(pages_dropped);
-        self.comments_list.splice(0..dropped, 0);
+        self.rebuild_comment_rows();
+        self.comments_list.splice(0..dropped_rows, 0);
         self.comments_list.scroll_to(ListOffset {
-            item_ix: top.item_ix.saturating_sub(dropped),
+            item_ix: top.item_ix.saturating_sub(dropped_rows),
             offset_in_item: top.offset_in_item,
         });
     }
@@ -282,6 +364,10 @@ impl InfoPanel {
             return;
         }
         let start = self.comments.len() - dropped;
+        let start_row = self.comment_row_start(start);
+        let dropped_rows: usize = (start..self.comments.len())
+            .map(|index| self.rows_for_comment(index))
+            .sum();
         let roots: Vec<u64> = self
             .comments
             .drain(start..)
@@ -290,7 +376,9 @@ impl InfoPanel {
         for root in roots {
             self.reply_threads.remove(&root);
         }
-        self.comments_list.splice(start..start + dropped, 0);
+        self.rebuild_comment_rows();
+        self.comments_list
+            .splice(start_row..start_row + dropped_rows, 0);
         self.comments_page = self.comments_page.saturating_sub(pages_dropped);
         self.comments_more = true;
     }
@@ -335,11 +423,14 @@ impl InfoPanel {
                         if count > 0 {
                             let top = this.comments_list.logical_scroll_top();
                             this.comments.splice(0..0, added);
+                            let previous = this.comment_rows.len();
+                            let rows = this.rebuild_comment_rows();
+                            let added_rows = rows - previous;
                             this.comments_pages.push_front(count);
                             this.comments_first_page = requested;
-                            this.comments_list.splice(0..0, count);
+                            this.comments_list.splice(0..0, added_rows);
                             this.comments_list.scroll_to(ListOffset {
-                                item_ix: top.item_ix + count,
+                                item_ix: top.item_ix + added_rows,
                                 offset_in_item: top.offset_in_item,
                             });
                             this.trim_back_pages();
@@ -387,34 +478,51 @@ impl InfoPanel {
         let Some(details) = self.details.clone() else {
             return;
         };
-        let thread = self.reply_threads.entry(root).or_default();
-        if thread.loading {
+        let Some(index) = self
+            .comments
+            .iter()
+            .position(|comment| comment.rpid == root)
+        else {
+            return;
+        };
+        if self
+            .reply_threads
+            .get(&root)
+            .is_some_and(|thread| thread.loading)
+        {
             return;
         }
-        if page == 1
-            && thread.replies.is_empty()
-            && let Some(comment) = self.comments.iter().find(|comment| comment.rpid == root)
         {
-            thread.replies = comment
-                .replies()
-                .iter()
-                .take(NESTED_COMMENT_LIMIT)
-                .cloned()
-                .collect();
+            let thread = self.reply_threads.entry(root).or_default();
+            if page == 1
+                && thread.replies.is_empty()
+                && let Some(comment) = self.comments.get(index)
+            {
+                thread.replies = comment
+                    .replies()
+                    .iter()
+                    .take(NESTED_COMMENT_LIMIT)
+                    .cloned()
+                    .collect();
+            }
         }
         let client = match client::get(cx) {
             Ok(client) => client,
             Err(error) => {
-                thread.error = Some(api_error_message(error));
-                self.touch_comment_row(root);
+                if let Some(thread) = self.reply_threads.get_mut(&root) {
+                    thread.error = Some(api_error_message(error));
+                }
+                self.sync_thread(index);
                 cx.notify();
                 return;
             }
         };
         let aid = details.aid;
-        thread.loading = true;
-        thread.error = None;
-        self.touch_comment_row(root);
+        if let Some(thread) = self.reply_threads.get_mut(&root) {
+            thread.loading = true;
+            thread.error = None;
+        }
+        self.sync_thread(index);
         cx.notify();
 
         spawn_api(
@@ -424,34 +532,51 @@ impl InfoPanel {
                 if this.details.as_ref().map(|details| details.aid) != Some(aid) {
                     return;
                 }
-                let Some(thread) = this.reply_threads.get_mut(&root) else {
+                let Some(index) = this
+                    .comments
+                    .iter()
+                    .position(|comment| comment.rpid == root)
+                else {
                     return;
                 };
-                thread.loading = false;
-                match result {
-                    Ok(CommentPage {
-                        page: info,
-                        replies,
-                    }) => {
-                        let replies = replies.unwrap_or_default();
-                        if page > 1 {
-                            thread.replies.extend(replies);
-                        } else {
-                            thread.replies = replies;
+                {
+                    let Some(thread) = this.reply_threads.get_mut(&root) else {
+                        return;
+                    };
+                    thread.loading = false;
+                    match result {
+                        Ok(CommentPage {
+                            page: info,
+                            replies,
+                        }) => {
+                            let replies = replies.unwrap_or_default();
+                            if page > 1 {
+                                thread.replies.extend(replies);
+                            } else {
+                                thread.replies = replies;
+                            }
+                            thread.page = if info.num == 0 { page } else { info.num };
+                            thread.total = info.count.max(info.acount);
+                            thread.more = (thread.replies.len() as u64) < thread.total;
                         }
-                        thread.page = if info.num == 0 { page } else { info.num };
-                        thread.total = info.count.max(info.acount);
-                        thread.more = (thread.replies.len() as u64) < thread.total;
+                        Err(error) => thread.error = Some(api_task_error_message(error, cx)),
                     }
-                    Err(error) => thread.error = Some(api_task_error_message(error, cx)),
                 }
-                this.touch_comment_row(root);
+                this.sync_thread(index);
                 cx.notify();
             },
         );
     }
 
     fn collapse_replies(&mut self, root: u64, cx: &mut Context<Self>) {
+        let Some(index) = self
+            .comments
+            .iter()
+            .position(|comment| comment.rpid == root)
+        else {
+            self.reply_threads.remove(&root);
+            return;
+        };
         self.reply_threads.remove(&root);
         if self
             .reply_target
@@ -462,7 +587,7 @@ impl InfoPanel {
             self.reply_error = None;
             self.close_emote_picker(EmoteTarget::Reply);
         }
-        self.touch_comment_row(root);
+        self.sync_thread(index);
         cx.notify();
     }
 
@@ -497,7 +622,6 @@ impl InfoPanel {
 
     fn toggle_comment_like(
         &mut self,
-        root: u64,
         rpid: u64,
         aid: u64,
         like: bool,
@@ -510,7 +634,7 @@ impl InfoPanel {
         if !self.set_comment_liked(rpid, like) {
             return;
         }
-        self.touch_comment_row(root);
+        self.touch_row_of(rpid);
         cx.notify();
 
         let window_handle = window.window_handle();
@@ -522,7 +646,7 @@ impl InfoPanel {
                     return;
                 };
                 this.set_comment_liked(rpid, !like);
-                this.touch_comment_row(root);
+                this.touch_row_of(rpid);
                 let message = api_task_error_message(error, cx);
                 let _ = window_handle.update(cx, |_, window, cx| {
                     toast::push(window, cx, Notification::error(message));
@@ -573,16 +697,14 @@ impl InfoPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let previous = self.reply_target.as_ref().map(|target| target.root);
-        let same_target = self
-            .reply_target
-            .as_ref()
-            .is_some_and(|target| target.parent == parent);
-        self.reply_target = Some(ReplyTarget {
+        let previous = self.reply_target.replace(ReplyTarget {
             root,
             parent,
             uname,
         });
+        let same_target = previous
+            .as_ref()
+            .is_some_and(|target| target.parent == parent);
         self.reply_error = None;
         let draft = self.reply_draft(window, cx);
         if !same_target {
@@ -592,9 +714,9 @@ impl InfoPanel {
             draft.update(cx, |state, cx| state.focus(window, cx));
         });
         if let Some(previous) = previous {
-            self.touch_comment_row(previous);
+            self.touch_row_of(previous.parent);
         }
-        self.touch_comment_row(root);
+        self.touch_row_of(parent);
         cx.notify();
     }
 
@@ -1151,16 +1273,88 @@ impl InfoPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if let Some(comment) = self.comments.get(index) {
-            return div()
+        let border = cx.theme().border;
+        let ends = self.ends_thread(index);
+        let shell = move |indented: bool, row: AnyElement| {
+            div()
                 .w_full()
-                .border_b_1()
-                .border_color(cx.theme().border)
-                .pb_5()
-                .child(self.render_comment(comment, 0, comment.rpid, cx))
-                .into_any_element();
+                .pb_2()
+                .when(indented, |this| this.pl(px(36.)))
+                .when(ends, |this| this.pb_5().border_b_1().border_color(border))
+                .child(row)
+        };
+        match self.comment_rows.get(index).copied() {
+            Some(CommentRow::Comment(root)) => {
+                let Some(comment) = self.comments.get(root) else {
+                    return self.render_comment_tail(window, cx);
+                };
+                let rpid = comment.rpid;
+                shell(false, self.render_comment(comment, 0, rpid, cx)).into_any_element()
+            }
+            Some(CommentRow::Reply { root, reply }) => {
+                let Some(comment) = self.comments.get(root) else {
+                    return self.render_comment_tail(window, cx);
+                };
+                let rpid = comment.rpid;
+                let Some(reply) = visible_replies(comment, &self.reply_threads).get(reply) else {
+                    return self.render_comment_tail(window, cx);
+                };
+                shell(true, self.render_comment(reply, 1, rpid, cx)).into_any_element()
+            }
+            Some(CommentRow::Control(root)) => {
+                shell(true, self.render_thread_control(root, cx)).into_any_element()
+            }
+            Some(CommentRow::Tail) | None => self.render_comment_tail(window, cx),
         }
-        self.render_comment_tail(window, cx)
+    }
+
+    fn render_thread_control(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let danger = cx.theme().danger;
+        let Some(rpid) = self.comments.get(index).map(|comment| comment.rpid) else {
+            return div().into_any_element();
+        };
+        let Some(thread) = self.reply_threads.get(&rpid) else {
+            return Button::new(("comment-replies-expand", rpid))
+                .small()
+                .ghost()
+                .label("展开回复")
+                .on_click(cx.listener(move |this, _, _, cx| this.load_next_replies(rpid, cx)))
+                .into_any_element();
+        };
+        h_flex()
+            .items_center()
+            .gap_2()
+            .when(thread.loading, |this| this.child(Spinner::new().small()))
+            .when_some(thread.error.clone(), |this, error| {
+                this.child(div().text_xs().text_color(danger).child(error))
+                    .child(
+                        Button::new(("comment-replies-retry", rpid))
+                            .small()
+                            .label("重试")
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| this.load_next_replies(rpid, cx)),
+                            ),
+                    )
+            })
+            .when(thread.more && !thread.loading, |this| {
+                this.child(
+                    Button::new(("comment-replies-more", rpid))
+                        .small()
+                        .ghost()
+                        .label("展开更多回复")
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.load_next_replies(rpid, cx)),
+                        ),
+                )
+            })
+            .child(
+                Button::new(("comment-replies-collapse", rpid))
+                    .small()
+                    .ghost()
+                    .label("收起回复")
+                    .on_click(cx.listener(move |this, _, _, cx| this.collapse_replies(rpid, cx))),
+            )
+            .into_any_element()
     }
 
     fn maybe_load_more_comments(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1303,6 +1497,7 @@ impl InfoPanel {
                                     .small()
                                     .label("取消")
                                     .on_click(cx.listener(|this, _, _, cx| {
+                                        this.touch_reply_row();
                                         this.reply_target = None;
                                         this.reply_error = None;
                                         this.close_emote_picker(EmoteTarget::Reply);
@@ -1338,7 +1533,6 @@ impl InfoPanel {
         let primary = cx.theme().primary;
         let foreground = cx.theme().foreground;
         let muted = cx.theme().muted_foreground;
-        let danger = cx.theme().danger;
         let member = &comment.member;
         let mid = member.mid;
         let uname: SharedString = member.uname.clone().into();
@@ -1384,77 +1578,15 @@ impl InfoPanel {
                 .into_any_element()
         };
 
-        let thread = (depth == 0)
-            .then(|| self.reply_threads.get(&comment.rpid))
-            .flatten();
-        let preview = comment.replies();
-        let nested_source: &[Comment] = match thread {
-            Some(thread) => &thread.replies,
-            None => &preview[..preview.len().min(NESTED_COMMENT_LIMIT)],
-        };
-        let nested = nested_source
-            .iter()
-            .map(|reply| self.render_comment(reply, depth + 1, root, cx))
-            .collect::<Vec<_>>();
-
-        let thread_control: Option<AnyElement> = if depth != 0 {
-            None
-        } else if let Some(thread) = thread {
-            Some(
-                h_flex()
-                    .items_center()
-                    .gap_2()
-                    .when(thread.loading, |this| this.child(Spinner::new().small()))
-                    .when_some(thread.error.clone(), |this, error| {
-                        this.child(div().text_xs().text_color(danger).child(error))
-                            .child(
-                                Button::new(("comment-replies-retry", comment.rpid))
-                                    .small()
-                                    .label("重试")
-                                    .on_click(cx.listener({
-                                        let rpid = comment.rpid;
-                                        move |this, _, _, cx| this.load_next_replies(rpid, cx)
-                                    })),
-                            )
-                    })
-                    .when(thread.more && !thread.loading, |this| {
-                        this.child(
-                            Button::new(("comment-replies-more", comment.rpid))
-                                .small()
-                                .ghost()
-                                .label("展开更多回复")
-                                .on_click(cx.listener({
-                                    let rpid = comment.rpid;
-                                    move |this, _, _, cx| this.load_next_replies(rpid, cx)
-                                })),
-                        )
-                    })
-                    .child(
-                        Button::new(("comment-replies-collapse", comment.rpid))
-                            .small()
-                            .ghost()
-                            .label("收起回复")
-                            .on_click(cx.listener({
-                                let rpid = comment.rpid;
-                                move |this, _, _, cx| this.collapse_replies(rpid, cx)
-                            })),
-                    )
-                    .into_any_element(),
-            )
-        } else if comment.rcount as usize > nested_source.len() {
-            Some(
-                Button::new(("comment-replies-expand", comment.rpid))
-                    .small()
-                    .ghost()
-                    .label("展开回复")
-                    .on_click(cx.listener({
-                        let rpid = comment.rpid;
-                        move |this, _, _, cx| this.load_next_replies(rpid, cx)
-                    }))
-                    .into_any_element(),
-            )
+        let nested = if depth == 0 {
+            Vec::new()
         } else {
-            None
+            comment
+                .replies()
+                .iter()
+                .take(NESTED_COMMENT_LIMIT)
+                .map(|reply| self.render_comment(reply, depth + 1, root, cx))
+                .collect::<Vec<_>>()
         };
 
         let replying = self
@@ -1554,7 +1686,7 @@ impl InfoPanel {
                                                 let rpid = comment.rpid;
                                                 move |this, _, window, cx| {
                                                     this.toggle_comment_like(
-                                                        root, rpid, aid, !liked, window, cx,
+                                                        rpid, aid, !liked, window, cx,
                                                     );
                                                 }
                                             }))
@@ -1600,11 +1732,108 @@ impl InfoPanel {
             .when(!nested.is_empty(), |this| {
                 this.child(v_flex().gap_2().pl(px(36.)).children(nested))
             })
-            .when_some(thread_control, |this, control| {
-                this.child(div().pl(px(36.)).child(control))
-            })
             .into_any_element()
     }
+}
+
+fn visible_replies<'a>(
+    comment: &'a Comment,
+    threads: &'a HashMap<u64, ReplyThread>,
+) -> &'a [Comment] {
+    match threads.get(&comment.rpid) {
+        Some(thread) => &thread.replies,
+        None => {
+            let preview = comment.replies();
+            &preview[..preview.len().min(NESTED_COMMENT_LIMIT)]
+        }
+    }
+}
+
+fn has_thread_control(comment: &Comment, threads: &HashMap<u64, ReplyThread>) -> bool {
+    threads.contains_key(&comment.rpid)
+        || comment.rcount as usize > visible_replies(comment, threads).len()
+}
+
+fn thread_shape(comment: &Comment, threads: &HashMap<u64, ReplyThread>) -> (usize, bool) {
+    (
+        visible_replies(comment, threads).len(),
+        has_thread_control(comment, threads),
+    )
+}
+
+/// The list edit that turns a thread with `from` rows into one with `to`.
+///
+/// `start` is the row of the comment itself, so the edit begins after the
+/// replies both shapes share. A row count that does not change means only the
+/// control row was replaced, which the caller can remeasure in place.
+fn thread_splice(start: usize, from: (usize, bool), to: (usize, bool)) -> (usize, usize, usize) {
+    let shared = from.0.min(to.0);
+    (
+        start + 1 + shared,
+        from.0 - shared + usize::from(from.1),
+        to.0 - shared + usize::from(to.1),
+    )
+}
+
+fn rows_for_comment(comment: &Comment, threads: &HashMap<u64, ReplyThread>) -> usize {
+    let (replies, control) = thread_shape(comment, threads);
+    1 + replies + usize::from(control)
+}
+
+fn build_comment_rows(
+    comments: &[Comment],
+    threads: &HashMap<u64, ReplyThread>,
+) -> Vec<CommentRow> {
+    let mut rows = Vec::with_capacity(comments.len() + 1);
+    for (index, comment) in comments.iter().enumerate() {
+        rows.push(CommentRow::Comment(index));
+        for reply in 0..visible_replies(comment, threads).len() {
+            rows.push(CommentRow::Reply { root: index, reply });
+        }
+        if has_thread_control(comment, threads) {
+            rows.push(CommentRow::Control(index));
+        }
+    }
+    rows.push(CommentRow::Tail);
+    rows
+}
+
+fn comment_row_start(
+    comments: &[Comment],
+    threads: &HashMap<u64, ReplyThread>,
+    index: usize,
+) -> usize {
+    comments
+        .iter()
+        .take(index)
+        .map(|comment| rows_for_comment(comment, threads))
+        .sum()
+}
+
+fn row_of_rpid(
+    comments: &[Comment],
+    threads: &HashMap<u64, ReplyThread>,
+    rpid: u64,
+) -> Option<usize> {
+    let mut row = 0;
+    for comment in comments {
+        if comment.rpid == rpid {
+            return Some(row);
+        }
+        let replies = visible_replies(comment, threads);
+        if let Some(reply) = replies.iter().position(|reply| reply.rpid == rpid) {
+            return Some(row + 1 + reply);
+        }
+        // Replies of a reply stay inside its row, where at most
+        // `NESTED_COMMENT_LIMIT` of them are rendered.
+        for (reply, nested) in replies.iter().enumerate() {
+            if nested.replies().iter().any(|nested| nested.rpid == rpid) {
+                return Some(row + 1 + reply);
+            }
+        }
+        row += 1 + replies.len() + usize::from(has_thread_control(comment, threads));
+    }
+    None
 }
 
 fn drain_front_pages(pages: &mut VecDeque<usize>) -> (u32, usize) {
@@ -1635,11 +1864,147 @@ fn drain_back_pages(pages: &mut VecDeque<usize>) -> (u32, usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::{COMMENT_RETAIN_PAGES, EmoteTarget, drain_back_pages, drain_front_pages};
+    use super::{
+        COMMENT_RETAIN_PAGES, CommentRow, EmoteTarget, ReplyThread, build_comment_rows,
+        comment_row_start, drain_back_pages, drain_front_pages, row_of_rpid, thread_splice,
+    };
     use crate::info::{InfoPanel, InfoSelections};
     use gpui_kit::prelude::*;
     use gpui_kit::{Bounds, TestAppContext, WindowBounds, WindowOptions, px, size};
-    use std::collections::VecDeque;
+    use rigili_bilibili::Comment;
+    use std::collections::{HashMap, VecDeque};
+
+    fn comment(rpid: u64, rcount: u64, replies: Vec<Comment>) -> Comment {
+        Comment {
+            rpid,
+            rcount,
+            replies: Some(replies),
+            ..Default::default()
+        }
+    }
+
+    fn plain(rpid: u64) -> Comment {
+        Comment {
+            rpid,
+            ..Default::default()
+        }
+    }
+
+    fn thread(replies: Vec<Comment>) -> ReplyThread {
+        ReplyThread {
+            replies,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn splits_threads_into_rows() {
+        let comments = vec![
+            comment(10, 0, Vec::new()),
+            comment(20, 5, vec![plain(21), plain(22), plain(23)]),
+            comment(30, 5, Vec::new()),
+        ];
+
+        assert_eq!(
+            build_comment_rows(&comments, &HashMap::new()),
+            vec![
+                CommentRow::Comment(0),
+                CommentRow::Comment(1),
+                CommentRow::Reply { root: 1, reply: 0 },
+                CommentRow::Reply { root: 1, reply: 1 },
+                CommentRow::Control(1),
+                CommentRow::Comment(2),
+                CommentRow::Control(2),
+                CommentRow::Tail,
+            ]
+        );
+
+        let mut threads = HashMap::new();
+        threads.insert(30, thread(vec![plain(31), plain(32), plain(33)]));
+        assert_eq!(
+            build_comment_rows(&comments, &threads),
+            vec![
+                CommentRow::Comment(0),
+                CommentRow::Comment(1),
+                CommentRow::Reply { root: 1, reply: 0 },
+                CommentRow::Reply { root: 1, reply: 1 },
+                CommentRow::Control(1),
+                CommentRow::Comment(2),
+                CommentRow::Reply { root: 2, reply: 0 },
+                CommentRow::Reply { root: 2, reply: 1 },
+                CommentRow::Reply { root: 2, reply: 2 },
+                CommentRow::Control(2),
+                CommentRow::Tail,
+            ]
+        );
+    }
+
+    #[test]
+    fn splices_only_the_rows_that_change() {
+        // The first page replaces the control under the two preview replies.
+        assert_eq!(thread_splice(4, (2, true), (20, true)), (7, 1, 19));
+        // Another page appends below twenty replies and the control.
+        assert_eq!(thread_splice(4, (20, true), (40, true)), (25, 1, 21));
+        // Collapsing drops every reply and the control.
+        assert_eq!(thread_splice(4, (20, true), (2, false)), (7, 19, 0));
+        // A control that appears or disappears changes the count by one.
+        assert_eq!(thread_splice(4, (2, false), (2, true)), (7, 0, 1));
+        // Repainting the control keeps the count, so it is remeasured.
+        assert_eq!(thread_splice(4, (2, true), (2, true)), (7, 1, 1));
+    }
+
+    #[test]
+    fn row_starts_match_the_built_rows() {
+        let comments = vec![
+            comment(1, 0, Vec::new()),
+            comment(2, 5, vec![plain(3)]),
+            comment(4, 0, Vec::new()),
+        ];
+        let mut threads = HashMap::new();
+        threads.insert(2, thread(vec![plain(5), plain(6)]));
+
+        let rows = build_comment_rows(&comments, &threads);
+        for index in 0..comments.len() {
+            assert_eq!(
+                rows[comment_row_start(&comments, &threads, index)],
+                CommentRow::Comment(index)
+            );
+        }
+        assert_eq!(
+            comment_row_start(&comments, &threads, comments.len()),
+            rows.len() - 1
+        );
+    }
+
+    #[test]
+    fn locates_root_reply_and_nested_rows() {
+        let mut root = comment(1, 4, Vec::new());
+        root.replies = Some(vec![Comment {
+            rpid: 2,
+            replies: Some(vec![plain(9)]),
+            ..Default::default()
+        }]);
+        let comments = vec![root, comment(3, 0, Vec::new())];
+        let mut threads = HashMap::new();
+        threads.insert(
+            1,
+            thread(vec![
+                Comment {
+                    rpid: 2,
+                    replies: Some(vec![plain(9)]),
+                    ..Default::default()
+                },
+                plain(4),
+            ]),
+        );
+
+        assert_eq!(row_of_rpid(&comments, &threads, 1), Some(0));
+        assert_eq!(row_of_rpid(&comments, &threads, 2), Some(1));
+        assert_eq!(row_of_rpid(&comments, &threads, 4), Some(2));
+        assert_eq!(row_of_rpid(&comments, &threads, 9), Some(1));
+        assert_eq!(row_of_rpid(&comments, &threads, 3), Some(4));
+        assert_eq!(row_of_rpid(&comments, &threads, 99), None);
+    }
 
     #[gpui_kit::test]
     fn opens_one_emote_picker_at_a_time(cx: &mut TestAppContext) {
