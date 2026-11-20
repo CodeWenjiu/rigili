@@ -17,6 +17,8 @@ const PICTURE_SIZE: f32 = 80.;
 const PICTURE_LIMIT: usize = 9;
 const THUMBNAIL_WIDTH: u32 = 160;
 const FULL_WIDTH: u32 = 1280;
+const FULL_HEIGHT: u32 = 8192;
+const FULL_PIXELS: f32 = 6_000_000.;
 const MAX_COPY_BYTES: usize = 20 * 1024 * 1024;
 
 /// Renders the pictures attached to a comment as a bounded thumbnail grid.
@@ -70,6 +72,7 @@ struct PictureViewer {
     index: usize,
     focus: FocusHandle,
     focused: bool,
+    scroll: ScrollHandle,
     /// Dropping the handle cancels the copy, so it is held until the next one.
     copy: Option<Task<()>>,
 }
@@ -81,17 +84,21 @@ impl PictureViewer {
             pictures,
             focus: cx.focus_handle(),
             focused: false,
+            scroll: ScrollHandle::new(),
             copy: None,
         }
     }
 
     fn stage(&self, viewport: gpui_kit::Size<Pixels>) -> (f32, f32) {
-        self.pictures
+        let (_, max_height) = limits(viewport);
+        let (width, height) = self
+            .pictures
             .iter()
             .map(|picture| fit(picture.img_width, picture.img_height, viewport))
-            .fold((0., 0.), |(width, height), (w, h)| {
+            .fold((0_f32, 0_f32), |(width, height), (w, h)| {
                 (width.max(w), height.max(h))
-            })
+            });
+        (width, height.min(max_height))
     }
 
     fn step(&mut self, delta: isize, cx: &mut Context<Self>) {
@@ -100,6 +107,7 @@ impl PictureViewer {
             return;
         }
         self.index = (self.index as isize + delta).rem_euclid(total as isize) as usize;
+        self.scroll.set_offset(point(px(0.), px(0.)));
         cx.notify();
     }
 
@@ -156,30 +164,41 @@ impl Render for PictureViewer {
         let images = crate::image_cache::comment_pictures(cx);
         let total = self.pictures.len();
 
+        let image = img(full_url(
+            &picture.img_src,
+            picture.img_width,
+            picture.img_height,
+        ))
+        .image_cache(&images)
+        .w(px(width))
+        .h(px(height))
+        .object_fit(ObjectFit::Contain);
+        let stage = if height > stage_height {
+            div()
+                .id("comment-picture-scroll")
+                .w(px(stage_width))
+                .h(px(stage_height))
+                .overflow_y_scroll()
+                .track_scroll(&self.scroll)
+                .child(v_flex().w_full().items_center().child(image))
+                .into_any_element()
+        } else {
+            div()
+                .w(px(stage_width))
+                .h(px(stage_height))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(image)
+                .into_any_element()
+        };
+
         v_flex()
             .id("comment-picture-viewer")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
             .gap_2()
-            .child(
-                div()
-                    .w(px(stage_width))
-                    .h(px(stage_height))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        img(full_url(
-                            &picture.img_src,
-                            picture.img_width,
-                            picture.img_height,
-                        ))
-                        .image_cache(&images)
-                        .w(px(width))
-                        .h(px(height))
-                        .object_fit(ObjectFit::Contain),
-                    ),
-            )
+            .child(stage)
             .child(
                 h_flex()
                     .items_center()
@@ -250,8 +269,7 @@ fn copy_url(src: &str, width: u32, height: u32) -> String {
     let width = if width == 0 || height == 0 {
         FULL_WIDTH
     } else {
-        let scale = (FULL_WIDTH as f32 / width.max(height) as f32).min(1.);
-        ((width as f32 * scale).round() as u32).max(1)
+        preview_size(width, height).0
     };
     scaled_png(src, width)
 }
@@ -294,26 +312,54 @@ fn copy_bytes(bytes: &[u8]) -> Result<(), &'static str> {
 }
 
 fn full_url(src: &str, width: u32, height: u32) -> String {
-    // A larger original would decode to tens of megabytes; the CDN copy below
-    // is still wider than the viewer draws at, so the loss is invisible.
-    if width == 0 || height == 0 || width.max(height) > FULL_WIDTH {
-        scaled(src, FULL_WIDTH)
-    } else {
-        normalize_url(src)
+    // A tall picture decodes to tens of megabytes at its native size, and a
+    // height past the GPU's texture limit leaves the viewer blank. Bound the
+    // long edge, the height and the pixel count so the CDN returns a
+    // proportional copy that still fits the viewer's budget.
+    if width == 0 || height == 0 {
+        return scaled(src, FULL_WIDTH);
     }
+    if preview_scale(width, height) >= 1. {
+        return normalize_url(src);
+    }
+    scaled(src, preview_size(width, height).0)
 }
 
-fn fit(width: u32, height: u32, viewport: gpui_kit::Size<Pixels>) -> (f32, f32) {
+fn preview_scale(width: u32, height: u32) -> f32 {
+    if width == 0 || height == 0 {
+        return 1.;
+    }
+    let by_width = FULL_WIDTH as f32 / width as f32;
+    let by_height = FULL_HEIGHT as f32 / height as f32;
+    let by_pixels = (FULL_PIXELS / (width as f32 * height as f32)).sqrt();
+    by_width.min(by_height).min(by_pixels).min(1.)
+}
+
+fn preview_size(width: u32, height: u32) -> (u32, u32) {
+    if width == 0 || height == 0 {
+        return (4, 3);
+    }
+    let scale = preview_scale(width, height);
+    let w = ((width as f32 * scale).floor() as u32).max(1);
+    let h = ((height as f32 * w as f32 / width as f32).round() as u32).max(1);
+    (w, h)
+}
+
+fn limits(viewport: gpui_kit::Size<Pixels>) -> (f32, f32) {
     // Room for the dialog's 16px padding, its close button and window margins.
     let max_width = (f32::from(viewport.width) - 96.).clamp(200., 880.);
     let max_height = (f32::from(viewport.height) - 160.).clamp(160., 660.);
-    let (width, height) = if width == 0 || height == 0 {
-        (4., 3.)
-    } else {
-        (width as f32, height as f32)
-    };
-    let scale = (max_width / width).min(max_height / height).min(1.);
-    ((width * scale).round(), (height * scale).round())
+    (max_width, max_height)
+}
+
+fn fit(width: u32, height: u32, viewport: gpui_kit::Size<Pixels>) -> (f32, f32) {
+    let (max_width, _) = limits(viewport);
+    let (width, height) = preview_size(width, height);
+    let scale = (max_width / width as f32).min(1.);
+    (
+        (width as f32 * scale).round(),
+        (height as f32 * scale).round(),
+    )
 }
 
 #[cfg(test)]
@@ -386,37 +432,41 @@ mod tests {
     }
 
     #[test]
-    fn fits_pictures_inside_the_window() {
+    fn fits_pictures_to_the_viewer_width() {
         let viewport = size(px(800.), px(600.));
 
         let (width, height) = fit(1000, 500, viewport);
-        assert!(width <= 704. && height <= 440.);
+        assert!(width <= 704.);
         assert!((width / height - 2.).abs() < 0.01);
 
         assert_eq!(fit(320, 240, viewport), (320., 240.));
 
         let (width, height) = fit(0, 0, viewport);
-        assert!(width <= 704. && height <= 440.);
+        assert!(width <= 704.);
         assert!((width / height - 4. / 3.).abs() < 0.01);
+
+        // A tall picture keeps a readable width and scrolls instead of
+        // shrinking to the dialog's height.
+        assert_eq!(fit(800, 20_000, viewport), (327., 8175.));
     }
 
     #[test]
     fn copies_png_at_a_bounded_width() {
         assert_eq!(
             copy_url("//i0.hdslb.com/bfs/new_dyn/a.webp", 800, 600),
-            "https://i0.hdslb.com/bfs/new_dyn/a.webp@800w_1c.png"
+            "https://i0.hdslb.com/bfs/new_dyn/a.webp@800w.png"
         );
         assert_eq!(
             copy_url("//i0.hdslb.com/bfs/new_dyn/a.webp", 2000, 600),
-            "https://i0.hdslb.com/bfs/new_dyn/a.webp@1280w_1c.png"
+            "https://i0.hdslb.com/bfs/new_dyn/a.webp@1280w.png"
         );
         assert_eq!(
             copy_url("//i0.hdslb.com/bfs/new_dyn/a.webp", 600, 2000),
-            "https://i0.hdslb.com/bfs/new_dyn/a.webp@384w_1c.png"
+            "https://i0.hdslb.com/bfs/new_dyn/a.webp@600w.png"
         );
         assert_eq!(
             copy_url("//i0.hdslb.com/bfs/new_dyn/a.webp", 0, 0),
-            "https://i0.hdslb.com/bfs/new_dyn/a.webp@1280w_1c.png"
+            "https://i0.hdslb.com/bfs/new_dyn/a.webp@1280w.png"
         );
     }
 
@@ -428,11 +478,19 @@ mod tests {
         );
         assert_eq!(
             full_url("//i0.hdslb.com/bfs/new_dyn/a.png", 2000, 600),
-            "https://i0.hdslb.com/bfs/new_dyn/a.png@1280w_1c.webp"
+            "https://i0.hdslb.com/bfs/new_dyn/a.png@1280w.webp"
+        );
+        assert_eq!(
+            full_url("//i0.hdslb.com/bfs/new_dyn/a.png", 600, 2000),
+            "https://i0.hdslb.com/bfs/new_dyn/a.png"
+        );
+        assert_eq!(
+            full_url("//i0.hdslb.com/bfs/new_dyn/a.png", 800, 20_000),
+            "https://i0.hdslb.com/bfs/new_dyn/a.png@327w.webp"
         );
         assert_eq!(
             full_url("//i0.hdslb.com/bfs/new_dyn/a.png", 0, 0),
-            "https://i0.hdslb.com/bfs/new_dyn/a.png@1280w_1c.webp"
+            "https://i0.hdslb.com/bfs/new_dyn/a.png@1280w.webp"
         );
     }
 }

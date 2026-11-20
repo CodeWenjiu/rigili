@@ -49,7 +49,7 @@ fn resized(url: &str, width: u32, format: &str) -> String {
     let mut out = String::with_capacity(prefix.len() + rest.len() + 24);
     out.push_str(prefix);
     out.push_str(rest);
-    let _ = write!(out, "@{width}w_1c.{format}");
+    let _ = write!(out, "@{width}w.{format}");
     out
 }
 
@@ -103,15 +103,15 @@ mod tests {
 
         assert_eq!(
             banner("http://i0.hdslb.com/banner.jpg", 1280),
-            "https://i0.hdslb.com/banner.jpg@1280w_1c.webp"
+            "https://i0.hdslb.com/banner.jpg@1280w.webp"
         );
         assert_eq!(
             banner("bfs/space/banner.png", 1280),
-            "https://i0.hdslb.com/bfs/space/banner.png@1280w_1c.webp"
+            "https://i0.hdslb.com/bfs/space/banner.png@1280w.webp"
         );
         assert_eq!(
             banner("//i1.hdslb.com/bfs/space/banner.png", 1280),
-            "https://i1.hdslb.com/bfs/space/banner.png@1280w_1c.webp"
+            "https://i1.hdslb.com/bfs/space/banner.png@1280w.webp"
         );
     }
 
@@ -135,15 +135,15 @@ mod tests {
         );
         assert_eq!(
             scaled("http://i0.hdslb.com/bfs/new_dyn/a.png", 1280),
-            "https://i0.hdslb.com/bfs/new_dyn/a.png@1280w_1c.webp"
+            "https://i0.hdslb.com/bfs/new_dyn/a.png@1280w.webp"
         );
         assert_eq!(
             scaled("//i0.hdslb.com/bfs/new_dyn/a.png@320w_1c.webp", 1280),
-            "https://i0.hdslb.com/bfs/new_dyn/a.png@1280w_1c.webp"
+            "https://i0.hdslb.com/bfs/new_dyn/a.png@1280w.webp"
         );
         assert_eq!(
             scaled_png("//i0.hdslb.com/bfs/new_dyn/a.png@320w_1c.webp", 800),
-            "https://i0.hdslb.com/bfs/new_dyn/a.png@800w_1c.png"
+            "https://i0.hdslb.com/bfs/new_dyn/a.png@800w.png"
         );
     }
 }
