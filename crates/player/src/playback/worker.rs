@@ -129,6 +129,26 @@ pub(super) fn run_worker(
                 MPV_EVENT_START_FILE => {
                     state.current_entry = event::start_file_entry(&event);
                     rigili_monitor::monitor!("mpv", "start file ({:?})", state.current_entry);
+                    // Attach the audio as soon as the new entry exists, before
+                    // its video has finished loading, so both demuxers share the
+                    // network latency instead of running one after the other.
+                    if let Some(audio) = state.pending_audio.take() {
+                        match mpv.command_async(
+                            &["audio-add", audio.as_str(), "select"],
+                            AUDIO_ADD_TAG | state.generation,
+                        ) {
+                            Ok(()) => {
+                                state.audio_requested = Some(Instant::now());
+                                rigili_monitor::monitor!("mpv", "audio-add issued");
+                            }
+                            Err(error) => {
+                                rigili_monitor::monitor!("mpv", "audio-add failed: {error}");
+                                mutate_status(&status, |status| {
+                                    status.error = Some(error.to_string());
+                                });
+                            }
+                        }
+                    }
                 }
                 MPV_EVENT_COMMAND_REPLY => {
                     if event.reply_userdata & AUDIO_ADD_TAG != 0
@@ -176,23 +196,6 @@ pub(super) fn run_worker(
                             .unwrap_or_else(|| "none".to_owned())
                     );
                     state.load_started = None;
-                    if let Some(audio) = state.pending_audio.take() {
-                        match mpv.command_async(
-                            &["audio-add", audio.as_str(), "select"],
-                            AUDIO_ADD_TAG | state.generation,
-                        ) {
-                            Ok(()) => {
-                                state.audio_requested = Some(Instant::now());
-                                rigili_monitor::monitor!("mpv", "audio-add issued");
-                            }
-                            Err(error) => {
-                                rigili_monitor::monitor!("mpv", "audio-add failed: {error}");
-                                mutate_status(&status, |status| {
-                                    status.error = Some(error.to_string());
-                                });
-                            }
-                        }
-                    }
                     let _ = mpv.set_property_flag("pause", state.pending_pause);
                     if let Some(seek) = state.pending_seek.take() {
                         let target = format!("{seek:.3}");
@@ -351,6 +354,7 @@ impl State {
                     mpv.abort_async_command(AUDIO_ADD_TAG | self.generation);
                 }
                 self.generation = self.generation.wrapping_add(1);
+                self.audio_requested = None;
                 self.pending_audio = audio;
                 self.pending_seek = start;
                 self.pending_pause = paused;
@@ -469,6 +473,7 @@ impl State {
                 }
                 self.needs_redraw = true;
             }
+            Command::Redraw => self.needs_redraw = true,
             Command::Shutdown => return ControlFlow::Break(()),
         }
 

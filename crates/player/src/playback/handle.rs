@@ -56,6 +56,7 @@ pub(super) enum Command {
     SetSpeed(f64),
     SetViewport(VideoSize),
     SetOsd(Option<OsdOverlay>),
+    Redraw,
     Shutdown,
 }
 
@@ -190,6 +191,12 @@ impl Player {
     pub fn set_native_output(&self, enabled: bool) {
         self.inner.native.request(enabled);
         self.inner.wake.signal();
+    }
+
+    /// Asks the worker to render the current frame again, e.g. after the
+    /// surface was detached and reattached while playback stayed paused.
+    pub fn redraw(&self) {
+        self.send(Command::Redraw);
     }
 
     /// Takes the newest frame rendered for direct GPU output.
@@ -393,10 +400,15 @@ mod tests {
         player.toggle_pause();
         wait_until(&player, Duration::from_secs(2), |status| !status.paused);
 
-        player.load(&path, audio.as_deref(), None);
+        player.switch_video(&path, audio.as_deref(), 3.0, false);
         wait_until(&player, Duration::from_secs(5), |status| {
-            status.duration > 0.0 && status.time_pos < 1.0
+            status.duration > 0.0 && status.time_pos > 2.0
         });
+        if audio.is_some() {
+            wait_until(&player, Duration::from_secs(3), |status| {
+                status.audio_codec.is_some()
+            });
+        }
 
         let status = player.status();
         println!("{status:?}");
