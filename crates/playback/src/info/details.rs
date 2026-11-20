@@ -1,3 +1,4 @@
+use std::f32::consts::{FRAC_PI_2, PI};
 use std::time::{Duration, Instant};
 
 use gpui_kit::assets::IconName;
@@ -21,7 +22,11 @@ use super::{
     InfoEvent, InfoPanel, RELATED_THUMB_HEIGHT, RELATED_THUMB_WIDTH, VideoDetails, dialog,
 };
 
-const TRIPLE_HOLD: Duration = Duration::from_millis(500);
+const LIKE_TAP: Duration = Duration::from_millis(300);
+const TRIPLE_HOLD: Duration = Duration::from_millis(2_000);
+const TRIPLE_POP: Duration = Duration::from_millis(600);
+const RING_STROKE: Pixels = px(2.);
+const RING_STEP: f32 = 2.5;
 
 pub(super) struct LikePress {
     at: Instant,
@@ -36,11 +41,30 @@ enum LikeClick {
 }
 
 fn like_click(press: Option<&LikePress>, now: Instant) -> LikeClick {
-    match press {
-        None => LikeClick::Like,
-        Some(press) if press.fired => LikeClick::Ignore,
-        Some(press) if now.duration_since(press.at) >= TRIPLE_HOLD => LikeClick::Triple,
-        Some(_) => LikeClick::Like,
+    let Some(press) = press else {
+        return LikeClick::Like;
+    };
+    if press.fired {
+        return LikeClick::Ignore;
+    }
+    let held = now.duration_since(press.at);
+    if held >= TRIPLE_HOLD {
+        LikeClick::Triple
+    } else if held < LIKE_TAP {
+        LikeClick::Like
+    } else {
+        // A hold abandoned before the ring fills is not a like.
+        LikeClick::Ignore
+    }
+}
+
+fn triple_pop_scale(delta: f32) -> f32 {
+    if delta < 0.35 {
+        1. + 0.25 * (delta / 0.35)
+    } else if delta < 0.7 {
+        1.25 - 0.29 * ((delta - 0.35) / 0.35)
+    } else {
+        0.96 + 0.04 * ((delta - 0.7) / 0.3)
     }
 }
 
@@ -59,6 +83,7 @@ impl InfoPanel {
             at: Instant::now(),
             fired: false,
         });
+        cx.notify();
         self.like_hold = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(TRIPLE_HOLD).await;
             let _ = this.update_in(cx, |this, window, cx| {
@@ -72,6 +97,7 @@ impl InfoPanel {
                     return;
                 }
                 press.fired = true;
+                cx.notify();
                 this.triple(window, cx);
             });
         }));
@@ -94,6 +120,34 @@ impl InfoPanel {
             LikeClick::Like => self.toggle_like(aid, like, cx),
             LikeClick::Ignore => {}
         }
+        cx.notify();
+    }
+
+    pub(super) fn start_triple_pop(&mut self, cx: &mut Context<Self>) {
+        let generation = self.triple_pop_generation.wrapping_add(1);
+        self.triple_pop_generation = generation;
+        self.triple_pop = Some(generation);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(TRIPLE_POP + Duration::from_millis(100))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.triple_pop == Some(generation) {
+                    this.triple_pop = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn cancel_like_press(&mut self, cx: &mut Context<Self>) {
+        if self.like_press.take().is_none() {
+            return;
+        }
+        self.like_hold = None;
+        cx.notify();
     }
 
     fn toggle_like(&mut self, aid: u64, like: bool, cx: &mut Context<Self>) {
@@ -191,7 +245,7 @@ impl InfoPanel {
         let triple_hint: &'static str = if triple.is_empty() {
             "已点赞、投币并收藏"
         } else {
-            "长按点赞，一键三连"
+            "长按点赞 2 秒，一键三连"
         };
         let share_url = format!("https://www.bilibili.com/video/{}", details.bvid);
 
@@ -429,14 +483,17 @@ impl InfoPanel {
                                 h_flex()
                                     .w_full()
                                     .items_stretch()
-                                    .child(
-                                        action_button(
+                                    .child({
+                                        let button = action_button(
                                             ("like", aid),
                                             IconName::ThumbsUp,
                                             format_count(self.like.count).into(),
-                                            liked,
-                                            triple_busy,
-                                            self.like.busy,
+                                            ActionState {
+                                                active: liked,
+                                                busy: triple_busy,
+                                                dimmed: self.like.busy,
+                                                pop: self.triple_pop,
+                                            },
                                             cx,
                                         )
                                         .tooltip(move |window, cx| {
@@ -448,28 +505,47 @@ impl InfoPanel {
                                                 this.begin_like_press(window, cx)
                                             }),
                                         )
-                                        .on_click(
-                                            cx.listener(
-                                                move |this, event: &ClickEvent, window, cx| {
-                                                    match event {
-                                                        ClickEvent::Mouse(_) => this
-                                                            .finish_like_press(
-                                                                aid, !liked, window, cx,
-                                                            ),
-                                                        _ => this.toggle_like(aid, !liked, cx),
-                                                    }
-                                                },
-                                            ),
-                                        ),
-                                    )
+                                        .on_mouse_up_out(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.cancel_like_press(cx)
+                                            }),
+                                        )
+                                        .on_click(cx.listener(
+                                            move |this, event: &ClickEvent, window, cx| match event
+                                            {
+                                                ClickEvent::Mouse(_) => {
+                                                    this.finish_like_press(aid, !liked, window, cx)
+                                                }
+                                                _ => this.toggle_like(aid, !liked, cx),
+                                            },
+                                        ));
+                                        if self
+                                            .like_press
+                                            .as_ref()
+                                            .is_some_and(|press| !press.fired)
+                                        {
+                                            button.child(hold_ring(
+                                                self.like_press_generation,
+                                                cx.theme().primary,
+                                                cx.theme().foreground.opacity(0.15),
+                                                cx.theme().radius,
+                                            ))
+                                        } else {
+                                            button
+                                        }
+                                    })
                                     .child(
                                         action_button(
                                             ("coin", aid),
                                             IconName::Coins,
                                             format_count(self.coin.count).into(),
-                                            coins_given > 0,
-                                            false,
-                                            coins_given >= 2,
+                                            ActionState {
+                                                active: coins_given > 0,
+                                                dimmed: coins_given >= 2,
+                                                pop: self.triple_pop,
+                                                ..Default::default()
+                                            },
                                             cx,
                                         )
                                         .on_click({
@@ -505,9 +581,11 @@ impl InfoPanel {
                                             ("favorite", aid),
                                             IconName::Star,
                                             format_count(self.favorite.count).into(),
-                                            favorited,
-                                            false,
-                                            false,
+                                            ActionState {
+                                                active: favorited,
+                                                pop: self.triple_pop,
+                                                ..Default::default()
+                                            },
                                             cx,
                                         )
                                         .on_click({
@@ -535,9 +613,10 @@ impl InfoPanel {
                                         ("cache", aid),
                                         IconName::Download,
                                         "缓存".into(),
-                                        false,
-                                        false,
-                                        true,
+                                        ActionState {
+                                            dimmed: true,
+                                            ..Default::default()
+                                        },
                                         cx,
                                     ))
                                     .child(
@@ -545,9 +624,7 @@ impl InfoPanel {
                                             ("share", aid),
                                             IconName::Share2,
                                             format_count(self.share_count).into(),
-                                            false,
-                                            false,
-                                            false,
+                                            ActionState::default(),
                                             cx,
                                         )
                                         .on_click({
@@ -578,31 +655,259 @@ fn plain_stat(icon: IconName, value: SharedString) -> impl IntoElement {
         .child(value)
 }
 
+enum RingSegment {
+    Line {
+        from: (f32, f32),
+        dir: (f32, f32),
+        len: f32,
+    },
+    Arc {
+        center: (f32, f32),
+        radius: f32,
+        start: f32,
+    },
+}
+
+impl RingSegment {
+    fn len(&self) -> f32 {
+        match self {
+            Self::Line { len, .. } => *len,
+            Self::Arc { radius, .. } => radius * FRAC_PI_2,
+        }
+    }
+
+    fn sample(&self, u: f32) -> ((f32, f32), (f32, f32)) {
+        match self {
+            Self::Line { from, dir, len } => (
+                (from.0 + dir.0 * len * u, from.1 + dir.1 * len * u),
+                (dir.1, -dir.0),
+            ),
+            Self::Arc {
+                center,
+                radius,
+                start,
+            } => {
+                let angle = start + FRAC_PI_2 * u;
+                let normal = (angle.cos(), angle.sin());
+                (
+                    (center.0 + normal.0 * radius, center.1 + normal.1 * radius),
+                    normal,
+                )
+            }
+        }
+    }
+}
+
+fn ring_outline(width: f32, height: f32, radius: f32) -> Vec<RingSegment> {
+    let radius = radius.clamp(0., width.min(height) / 2.);
+    let (w, h, r) = (width, height, radius);
+    let line = |from: (f32, f32), to: (f32, f32)| {
+        let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+        let len = (dx * dx + dy * dy).sqrt();
+        RingSegment::Line {
+            from,
+            dir: if len > 0. {
+                (dx / len, dy / len)
+            } else {
+                (0., 0.)
+            },
+            len,
+        }
+    };
+    vec![
+        line((w / 2., 0.), (w - r, 0.)),
+        RingSegment::Arc {
+            center: (w - r, r),
+            radius: r,
+            start: -FRAC_PI_2,
+        },
+        line((w, r), (w, h - r)),
+        RingSegment::Arc {
+            center: (w - r, h - r),
+            radius: r,
+            start: 0.,
+        },
+        line((w - r, h), (r, h)),
+        RingSegment::Arc {
+            center: (r, h - r),
+            radius: r,
+            start: FRAC_PI_2,
+        },
+        line((0., h - r), (0., r)),
+        RingSegment::Arc {
+            center: (r, r),
+            radius: r,
+            start: PI,
+        },
+        line((r, 0.), (w / 2., 0.)),
+    ]
+}
+
+/// A closed ring polygon tracing a rounded rect from the top middle clockwise.
+///
+/// `progress` is the fraction of the perimeter the ribbon covers; the outline
+/// starts at the top middle so the fill reads as a counter filling up.
+fn ring_polygon(
+    width: f32,
+    height: f32,
+    radius: f32,
+    thickness: f32,
+    progress: f32,
+) -> Vec<(f32, f32)> {
+    let progress = progress.clamp(0., 1.);
+    if progress <= 0. || width <= 0. || height <= 0. {
+        return Vec::new();
+    }
+    let segments = ring_outline(width, height, radius);
+    let total: f32 = segments.iter().map(RingSegment::len).sum();
+    if total <= 0. {
+        return Vec::new();
+    }
+    let mut remaining = total * progress;
+    let mut samples = Vec::new();
+    for segment in &segments {
+        let len = segment.len();
+        if len <= 0. {
+            continue;
+        }
+        let used = remaining.min(len);
+        let steps = ((used / RING_STEP).ceil() as usize).max(1);
+        for step in 0..=steps {
+            let u = step as f32 / steps as f32 * used / len;
+            samples.push(segment.sample(u));
+        }
+        remaining -= used;
+        if remaining <= 0. {
+            break;
+        }
+    }
+    let half = thickness / 2.;
+    let mut polygon = Vec::with_capacity(samples.len() * 2);
+    for &(point, normal) in &samples {
+        polygon.push((point.0 + normal.0 * half, point.1 + normal.1 * half));
+    }
+    for &(point, normal) in samples.iter().rev() {
+        polygon.push((point.0 - normal.0 * half, point.1 - normal.1 * half));
+    }
+    polygon
+}
+
+fn hold_ring(generation: u64, fill: Hsla, track: Hsla, radius: Pixels) -> AnyElement {
+    let ring = move |progress: f32| {
+        canvas(
+            |bounds, _, _| bounds,
+            move |_, bounds: Bounds<Pixels>, window, _| {
+                paint_ring(bounds, progress, radius, fill, track, window);
+            },
+        )
+        .absolute()
+        .inset_0()
+    };
+    ring(0.)
+        .with_animation(
+            ("triple-ring", generation),
+            Animation::new(TRIPLE_HOLD).with_max_fps(30.),
+            move |_, delta| ring(delta),
+        )
+        .into_any_element()
+}
+
+fn paint_ring(
+    bounds: Bounds<Pixels>,
+    progress: f32,
+    radius: Pixels,
+    fill: Hsla,
+    track: Hsla,
+    window: &mut Window,
+) {
+    let inset = RING_STROKE / 2. + px(0.5);
+    let width = bounds.size.width - inset * 2.;
+    let height = bounds.size.height - inset * 2.;
+    if width <= px(0.) || height <= px(0.) {
+        return;
+    }
+    let origin = bounds.origin + point(inset, inset);
+    let radius = (radius - inset).max(px(0.));
+    paint_outline(origin, width, height, radius, track, 1., window);
+    paint_outline(origin, width, height, radius, fill, progress, window);
+}
+
+fn paint_outline(
+    origin: Point<Pixels>,
+    width: Pixels,
+    height: Pixels,
+    radius: Pixels,
+    color: Hsla,
+    progress: f32,
+    window: &mut Window,
+) {
+    let points = ring_polygon(
+        width.as_f32(),
+        height.as_f32(),
+        radius.as_f32(),
+        RING_STROKE.as_f32(),
+        progress,
+    );
+    if points.len() < 3 {
+        return;
+    }
+    let points = points
+        .into_iter()
+        .map(|(x, y)| origin + point(px(x), px(y)))
+        .collect::<Vec<_>>();
+    let mut builder = PathBuilder::default();
+    builder.add_polygon(&points, true);
+    if let Ok(path) = builder.build() {
+        window.paint_path(path, color);
+    }
+}
+
+#[derive(Default)]
+struct ActionState {
+    active: bool,
+    busy: bool,
+    dimmed: bool,
+    pop: Option<u64>,
+}
+
 fn action_button(
     id: (&'static str, u64),
     icon: IconName,
     label: SharedString,
-    active: bool,
-    busy: bool,
-    dimmed: bool,
+    state: ActionState,
     cx: &App,
 ) -> Stateful<Div> {
     let theme = cx.theme();
-    let color = if active {
+    let color = if state.active {
         theme.primary
     } else {
         theme.muted_foreground
     };
+    let icon = Icon::new(icon).size(px(22.)).text_color(color);
+    let icon: AnyElement = match state.pop {
+        Some(generation) => icon
+            .with_animation(
+                ("triple-pop", generation),
+                Animation::new(TRIPLE_POP),
+                |icon, delta| {
+                    let scale = triple_pop_scale(delta);
+                    icon.transform(Transformation::scale(size(scale, scale)))
+                },
+            )
+            .into_any_element(),
+        None => icon.into_any_element(),
+    };
     v_flex()
         .id(id)
+        .relative()
         .flex_1()
         .items_center()
         .gap_1()
         .py_2()
         .rounded(theme.radius)
         .cursor_pointer()
-        .opacity(if dimmed { 0.45 } else { 1. })
-        .when(!dimmed && !busy, |this| {
+        .opacity(if state.dimmed { 0.45 } else { 1. })
+        .when(!state.dimmed && !state.busy, |this| {
             this.hover(move |this| this.bg(theme.accent))
         })
         .child(
@@ -611,10 +916,10 @@ fn action_button(
                 .flex()
                 .items_center()
                 .justify_center()
-                .when(busy, |this| this.child(Spinner::new().small().color(color)))
-                .when(!busy, |this| {
-                    this.child(Icon::new(icon).size(px(22.)).text_color(color))
-                }),
+                .when(state.busy, |this| {
+                    this.child(Spinner::new().small().color(color))
+                })
+                .when(!state.busy, |this| this.child(icon)),
         )
         .child(div().text_xs().text_color(color).child(label))
 }
@@ -735,7 +1040,10 @@ pub(crate) fn short_label(page: &VideoPage) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{LikeClick, LikePress, SelectableText, TRIPLE_HOLD, like_click, short_label};
+    use super::{
+        LIKE_TAP, LikeClick, LikePress, SelectableText, TRIPLE_HOLD, like_click, ring_polygon,
+        short_label, triple_pop_scale,
+    };
     use crate::info::InfoSelections;
     use gpui_kit::base::{TextSelection, TextSelectionHandle};
     use gpui_kit::component::*;
@@ -746,22 +1054,58 @@ mod tests {
         TestSupportExt as _, Window, WindowBounds, WindowOptions, div, point, px, size,
     };
     use rigili_bilibili::VideoPage;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     const BVID: &str = "BV1TgWp6MEHJ";
 
     #[test]
-    fn only_a_held_press_asks_for_a_triple() {
+    fn only_a_short_tap_or_a_full_hold_acts() {
         let now = Instant::now();
         let press = |fired| LikePress { at: now, fired };
 
         assert_eq!(like_click(None, now), LikeClick::Like);
         assert_eq!(like_click(Some(&press(false)), now), LikeClick::Like);
         assert_eq!(
+            like_click(Some(&press(false)), now + LIKE_TAP),
+            LikeClick::Ignore
+        );
+        assert_eq!(
+            like_click(
+                Some(&press(false)),
+                now + TRIPLE_HOLD - Duration::from_millis(1)
+            ),
+            LikeClick::Ignore
+        );
+        assert_eq!(
             like_click(Some(&press(false)), now + TRIPLE_HOLD),
             LikeClick::Triple
         );
         assert_eq!(like_click(Some(&press(true)), now), LikeClick::Ignore);
+    }
+
+    #[test]
+    fn ring_traces_the_button_outline() {
+        assert!(ring_polygon(100., 100., 0., 4., 0.).is_empty());
+
+        let half = ring_polygon(100., 100., 8., 4., 0.5);
+        assert!(!half.is_empty());
+        for &(x, y) in &half {
+            assert!((-2. ..=102.).contains(&x));
+            assert!((-2. ..=102.).contains(&y));
+        }
+
+        let full = ring_polygon(100., 100., 8., 4., 1.);
+        let (outer, inner) = (full[0], full[full.len() - 1]);
+        assert!((outer.0 - 50.).abs() < 0.1 && (outer.1 + 2.).abs() < 0.1);
+        assert!((inner.0 - 50.).abs() < 0.1 && (inner.1 - 2.).abs() < 0.1);
+    }
+
+    #[test]
+    fn the_triple_pop_overshoots_and_settles() {
+        assert_eq!(triple_pop_scale(0.), 1.);
+        assert!((triple_pop_scale(0.35) - 1.25).abs() < 1e-5);
+        assert!((triple_pop_scale(0.7) - 0.96).abs() < 1e-5);
+        assert_eq!(triple_pop_scale(1.), 1.);
     }
 
     struct Fixture {

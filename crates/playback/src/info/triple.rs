@@ -54,7 +54,11 @@ impl InfoPanel {
             return;
         };
         let plan = self.triple_plan();
-        if self.triple_busy || plan.is_empty() {
+        if self.triple_busy {
+            return;
+        }
+        if plan.is_empty() {
+            toast::push(window, cx, Notification::info("已经三连过啦"));
             return;
         }
         let client = match client::get(cx) {
@@ -76,30 +80,38 @@ impl InfoPanel {
             cx,
             async move { Ok(run(&client, aid, &bvid, plan).await) },
             move |this, result, cx| {
-                let (report, task_error) = match result {
+                let (mut report, task_error) = match result {
                     Ok(report) => (report, None),
                     Err(error) => (TripleReport::default(), Some(error)),
                 };
-                if this
+                let applied = report.liked || report.coins > 0 || report.favorited;
+                let error = report.error.take();
+                let current = this
                     .details
                     .as_ref()
-                    .is_some_and(|details| details.aid == aid)
-                {
+                    .is_some_and(|details| details.aid == aid);
+                if current {
                     this.finish_triple(&report, cx);
+                    if applied && error.is_none() {
+                        this.start_triple_pop(cx);
+                    }
                 }
-                let message = match (report.error, task_error) {
-                    (Some(TripleError::Api(error)), _) => {
-                        Some(api_task_error_message(ApiTaskError::Api(error), cx))
-                    }
+                let notice = match (error, task_error) {
+                    (Some(TripleError::Api(error)), _) => Some(Notification::error(
+                        api_task_error_message(ApiTaskError::Api(error), cx),
+                    )),
                     (Some(TripleError::MissingFolder), _) => {
-                        Some("找不到可用的默认收藏夹".to_owned())
+                        Some(Notification::error("找不到可用的默认收藏夹"))
                     }
-                    (None, Some(error)) => Some(api_task_error_message(error, cx)),
+                    (None, Some(error)) => {
+                        Some(Notification::error(api_task_error_message(error, cx)))
+                    }
+                    (None, None) if current && applied => Some(Notification::success("三连成功")),
                     (None, None) => None,
                 };
-                if let Some(message) = message {
+                if let Some(notice) = notice {
                     let _ = window_handle.update(cx, |_, window, cx| {
-                        toast::push(window, cx, Notification::error(message));
+                        toast::push(window, cx, notice);
                     });
                 }
             },
