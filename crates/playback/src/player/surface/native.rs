@@ -43,10 +43,8 @@ impl PlayerView {
                     match native.output.present(frame) {
                         Ok(()) => {
                             if !native.visible {
-                                if let Some(bounds) = self.video_bounds.get().map(|area| {
-                                    contain_rect(area, VideoSize::new(frame.width, frame.height))
-                                        .to_device_pixels(window.scale_factor())
-                                }) {
+                                if let Some(area) = self.video_bounds.get() {
+                                    let bounds = area.to_device_pixels(window.scale_factor());
                                     if let Ok(surface) = native.composition.platform_surface() {
                                         let _ = surface.set_bounds(bounds);
                                     }
@@ -94,11 +92,10 @@ impl PlayerView {
         let Some(area) = self.video_bounds.get() else {
             return;
         };
-        let Some(video_size) = self.status.video_size else {
+        if self.status.video_size.is_none() {
             return;
-        };
-        let rect = contain_rect(area, video_size);
-        let bounds = rect.to_device_pixels(window.scale_factor());
+        }
+        let bounds = area.to_device_pixels(window.scale_factor());
         if self.native_bounds == Some(bounds) {
             return;
         }

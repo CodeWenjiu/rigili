@@ -593,7 +593,7 @@ impl State {
 
     fn output_size(&self, mpv: &Mpv, max_edge: Option<u32>) -> Option<VideoSize> {
         let source = mpv.video_size()?;
-        let size = target_dimensions(source, self.viewport, max_edge);
+        let size = target_canvas(source, self.viewport, max_edge);
         (size.width > 0 && size.height > 0).then_some(size)
     }
 }
@@ -614,20 +614,37 @@ fn ready_to_render(rendered: bool, present: bool, redraw: bool) -> bool {
     rendered || (present && !redraw)
 }
 
-fn target_dimensions(source: VideoSize, viewport: VideoSize, max_edge: Option<u32>) -> VideoSize {
+// The render target keeps the player's aspect, so mpv draws the letterbox
+// bars into the exported frame and the ASS overlay (danmaku) may use them.
+// Video pixels still cap at the source size, so a small video on a HiDPI
+// player is upscaled by the compositor rather than re-rendered larger.
+fn target_canvas(source: VideoSize, viewport: VideoSize, max_edge: Option<u32>) -> VideoSize {
     if source.width == 0 || source.height == 0 || viewport.width < 2 || viewport.height < 2 {
         return VideoSize::default();
     }
 
-    let mut scale = (viewport.width as f64 / source.width as f64)
+    let fit = (viewport.width as f64 / source.width as f64)
         .min(viewport.height as f64 / source.height as f64);
+    let mut scale = fit.min(1.0);
     if let Some(max_edge) = max_edge {
         scale = scale.min(max_edge as f64 / source.width.max(source.height) as f64);
     }
-    let scale = scale.min(1.0);
+
+    let density = scale / fit;
+    let mut width = viewport.width as f64 * density;
+    let mut height = viewport.height as f64 * density;
+    if let Some(max_edge) = max_edge {
+        let long = width.max(height);
+        if long > max_edge as f64 {
+            let shrink = max_edge as f64 / long;
+            width *= shrink;
+            height *= shrink;
+        }
+    }
+
     VideoSize::new(
-        ((source.width as f64 * scale).round() as u32).max(1),
-        ((source.height as f64 * scale).round() as u32).max(1),
+        (width.round() as u32).max(1),
+        (height.round() as u32).max(1),
     )
 }
 
@@ -684,21 +701,21 @@ mod tests {
     }
 
     #[test]
-    fn target_dimensions_fit_the_viewport() {
+    fn the_canvas_keeps_the_player_aspect() {
         let cases = [
             (size(1920, 1080), size(1280, 720), size(1280, 720)),
-            (size(1920, 1080), size(1000, 1000), size(1000, 563)),
+            (size(1920, 1080), size(1000, 1000), size(1000, 1000)),
             (size(1280, 720), size(1920, 1080), size(1280, 720)),
             (size(3840, 2160), size(3840, 2160), size(3840, 2160)),
             (size(2160, 3840), size(2160, 3840), size(2160, 3840)),
             (size(3840, 2160), size(1920, 1080), size(1920, 1080)),
-            (size(3840, 2160), size(2880, 1800), size(2880, 1620)),
+            (size(3840, 2160), size(2880, 1800), size(2880, 1800)),
             (size(1920, 1080), size(0, 0), size(0, 0)),
             (size(0, 0), size(1280, 720), size(0, 0)),
         ];
         for (video, viewport, expected) in cases {
             assert_eq!(
-                target_dimensions(video, viewport, None),
+                target_canvas(video, viewport, None),
                 expected,
                 "{video:?} in {viewport:?}"
             );
@@ -708,16 +725,24 @@ mod tests {
     #[test]
     fn readback_caps_the_long_edge() {
         assert_eq!(
-            target_dimensions(size(3840, 2160), size(3840, 2160), Some(MAX_OUTPUT_EDGE)),
+            target_canvas(size(3840, 2160), size(3840, 2160), Some(MAX_OUTPUT_EDGE)),
             size(2560, 1440)
         );
         assert_eq!(
-            target_dimensions(size(2160, 3840), size(2160, 3840), Some(MAX_OUTPUT_EDGE)),
+            target_canvas(size(2160, 3840), size(2160, 3840), Some(MAX_OUTPUT_EDGE)),
             size(1440, 2560)
         );
         assert_eq!(
-            target_dimensions(size(1920, 1080), size(1280, 720), Some(MAX_OUTPUT_EDGE)),
+            target_canvas(size(1920, 1080), size(1280, 720), Some(MAX_OUTPUT_EDGE)),
             size(1280, 720)
+        );
+        assert_eq!(
+            target_canvas(size(1920, 1080), size(2000, 800), Some(MAX_OUTPUT_EDGE)),
+            size(2000, 800)
+        );
+        assert_eq!(
+            target_canvas(size(1920, 1080), size(3000, 1000), Some(MAX_OUTPUT_EDGE)),
+            size(2560, 853)
         );
     }
 

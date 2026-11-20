@@ -78,15 +78,11 @@ impl PlayerView {
 
         if let Some(area) = self.video_bounds.get() {
             let time = self.playback_time();
-            let (width, height, scale) = match self.status.video_size {
-                Some(video) => {
-                    let rect = contain_rect(area, video);
-                    let width = f32::from(rect.size.width);
-                    let height = f32::from(rect.size.height);
-                    (width, height, width / video.width as f32)
-                }
-                None => (f32::from(area.size.width), f32::from(area.size.height), 1.0),
-            };
+            let width = f32::from(area.size.width);
+            let height = f32::from(area.size.height);
+            let scale = self.status.video_size.map_or(1.0, |video| {
+                f32::from(contain_rect(area, video).size.width) / video.width as f32
+            });
             let started = Instant::now();
             self.update_danmaku(time, width, height, scale, window.scale_factor());
             let elapsed = started.elapsed();
