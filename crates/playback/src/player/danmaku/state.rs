@@ -32,6 +32,7 @@ pub(super) struct DanmakuState {
 
 struct ActiveDanmaku {
     text: String,
+    base_font_size: u8,
     font_size: f32,
     color: u32,
     position: (f32, f32),
@@ -114,6 +115,10 @@ impl DanmakuState {
         }
     }
 
+    fn font_size(&self, base: u8) -> f32 {
+        (f32::from(base.max(18)) * self.scale * self.settings.font_scale).clamp(14., 64.)
+    }
+
     fn layout_active(&mut self, active: &mut Vec<ActiveDanmaku>, time: f64, width: f32) {
         let count = self.lanes.len();
         active.retain(|item| item.lane < count);
@@ -155,6 +160,12 @@ impl DanmakuState {
 
         if resized || rescaled {
             self.scale = scale;
+            if rescaled {
+                for item in active.iter_mut() {
+                    item.font_size = self.font_size(item.base_font_size);
+                    item.width = estimate_width(&item.text, item.font_size);
+                }
+            }
             self.apply_metrics();
             self.layout_active(&mut active, time, width);
             changed = true;
@@ -264,8 +275,7 @@ impl DanmakuState {
         width: f32,
         active: &mut Vec<ActiveDanmaku>,
     ) -> bool {
-        let font_size =
-            (item.font_size.max(18) as f32 * self.scale * self.settings.font_scale).clamp(14., 64.);
+        let font_size = self.font_size(item.font_size);
         let text_width = estimate_width(&item.text, font_size);
         let scrolling = !matches!(item.mode, DanmakuMode::Top | DanmakuMode::Bottom);
 
@@ -291,6 +301,7 @@ impl DanmakuState {
 
         active.push(ActiveDanmaku {
             text: item.text.clone(),
+            base_font_size: item.font_size,
             font_size,
             color: item.color,
             position: (x, y),
@@ -463,6 +474,35 @@ mod tests {
 
         assert!(state.update(3., 1280., 720., 1.));
         assert!(!state.update(3., 1280., 720., 1.));
+    }
+
+    #[test]
+    fn active_danmaku_follow_the_video_scale() {
+        let mut state = DanmakuState {
+            area: Some((640., 360.)),
+            scale: 1.,
+            ..DanmakuState::default()
+        };
+        state.apply_metrics();
+
+        let item = Danmaku {
+            time: 1.0,
+            mode: DanmakuMode::Scroll,
+            font_size: 25,
+            color: 0x00ff_ffff,
+            text: "hello".into(),
+        };
+        let mut active = Vec::new();
+        assert!(state.spawn(&item, 1.0, 640., &mut active));
+        let size = active[0].font_size;
+        let width = active[0].width;
+        state.active = active;
+
+        assert!(state.update(1.0, 1280., 720., 1.5));
+
+        let item = &state.active[0];
+        assert!((item.font_size - size * 1.5).abs() < 0.01);
+        assert!((item.width - width * 1.5).abs() < 0.01);
     }
 
     #[test]
