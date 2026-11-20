@@ -11,7 +11,6 @@ use rigili_player::{Player, VideoFrame, VideoSize};
 
 const HOVER_DELAY: Duration = Duration::from_millis(400);
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
-const PLAYER_LINGER: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub(crate) struct PreviewSource {
@@ -157,7 +156,6 @@ struct PreviewSurface {
     owner: Option<WeakEntity<PreviewSlot>>,
     generation: u64,
     poll: Option<Task<()>>,
-    teardown: Option<Task<()>>,
 }
 
 impl PreviewSurface {
@@ -168,7 +166,6 @@ impl PreviewSurface {
             owner: None,
             generation: 0,
             poll: None,
-            teardown: None,
         }
     }
 
@@ -181,7 +178,6 @@ impl PreviewSurface {
     ) {
         self.generation += 1;
         self.owner = Some(owner);
-        self.teardown = None;
         if let Some(frame) = self.frame.take() {
             cx.drop_image(frame, Some(window));
         }
@@ -225,24 +221,15 @@ impl PreviewSurface {
         self.owner = None;
         self.generation += 1;
         self.poll = None;
-        self.teardown = None;
         if let Some(frame) = self.frame.take() {
             cx.drop_image(frame, window);
         }
+        // Releasing the player here and rebuilding it on the next hover leaves
+        // tens of MB in glibc arenas per cycle and never returns it, so one
+        // idle player costs less than the churn.
         if let Some(player) = &self.player {
             player.stop();
         }
-
-        let generation = self.generation;
-        self.teardown = Some(cx.spawn(async move |surface, cx| {
-            cx.background_executor().timer(PLAYER_LINGER).await;
-            let _ = surface.update(cx, |surface, cx| {
-                if surface.generation == generation && surface.owner.is_none() {
-                    surface.player = None;
-                    cx.notify();
-                }
-            });
-        }));
         cx.notify();
     }
 
