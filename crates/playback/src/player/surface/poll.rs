@@ -76,24 +76,8 @@ impl PlayerView {
             .set_playing(self.status.phase == PlaybackPhase::Playing && !self.status.paused);
         self.danmaku_demand.set_position(self.playback_time());
 
-        if let Some(area) = self.video_bounds.get() {
-            let time = self.playback_time();
-            let width = f32::from(area.size.width);
-            let height = f32::from(area.size.height);
-            let scale = self.status.video_size.map_or(1.0, |video| {
-                f32::from(contain_rect(area, video).size.width) / video.width as f32
-            });
-            let started = Instant::now();
-            self.update_danmaku(time, width, height, scale, window.scale_factor());
-            let elapsed = started.elapsed();
-            if elapsed > Duration::from_millis(2) {
-                rigili_monitor::monitor!(
-                    "danmaku",
-                    "update {elapsed:?} ({} active)",
-                    self.danmaku_layer.active_count()
-                );
-            }
-        }
+        self.pump_danmaku(window);
+        self.sync_danmaku_like(window, cx);
 
         if self.controls_idle() {
             self.controls_visible = false;
@@ -108,6 +92,28 @@ impl PlayerView {
 
         if changed {
             cx.notify();
+        }
+    }
+
+    pub(crate) fn pump_danmaku(&mut self, window: &Window) {
+        let Some(area) = self.video_bounds.get() else {
+            return;
+        };
+        let time = self.playback_time();
+        let width = f32::from(area.size.width);
+        let height = f32::from(area.size.height);
+        let scale = self.status.video_size.map_or(1.0, |video| {
+            f32::from(contain_rect(area, video).size.width) / video.width as f32
+        });
+        let started = Instant::now();
+        self.update_danmaku(time, width, height, scale, window.scale_factor());
+        let elapsed = started.elapsed();
+        if elapsed > Duration::from_millis(2) {
+            rigili_monitor::monitor!(
+                "danmaku",
+                "update {elapsed:?} ({} active)",
+                self.danmaku_layer.active_count()
+            );
         }
     }
 

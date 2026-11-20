@@ -187,6 +187,7 @@ mod tests {
         use rigili_bilibili::{Danmaku, DanmakuMode};
 
         let item = |time| Danmaku {
+            id: 0,
             time,
             mode: DanmakuMode::Scroll,
             font_size: 25,

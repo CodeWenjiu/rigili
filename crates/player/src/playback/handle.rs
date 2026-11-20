@@ -1,4 +1,5 @@
 use std::{
+    path::Path,
     sync::{
         Arc, Condvar, Mutex,
         mpsc::{self, Sender},
@@ -59,16 +60,17 @@ pub(super) enum Command {
 }
 
 impl Player {
-    pub fn new() -> Self {
-        Self::spawn(RenderBackend::GpuPreferred)
+    pub fn new(fonts: Option<&Path>) -> Self {
+        Self::spawn(RenderBackend::GpuPreferred, fonts)
     }
 
     /// Creates a player that always renders on the CPU, for small previews.
-    pub fn new_software() -> Self {
-        Self::spawn(RenderBackend::Software)
+    pub fn new_software(fonts: Option<&Path>) -> Self {
+        Self::spawn(RenderBackend::Software, fonts)
     }
 
-    fn spawn(backend: RenderBackend) -> Self {
+    fn spawn(backend: RenderBackend, fonts: Option<&Path>) -> Self {
+        let fonts = fonts.map(Path::to_path_buf);
         let (sender, receiver) = mpsc::channel();
         let frame = Arc::new(Mutex::new(None));
         let status = Arc::new(StatusSlot::new(Arc::new(PlayerStatus::default())));
@@ -89,6 +91,7 @@ impl Player {
                     worker_frame,
                     worker_status,
                     worker_native,
+                    fonts,
                 )
             });
 
@@ -220,7 +223,7 @@ impl Player {
 
 impl Default for Player {
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }
 
@@ -345,7 +348,7 @@ mod tests {
         let audio = std::env::var("RIGILI_TEST_AUDIO")
             .ok()
             .filter(|path| !path.is_empty());
-        let player = Player::new();
+        let player = Player::new(None);
         player.set_viewport(VideoSize::new(1280, 720));
         player.load(&path, audio.as_deref(), None);
 

@@ -3,10 +3,14 @@ rigili_macro::mod_pub!(super, bar, feed);
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
+use gpui_kit::assets::IconName;
+use gpui_kit::base::SelectableText;
+use gpui_kit::component::Icon;
 use gpui_kit::component::input::InputEvent;
 use gpui_kit::component::notification::Notification;
+use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::{Client, Danmaku};
@@ -15,12 +19,18 @@ use rigili_core::runtime::spawn_api;
 use rigili_core::toast;
 use rigili_player::OsdOverlay;
 
-use crate::player::surface::PlayerView;
+use crate::player::surface::{OVERLAY_FOREGROUND, PlayerView};
 use crate::settings::DanmakuSettings;
 
 use self::state::DanmakuState;
 
 const DANMAKU_MAX_LEN: usize = 100;
+// The like affordance trails the text, so a danmaku close to the right edge
+// would hang it outside the video.
+const DANMAKU_LIKE_SPACE: f32 = 88.;
+// A pointer sweeping across the video crosses many danmaku; only a pause long
+// enough to read one deserves a stats request.
+const DANMAKU_LIKE_DELAY: Duration = Duration::from_millis(300);
 
 pub(crate) struct DanmakuDemand {
     enabled: AtomicBool,
@@ -67,6 +77,13 @@ pub(super) struct DanmakuSource {
     cid: u64,
 }
 
+pub(super) struct DanmakuPin {
+    dmid: u64,
+    likes: Option<u32>,
+    liked: bool,
+    pending: bool,
+}
+
 pub(super) struct DanmakuLayer {
     state: DanmakuState,
 }
@@ -111,6 +128,18 @@ impl DanmakuLayer {
 
     pub(super) fn set_settings(&mut self, settings: DanmakuSettings, time: f64) {
         self.state.update_settings(settings, time);
+    }
+
+    fn pin_at(&mut self, x: f32, y: f32, time: f64, hold: bool) -> bool {
+        self.state.pin_at(x, y, time, hold)
+    }
+
+    fn unpin(&mut self, time: f64) -> bool {
+        self.state.unpin(time)
+    }
+
+    fn pinned(&self) -> Option<state::Pinned<'_>> {
+        self.state.pinned()
     }
 }
 
@@ -305,6 +334,210 @@ impl PlayerView {
                 cx.notify();
             },
         );
+    }
+
+    pub(super) fn hover_danmaku(
+        &mut self,
+        position: Point<Pixels>,
+        held: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.danmaku_layer.settings().enabled {
+            return;
+        }
+        let Some(bounds) = self.video_bounds.get() else {
+            return;
+        };
+        let x = f32::from(position.x - bounds.left());
+        let y = f32::from(position.y - bounds.top());
+        if self.danmaku_layer.pin_at(x, y, self.playback_time(), held) {
+            self.pump_danmaku(window);
+            cx.notify();
+        }
+    }
+
+    pub(super) fn leave_danmaku(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.danmaku_layer.unpin(self.playback_time()) {
+            self.pump_danmaku(window);
+            cx.notify();
+        }
+    }
+
+    fn danmaku_like_fits(&self, pin: &state::Pinned<'_>) -> bool {
+        self.video_bounds.get().is_some_and(|bounds| {
+            pin.position.0 + pin.width + DANMAKU_LIKE_SPACE <= f32::from(bounds.size.width)
+        })
+    }
+
+    /// Keeps the like state in step with whatever the pointer is hovering.
+    pub(super) fn sync_danmaku_like(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let pin = self.danmaku_layer.pinned();
+        let pinned = pin
+            .as_ref()
+            .filter(|pin| pin.id != 0 && self.danmaku_like_fits(pin))
+            .map(|pin| pin.id);
+        if pinned == self.danmaku_pin.as_ref().map(|pin| pin.dmid) {
+            return;
+        }
+        self.danmaku_pin = pinned.map(|dmid| DanmakuPin {
+            dmid,
+            likes: None,
+            liked: false,
+            pending: false,
+        });
+        cx.notify();
+
+        let (Some(dmid), Some(source)) = (pinned, self.danmaku_source.clone()) else {
+            return;
+        };
+        let cid = source.cid;
+        let generation = self.danmaku_like_generation.wrapping_add(1);
+        self.danmaku_like_generation = generation;
+        let task = cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(DANMAKU_LIKE_DELAY).await;
+            let _ = this.update_in(cx, |this, _, cx| {
+                if this.danmaku_like_generation != generation {
+                    return;
+                }
+                let client = source.client.clone();
+                spawn_api(
+                    cx,
+                    async move { client.danmaku_like_stats(cid, dmid).await },
+                    move |this, result, cx| {
+                        if this.danmaku_like_generation != generation {
+                            return;
+                        }
+                        let Ok(Some(stats)) = result else {
+                            return;
+                        };
+                        let Some(pin) = this.danmaku_pin.as_mut() else {
+                            return;
+                        };
+                        if pin.dmid != dmid {
+                            return;
+                        }
+                        pin.likes = Some(stats.likes);
+                        pin.liked = stats.liked;
+                        cx.notify();
+                    },
+                );
+            });
+        });
+        task.detach();
+    }
+
+    pub(super) fn like_danmaku(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(source) = self.danmaku_source.clone() else {
+            return;
+        };
+        let Some(pin) = self.danmaku_pin.as_mut() else {
+            return;
+        };
+        if pin.pending {
+            return;
+        }
+        let dmid = pin.dmid;
+        let liked = !pin.liked;
+        let previous = pin.likes;
+        pin.liked = liked;
+        pin.likes = pin.likes.map(|likes| {
+            if liked {
+                likes.saturating_add(1)
+            } else {
+                likes.saturating_sub(1)
+            }
+        });
+        pin.pending = true;
+        // A like answers the same question as the stats request, so drop any
+        // response that was already in flight.
+        self.danmaku_like_generation = self.danmaku_like_generation.wrapping_add(1);
+        cx.notify();
+
+        let cid = source.cid;
+        let window_handle = window.window_handle();
+        spawn_api(
+            cx,
+            async move { source.client.danmaku_thumbup(cid, dmid, liked).await },
+            move |this, result, cx| {
+                let Some(pin) = this.danmaku_pin.as_mut().filter(|pin| pin.dmid == dmid) else {
+                    return;
+                };
+                pin.pending = false;
+                if let Err(error) = result {
+                    pin.liked = !liked;
+                    pin.likes = previous;
+                    let message = api_task_error_message(error, cx);
+                    let _ = window_handle.update(cx, |_, window, cx| {
+                        toast::push(window, cx, Notification::error(message));
+                    });
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    pub(super) fn pinned_danmaku(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let pin = self.danmaku_layer.pinned()?;
+        let style = TextStyleRefinement {
+            font_family: Some(pin.font_family.clone()),
+            font_size: Some(px(pin.font_size).into()),
+            line_height: Some(px(rigili_core::fonts::baseline_line_height(pin.font_size)).into()),
+            color: Some(rgb(pin.color).into()),
+            white_space: Some(WhiteSpace::Nowrap),
+            ..Default::default()
+        };
+        let (left, top) = pin.position;
+        let id = ElementId::NamedInteger("danmaku-pinned".into(), pin.id);
+        let mut row = div()
+            .absolute()
+            .left(px(left))
+            .top(px(top))
+            .flex()
+            .items_center()
+            .gap_1()
+            .font_family(pin.font_family.clone())
+            .child(
+                div()
+                    .cursor(CursorStyle::IBeam)
+                    .child(SelectableText::new(id, pin.text.to_owned()).text_style(style)),
+            );
+
+        if let Some(like) = self.danmaku_pin.as_ref().filter(|like| like.dmid == pin.id) {
+            let color = if like.liked {
+                cx.theme().accent
+            } else {
+                OVERLAY_FOREGROUND
+            };
+            row = row.child(
+                div()
+                    .id("danmaku-like")
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px_1()
+                    .line_height(relative(1.))
+                    .cursor_pointer()
+                    .text_xs()
+                    .text_color(color)
+                    .on_click(cx.listener(|this, _, window, cx| this.like_danmaku(window, cx)))
+                    .child(
+                        Icon::new(IconName::ThumbsUp)
+                            .size(px(16.))
+                            .text_color(color),
+                    )
+                    .when_some(like.likes, |this, likes| this.child(likes.to_string())),
+            );
+        }
+
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .overflow_hidden()
+                .child(row)
+                .into_any_element(),
+        )
     }
 }
 

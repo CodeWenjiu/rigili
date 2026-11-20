@@ -1,6 +1,7 @@
 use std::{
     ffi::c_int,
     ops::ControlFlow,
+    path::PathBuf,
     sync::{Arc, Mutex, mpsc},
     time::{Duration, Instant},
 };
@@ -60,11 +61,15 @@ pub(super) fn run_worker(
     frame_slot: Arc<Mutex<Option<VideoFrame>>>,
     status: Arc<StatusSlot>,
     native: Arc<NativeSlot>,
+    fonts: Option<PathBuf>,
 ) {
-    let mpv = match Mpv::new(match backend {
-        RenderBackend::GpuPreferred => PLAYBACK_CACHE,
-        RenderBackend::Software => PREVIEW_CACHE,
-    }) {
+    let mpv = match Mpv::new(
+        match backend {
+            RenderBackend::GpuPreferred => PLAYBACK_CACHE,
+            RenderBackend::Software => PREVIEW_CACHE,
+        },
+        fonts.as_deref(),
+    ) {
         Ok(mpv) => mpv,
         Err(error) => {
             mutate_status(&status, |status| {
@@ -253,7 +258,7 @@ pub(super) fn run_worker(
         if (state.needs_redraw || update & MPV_RENDER_UPDATE_FRAME != 0) && ready {
             let render_started = Instant::now();
             if native.enabled() {
-                if let Some(size) = state.output_size(&mpv, None) {
+                if let Some(size) = state.output_size(&mpv, None, true) {
                     if let Some(slot) = native.acquire() {
                         match state.render_native(&mut render, &native, slot, size) {
                             Ok(()) => state.native_frame = true,
@@ -471,7 +476,7 @@ impl State {
     }
 
     fn render(&mut self, mpv: &Mpv, render: &mut Renderer) -> Option<VideoFrame> {
-        let size = self.output_size(mpv, Some(MAX_OUTPUT_EDGE))?;
+        let size = self.output_size(mpv, Some(MAX_OUTPUT_EDGE), false)?;
 
         let stride = size.width * 4;
         let length = stride as usize * size.height as usize;
@@ -577,7 +582,7 @@ impl State {
         let cache = mpv.cache_state().unwrap_or_default();
         rigili_monitor::monitor!(
             "mpv",
-            "phase={phase:?} pos={time_pos:.2}s duration={duration:.2}s buffered={buffered:.1}s loaded_for={loaded_for:?} cache={:.1}s rate={:.0}KiB/s underrun={} cache-idle={} paused-for-cache={} eof={} size={video_size:?} hwdec={} drops={}",
+            "phase={phase:?} pos={time_pos:.2}s duration={duration:.2}s buffered={buffered:.1}s loaded_for={loaded_for:?} cache={:.1}s rate={:.0}KiB/s underrun={} cache-idle={} paused-for-cache={} eof={} size={video_size:?} canvas={:?} viewport={:?} hwdec={} drops={}",
             cache.duration,
             cache.raw_input_rate / 1024.,
             cache.underrun,
@@ -585,15 +590,17 @@ impl State {
             mpv.get_property_flag("paused-for-cache")
                 .unwrap_or_default(),
             mpv.get_property_flag("eof-reached").unwrap_or_default(),
+            self.output_size(mpv, None, true),
+            self.viewport,
             mpv.get_property_string("hwdec-current")
                 .unwrap_or_else(|| "none".to_owned()),
             mpv.get_property_i64("frame-drop-count").unwrap_or_default()
         );
     }
 
-    fn output_size(&self, mpv: &Mpv, max_edge: Option<u32>) -> Option<VideoSize> {
+    fn output_size(&self, mpv: &Mpv, max_edge: Option<u32>, upscale: bool) -> Option<VideoSize> {
         let source = mpv.video_size()?;
-        let size = target_canvas(source, self.viewport, max_edge);
+        let size = target_canvas(source, self.viewport, max_edge, upscale);
         (size.width > 0 && size.height > 0).then_some(size)
     }
 }
@@ -616,16 +623,22 @@ fn ready_to_render(rendered: bool, present: bool, redraw: bool) -> bool {
 
 // The render target keeps the player's aspect, so mpv draws the letterbox
 // bars into the exported frame and the ASS overlay (danmaku) may use them.
-// Video pixels still cap at the source size, so a small video on a HiDPI
-// player is upscaled by the compositor rather than re-rendered larger.
-fn target_canvas(source: VideoSize, viewport: VideoSize, max_edge: Option<u32>) -> VideoSize {
+// The danmaku are rasterized at the target's resolution, so the native path
+// renders at the display's resolution to keep them sharp; the readback path
+// stops at the source size to keep the copies small.
+fn target_canvas(
+    source: VideoSize,
+    viewport: VideoSize,
+    max_edge: Option<u32>,
+    upscale: bool,
+) -> VideoSize {
     if source.width == 0 || source.height == 0 || viewport.width < 2 || viewport.height < 2 {
         return VideoSize::default();
     }
 
     let fit = (viewport.width as f64 / source.width as f64)
         .min(viewport.height as f64 / source.height as f64);
-    let mut scale = fit.min(1.0);
+    let mut scale = if upscale { fit } else { fit.min(1.0) };
     if let Some(max_edge) = max_edge {
         scale = scale.min(max_edge as f64 / source.width.max(source.height) as f64);
     }
@@ -715,7 +728,7 @@ mod tests {
         ];
         for (video, viewport, expected) in cases {
             assert_eq!(
-                target_canvas(video, viewport, None),
+                target_canvas(video, viewport, None, false),
                 expected,
                 "{video:?} in {viewport:?}"
             );
@@ -723,25 +736,62 @@ mod tests {
     }
 
     #[test]
+    fn native_output_upscales_to_the_viewport() {
+        assert_eq!(
+            target_canvas(size(1920, 1080), size(2285, 1801), None, true),
+            size(2285, 1801)
+        );
+        assert_eq!(
+            target_canvas(size(1920, 1080), size(2285, 1801), None, false),
+            size(1920, 1513)
+        );
+    }
+
+    #[test]
     fn readback_caps_the_long_edge() {
         assert_eq!(
-            target_canvas(size(3840, 2160), size(3840, 2160), Some(MAX_OUTPUT_EDGE)),
+            target_canvas(
+                size(3840, 2160),
+                size(3840, 2160),
+                Some(MAX_OUTPUT_EDGE),
+                false
+            ),
             size(2560, 1440)
         );
         assert_eq!(
-            target_canvas(size(2160, 3840), size(2160, 3840), Some(MAX_OUTPUT_EDGE)),
+            target_canvas(
+                size(2160, 3840),
+                size(2160, 3840),
+                Some(MAX_OUTPUT_EDGE),
+                false
+            ),
             size(1440, 2560)
         );
         assert_eq!(
-            target_canvas(size(1920, 1080), size(1280, 720), Some(MAX_OUTPUT_EDGE)),
+            target_canvas(
+                size(1920, 1080),
+                size(1280, 720),
+                Some(MAX_OUTPUT_EDGE),
+                false
+            ),
             size(1280, 720)
         );
         assert_eq!(
-            target_canvas(size(1920, 1080), size(2000, 800), Some(MAX_OUTPUT_EDGE)),
+            target_canvas(
+                size(1920, 1080),
+                size(2000, 800),
+                Some(MAX_OUTPUT_EDGE),
+                false
+            ),
             size(2000, 800)
         );
         assert_eq!(
-            target_canvas(size(1920, 1080), size(3000, 1000), Some(MAX_OUTPUT_EDGE)),
+            target_canvas(
+                size(1920, 1080),
+                size(3000, 1000),
+                Some(MAX_OUTPUT_EDGE),
+                false
+            ),
             size(2560, 853)
         );
     }

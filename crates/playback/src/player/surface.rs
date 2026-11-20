@@ -33,7 +33,7 @@ const OVERLAY_SCRIM_STRONG: Hsla = Hsla {
     l: 0.,
     a: 0.62,
 };
-const OVERLAY_FOREGROUND: Hsla = Hsla {
+pub(super) const OVERLAY_FOREGROUND: Hsla = Hsla {
     h: 0.,
     s: 0.,
     l: 1.,
@@ -77,7 +77,7 @@ pub(super) struct PlayerView {
     native_requested: bool,
     native_failed: bool,
     native_bounds: Option<Bounds<DevicePixels>>,
-    video_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    pub(super) video_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     qualities: Vec<VideoQuality>,
     selected_quality: u32,
     audio_url: Option<String>,
@@ -110,6 +110,8 @@ pub(super) struct PlayerView {
     pub(super) danmaku_sending: bool,
     pub(super) danmaku_settings_open: bool,
     pub(super) danmaku_input_focused: bool,
+    pub(super) danmaku_pin: Option<danmaku::DanmakuPin>,
+    pub(super) danmaku_like_generation: u64,
     last_pump: Instant,
     play_anchor: Option<(f64, Instant)>,
     notice: Option<(Notice, Instant)>,
@@ -188,7 +190,7 @@ impl PlayerView {
             }
         });
 
-        let player = Player::new();
+        let player = Player::new(rigili_core::fonts::osd_dir().as_deref());
         let speed = SPEEDS
             .iter()
             .copied()
@@ -258,6 +260,8 @@ impl PlayerView {
             danmaku_sending: false,
             danmaku_settings_open: false,
             danmaku_input_focused: false,
+            danmaku_pin: None,
+            danmaku_like_generation: 0,
             last_pump: Instant::now(),
             play_anchor: None,
             notice: None,

@@ -14,6 +14,11 @@ const SPAWN_GRACE: f64 = 0.5;
 const SEEK_BACK: f64 = 1.0;
 const SEEK_FORWARD: f64 = 1.0;
 const TIME_EPSILON: f64 = 0.001;
+// Fingers are not precise, and a frozen danmaku is easier to grab than to miss.
+const PIN_PADDING: f32 = 4.;
+// A pinned danmaku carries the like affordance after its text, so the pointer
+// may travel past the last glyph and still be considered on it.
+const PIN_SLACK: f32 = 64.;
 
 #[derive(Default)]
 pub(super) struct DanmakuState {
@@ -31,6 +36,7 @@ pub(super) struct DanmakuState {
 }
 
 struct ActiveDanmaku {
+    id: u64,
     text: String,
     base_font_size: u8,
     font_size: f32,
@@ -42,6 +48,17 @@ struct ActiveDanmaku {
     scroll: bool,
     lane: usize,
     bottom: bool,
+    frozen: Option<f64>,
+}
+
+pub(super) struct Pinned<'a> {
+    pub(super) id: u64,
+    pub(super) text: &'a str,
+    pub(super) font_family: &'a SharedString,
+    pub(super) color: u32,
+    pub(super) font_size: f32,
+    pub(super) position: (f32, f32),
+    pub(super) width: f32,
 }
 
 impl DanmakuState {
@@ -86,6 +103,65 @@ impl DanmakuState {
         self.active.len()
     }
 
+    pub(super) fn pinned(&self) -> Option<Pinned<'_>> {
+        let item = self.active.iter().find(|item| item.frozen.is_some())?;
+        Some(Pinned {
+            id: item.id,
+            text: &item.text,
+            font_family: &self.font_family,
+            color: item.color,
+            font_size: item.font_size,
+            position: item.position,
+            width: item.width,
+        })
+    }
+
+    /// Freezes the topmost danmaku under the pointer, or releases the current
+    /// one when the pointer is not over it. Returns whether the pin changed.
+    pub(super) fn pin_at(&mut self, x: f32, y: f32, time: f64, hold: bool) -> bool {
+        let mut changed = false;
+        if let Some(item) = self.active.iter().find(|item| item.frozen.is_some()) {
+            // A drag that leaves the text must keep it frozen, or the selection
+            // would be cut off mid-gesture.
+            if pinned_hit(item, x, y) || hold {
+                return false;
+            }
+            changed = self.unpin(time);
+        }
+
+        let Some(item) = self.active.iter_mut().rev().find(|item| hit(item, x, y)) else {
+            return changed;
+        };
+        item.frozen = Some(time);
+        // The lane stays blocked while the danmaku hangs in place, otherwise a
+        // new comment would fly straight through it.
+        if let Some(slot) = self.lanes.get_mut(item.lane) {
+            *slot = f64::INFINITY;
+        }
+        self.dirty = true;
+        true
+    }
+
+    pub(super) fn unpin(&mut self, time: f64) -> bool {
+        let speed = self.settings.scroll_seconds;
+        let width = self.area.map_or(0., |(width, _)| width);
+        let Some(item) = self.active.iter_mut().find(|item| item.frozen.is_some()) else {
+            return false;
+        };
+        let Some(frozen_at) = item.frozen.take() else {
+            return false;
+        };
+        let shift = (time - frozen_at).max(0.);
+        item.start += shift;
+        item.expires += shift;
+        let free_at = lane_free_at(item, speed, width);
+        if let Some(slot) = self.lanes.get_mut(item.lane) {
+            *slot = free_at;
+        }
+        self.dirty = true;
+        true
+    }
+
     pub(super) fn update_settings(&mut self, settings: DanmakuSettings, time: f64) {
         if self.settings == settings {
             return;
@@ -125,6 +201,9 @@ impl DanmakuState {
         let speed = self.settings.scroll_seconds;
 
         for item in active.iter_mut() {
+            if item.frozen.is_some() {
+                continue;
+            }
             let y = self.lane_y(item.lane, item.bottom);
             let x = if item.scroll {
                 let elapsed = (time - item.start).max(0.) as f32;
@@ -134,15 +213,16 @@ impl DanmakuState {
             };
             item.position = (x, y);
 
-            let free_at = if item.scroll {
-                item.start + f64::from(item.width) * speed / f64::from(width + item.width) + 0.15
-            } else {
-                item.expires
-            };
+            let free_at = self.lane_free_at(item);
             if let Some(slot) = self.lanes.get_mut(item.lane) {
                 *slot = slot.max(free_at);
             }
         }
+    }
+
+    fn lane_free_at(&self, item: &ActiveDanmaku) -> f64 {
+        let width = self.area.map_or(0., |(width, _)| width);
+        lane_free_at(item, self.settings.scroll_seconds, width)
     }
 
     pub(super) fn update(&mut self, time: f64, width: f32, height: f32, scale: f32) -> bool {
@@ -160,6 +240,9 @@ impl DanmakuState {
 
         if resized || rescaled {
             self.scale = scale;
+            for item in active.iter_mut() {
+                item.frozen = None;
+            }
             if rescaled {
                 for item in active.iter_mut() {
                     item.font_size = self.font_size(item.base_font_size);
@@ -192,16 +275,20 @@ impl DanmakuState {
 
         let mut spawned = 0;
         for item in active.iter_mut() {
-            if item.scroll {
+            if item.scroll && item.frozen.is_none() {
                 let elapsed = (time - item.start).max(0.) as f32;
                 let speed = self.settings.scroll_seconds as f32;
                 item.position.0 = width - elapsed / speed * (width + item.width);
             }
         }
         let before = active.len();
-        active.retain(|item| time < item.expires);
+        active.retain(|item| item.frozen.is_some() || time < item.expires);
         changed |= active.len() != before;
-        if previous.is_some_and(|last| time > last) && active.iter().any(|item| item.scroll) {
+        if previous.is_some_and(|last| time > last)
+            && active
+                .iter()
+                .any(|item| item.scroll && item.frozen.is_none())
+        {
             changed = true;
         }
 
@@ -239,12 +326,13 @@ impl DanmakuState {
 
     pub(super) fn ass(&self, device_scale: f32) -> String {
         let alpha = ((1. - self.settings.opacity.clamp(0.05, 1.)) * 255.).round() as u8;
+        let em_scale = rigili_core::fonts::libass_em_scale();
         let mut out = String::with_capacity(self.active.len() * 64);
-        for item in &self.active {
+        for item in self.active.iter().filter(|item| item.frozen.is_none()) {
             let red = ((item.color >> 16) & 0xff) as u8;
             let green = ((item.color >> 8) & 0xff) as u8;
             let blue = (item.color & 0xff) as u8;
-            let font_size = item.font_size * device_scale;
+            let font_size = item.font_size * device_scale * em_scale;
             let _ = writeln!(
                 out,
                 "{{\\an7\\pos({:.1},{:.1})\\fn{}\\fs{font_size:.1}\\c&H{:02X}{:02X}{:02X}&\\3c&H000000&\\bord{:.1}\\shad0\\alpha&H{alpha:02X}&}}{}",
@@ -300,6 +388,7 @@ impl DanmakuState {
         };
 
         active.push(ActiveDanmaku {
+            id: item.id,
             text: item.text.clone(),
             base_font_size: item.font_size,
             font_size,
@@ -316,6 +405,7 @@ impl DanmakuState {
             scroll: scrolling,
             lane,
             bottom,
+            frozen: None,
         });
         true
     }
@@ -338,6 +428,32 @@ impl DanmakuState {
 
 fn is_discontinuity(last: f64, time: f64) -> bool {
     time < last - SEEK_BACK || time > last + SEEK_FORWARD
+}
+
+fn lane_free_at(item: &ActiveDanmaku, speed: f64, width: f32) -> f64 {
+    if item.scroll {
+        item.start + f64::from(item.width) * speed / f64::from(width + item.width) + 0.15
+    } else {
+        item.expires
+    }
+}
+
+fn hit(item: &ActiveDanmaku, x: f32, y: f32) -> bool {
+    let height = item.font_size * 1.5;
+    let (left, top) = item.position;
+    x >= left - PIN_PADDING
+        && x <= left + item.width + PIN_PADDING
+        && y >= top - PIN_PADDING
+        && y <= top + height + PIN_PADDING
+}
+
+fn pinned_hit(item: &ActiveDanmaku, x: f32, y: f32) -> bool {
+    let height = item.font_size * 1.5;
+    let (left, top) = item.position;
+    x >= left - PIN_PADDING
+        && x <= left + item.width + PIN_SLACK
+        && y >= top - PIN_PADDING
+        && y <= top + height + PIN_PADDING
 }
 
 // Danmaku sit on arbitrary video frames, so the glyphs need their own dark edge
@@ -445,6 +561,7 @@ mod tests {
     #[test]
     fn keeps_the_cursor_when_items_are_replaced() {
         let item = |time| Danmaku {
+            id: 0,
             time,
             mode: DanmakuMode::Scroll,
             font_size: 25,
@@ -486,6 +603,7 @@ mod tests {
         state.apply_metrics();
 
         let item = Danmaku {
+            id: 1,
             time: 1.0,
             mode: DanmakuMode::Scroll,
             font_size: 25,
@@ -516,6 +634,7 @@ mod tests {
 
         let mut active = Vec::new();
         let item = Danmaku {
+            id: 2,
             time: 1.0,
             mode: DanmakuMode::Scroll,
             font_size: 25,
@@ -530,6 +649,13 @@ mod tests {
         assert!(ass.contains("\\pos("));
         assert!(ass.contains("\\c&H0000FF&"));
         assert!(ass.contains("\\3c&H000000&"));
+        assert!(
+            ass.contains(&format!(
+                "\\fs{:.1}",
+                25. * rigili_core::fonts::libass_em_scale()
+            )),
+            "{ass}"
+        );
         assert!(ass.contains("\\bord"));
         assert!(!ass.contains("\\bord0"));
         assert!(ass.ends_with("}hi\n"), "{ass}");
@@ -545,5 +671,133 @@ mod tests {
     #[test]
     fn escapes_ass_override_braces() {
         assert_eq!(escape_ass("a{b}c\\d"), "a\\{b\\}cd");
+    }
+
+    fn state_with_one_danmaku() -> DanmakuState {
+        let mut state = DanmakuState {
+            area: Some((640., 360.)),
+            scale: 1.,
+            ..DanmakuState::default()
+        };
+        state.apply_metrics();
+        let item = Danmaku {
+            id: 7,
+            time: 0.0,
+            mode: DanmakuMode::Scroll,
+            font_size: 25,
+            color: 0x00ff_0000,
+            text: "hello".into(),
+        };
+        let mut active = Vec::new();
+        assert!(state.spawn(&item, 0.0, 640., &mut active));
+        state.active = active;
+        state
+    }
+
+    fn another_danmaku() -> Danmaku {
+        Danmaku {
+            id: 8,
+            time: 0.0,
+            mode: DanmakuMode::Scroll,
+            font_size: 25,
+            color: 0x00ff_ffff,
+            text: "world".into(),
+        }
+    }
+
+    #[test]
+    fn pins_the_danmaku_under_the_pointer() {
+        let mut state = state_with_one_danmaku();
+        let (x, y) = state.active[0].position;
+        let width = state.active[0].width;
+
+        assert!(state.pin_at(x + width / 2., y + 2., 0.0, false));
+        let pinned = state.pinned().expect("pinned");
+        assert_eq!(pinned.id, 7);
+        assert_eq!(pinned.text, "hello");
+        assert!(state.ass(1.).is_empty());
+        assert_eq!(state.lanes[state.active[0].lane], f64::INFINITY);
+    }
+
+    #[test]
+    fn a_pinned_danmaku_holds_still_and_outlives_its_expiry() {
+        let mut state = state_with_one_danmaku();
+        let (x, y) = state.active[0].position;
+        let lifetime = state.active[0].expires - state.active[0].start;
+        assert!(state.pin_at(x + 2., y + 2., 0.0, false));
+
+        for step in 1..=10 {
+            state.update(f64::from(step) * 0.5, 640., 360., 1.0);
+        }
+        assert_eq!(state.active[0].position.0, x);
+        assert!(state.pinned().is_some(), "a pinned danmaku must not expire");
+
+        assert!(state.unpin(5.0));
+        assert!(state.pinned().is_none());
+        let item = &state.active[0];
+        assert_eq!(item.start, 5.0);
+        assert!((item.expires - item.start - lifetime).abs() < 0.001);
+        assert!(!state.ass(1.).is_empty());
+    }
+
+    #[test]
+    fn the_topmost_danmaku_wins_and_the_previous_pin_is_released() {
+        let mut state = state_with_one_danmaku();
+        let mut active = std::mem::take(&mut state.active);
+        assert!(state.spawn(&another_danmaku(), 0.0, 640., &mut active));
+        active[1].position = active[0].position;
+        state.active = active;
+
+        let (x, y) = state.active[0].position;
+        assert!(state.pin_at(x + 2., y + 2., 0.0, false));
+        assert_eq!(state.pinned().expect("pinned").id, 8);
+
+        assert!(state.unpin(3.0));
+        assert_eq!(state.active[0].start, 0.0);
+        assert_eq!(state.active[1].start, 3.0);
+    }
+
+    #[test]
+    fn the_like_affordance_belongs_to_the_pinned_area() {
+        let mut state = state_with_one_danmaku();
+        let (x, y) = state.active[0].position;
+        let width = state.active[0].width;
+        assert!(state.pin_at(x + 2., y + 2., 0.0, false));
+
+        assert!(!state.pin_at(x + width + 40., y + 2., 0.5, false));
+        assert!(state.pinned().is_some());
+
+        assert!(state.pin_at(x + width + 200., y + 2., 1.0, false));
+        assert!(state.pinned().is_none());
+    }
+
+    #[test]
+    fn a_pointer_drag_keeps_the_pin_alive() {
+        let mut state = state_with_one_danmaku();
+        let (x, y) = state.active[0].position;
+        assert!(state.pin_at(x + 2., y + 2., 0.0, false));
+
+        // Dragging the selection past the text must not unfreeze it.
+        assert!(!state.pin_at(x - 400., y + 2., 0.5, true));
+        assert!(state.pinned().is_some());
+
+        assert!(state.pin_at(x - 400., y + 2., 1.0, false));
+        assert!(state.pinned().is_none());
+    }
+
+    #[test]
+    fn unpinning_without_a_pin_does_nothing() {
+        let mut state = state_with_one_danmaku();
+        assert!(!state.unpin(1.0));
+    }
+
+    #[test]
+    fn resizing_releases_the_pin() {
+        let mut state = state_with_one_danmaku();
+        let (x, y) = state.active[0].position;
+        assert!(state.pin_at(x + 2., y + 2., 0.0, false));
+
+        state.update(0.0, 1280., 720., 1.0);
+        assert!(state.pinned().is_none());
     }
 }

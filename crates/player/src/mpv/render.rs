@@ -281,7 +281,7 @@ mod tests {
     fn osd_updates_render_faster_than_the_video_frames() {
         let path = std::env::var("RIGILI_TEST_VIDEO").expect("RIGILI_TEST_VIDEO");
         // The null sink still drives the audio clock that "audio" sync waits on.
-        let mpv = Mpv::new(&[("ao", "null")]).expect("mpv");
+        let mpv = Mpv::new(&[("ao", "null")], None).expect("mpv");
         let render =
             RenderContext::new(&mpv, Arc::new(RenderWake::default())).expect("render context");
         mpv.command(&["loadfile", path.as_str(), "replace"])

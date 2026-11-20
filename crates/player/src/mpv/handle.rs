@@ -1,5 +1,6 @@
 use std::{
     ffi::{CStr, CString, c_char, c_int, c_void},
+    path::Path,
     ptr::{NonNull, null_mut},
 };
 
@@ -55,13 +56,16 @@ pub(crate) struct Mpv {
 }
 
 impl Mpv {
-    pub(crate) fn new(cache: &[(&str, &str)]) -> Result<Self, MpvError> {
+    pub(crate) fn new(cache: &[(&str, &str)], fonts: Option<&Path>) -> Result<Self, MpvError> {
         let handle = NonNull::new(unsafe { mpv_create() })
             .ok_or_else(|| MpvError::invalid_argument("mpv_create returned null"))?;
         let mpv = Self { handle };
 
         for (name, value) in OPTIONS.iter().chain(cache) {
             mpv.set_option_string(name, value)?;
+        }
+        if let Some(dir) = fonts.and_then(Path::to_str) {
+            mpv.set_option_string("osd-fonts-dir", dir)?;
         }
         let log_level = crate::monitor::log_level();
         mpv.set_option_string(
@@ -432,7 +436,7 @@ mod tests {
 
     #[test]
     fn accepts_an_external_ass_overlay() {
-        let mpv = Mpv::new(&[]).expect("mpv");
+        let mpv = Mpv::new(&[], None).expect("mpv");
         let overlay = OsdOverlay {
             data: "{\\an7\\pos(10,10)}hello".to_owned(),
             width: 1280,

@@ -183,7 +183,7 @@ impl PreviewSurface {
         }
         self.player
             .get_or_insert_with(|| {
-                let player = Player::new_software();
+                let player = Player::new_software(None);
                 player.set_volume(0.0);
                 player
             })

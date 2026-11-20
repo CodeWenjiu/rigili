@@ -1,7 +1,11 @@
-use crate::{ApiError, Client, Danmaku, parse_segment};
+use std::collections::BTreeMap;
+
+use crate::{ApiError, Client, Danmaku, DanmakuLike, parse_segment};
 
 const SEGMENT_URL: &str = "https://api.bilibili.com/x/v2/dm/web/seg.so";
 const POST_URL: &str = "https://api.bilibili.com/x/v2/dm/post";
+const THUMBUP_URL: &str = "https://api.bilibili.com/x/v2/dm/thumbup/add";
+const THUMBUP_STATS_URL: &str = "https://api.bilibili.com/x/v2/dm/thumbup/stats";
 const WHITE: u32 = 0x00ff_ffff;
 
 impl Client {
@@ -27,6 +31,36 @@ impl Client {
         form.push(("csrf", self.csrf()?));
         self.post_form_ack(POST_URL, &form).await
     }
+
+    pub async fn danmaku_thumbup(&self, cid: u64, dmid: u64, like: bool) -> Result<(), ApiError> {
+        let csrf = self.csrf()?;
+        self.post_form_ack(THUMBUP_URL, &thumbup_form(cid, dmid, like, &csrf))
+            .await
+    }
+
+    pub async fn danmaku_like_stats(
+        &self,
+        cid: u64,
+        dmid: u64,
+    ) -> Result<Option<DanmakuLike>, ApiError> {
+        let stats: BTreeMap<String, DanmakuLike> = self
+            .get_json_or_default(
+                THUMBUP_STATS_URL,
+                &[("oid", cid.to_string()), ("ids", dmid.to_string())],
+            )
+            .await?;
+        Ok(stats.get(&dmid.to_string()).copied())
+    }
+}
+
+fn thumbup_form(cid: u64, dmid: u64, like: bool, csrf: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("oid", cid.to_string()),
+        ("dmid", dmid.to_string()),
+        ("op", if like { "1" } else { "2" }.to_owned()),
+        ("platform", "web_player".to_owned()),
+        ("csrf", csrf.to_owned()),
+    ]
 }
 
 fn danmaku_form(cid: u64, bvid: &str, message: &str, progress: f64) -> Vec<(&'static str, String)> {
@@ -55,7 +89,7 @@ fn danmaku_form(cid: u64, bvid: &str, message: &str, progress: f64) -> Vec<(&'st
 
 #[cfg(test)]
 mod tests {
-    use super::danmaku_form;
+    use super::{danmaku_form, thumbup_form};
 
     fn value<'a>(form: &'a [(&'static str, String)], key: &str) -> &'a str {
         form.iter()
@@ -80,5 +114,18 @@ mod tests {
         let form = danmaku_form(1, "", "text", -3.0);
         assert!(form.iter().all(|(key, _)| *key != "bvid"));
         assert_eq!(value(&form, "progress"), "0");
+    }
+
+    #[test]
+    fn builds_a_thumbup_form() {
+        let form = thumbup_form(9, 77, true, "token");
+        assert_eq!(value(&form, "oid"), "9");
+        assert_eq!(value(&form, "dmid"), "77");
+        assert_eq!(value(&form, "op"), "1");
+        assert_eq!(value(&form, "platform"), "web_player");
+        assert_eq!(value(&form, "csrf"), "token");
+
+        let form = thumbup_form(9, 77, false, "token");
+        assert_eq!(value(&form, "op"), "2");
     }
 }

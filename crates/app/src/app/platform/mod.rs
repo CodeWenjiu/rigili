@@ -14,7 +14,7 @@ pub(crate) fn init(cx: &mut App) {
 }
 
 fn load_ui_font(cx: &App) {
-    let font = Cow::Borrowed(&include_bytes!("../../../assets/fonts/LXGWNeoXiHei.ttf")[..]);
+    let font = Cow::Borrowed(rigili_core::fonts::bytes());
     if let Err(error) = cx.text_system().add_fonts(vec![font]) {
         eprintln!("failed to load the UI font: {error}");
     }

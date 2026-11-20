@@ -52,6 +52,9 @@ impl Render for PlayerView {
         let player = self.player.clone();
 
         let mut overlays: Vec<AnyElement> = Vec::new();
+        if let Some(pinned) = self.pinned_danmaku(cx) {
+            overlays.push(pinned);
+        }
         if self.controls_visible {
             overlays.push(
                 div()
@@ -284,14 +287,21 @@ impl Render for PlayerView {
                     .absolute()
                     .size_full()
                     .cursor(CursorStyle::Arrow)
-                    .on_mouse_move(
-                        cx.listener(|this, _: &MouseMoveEvent, _, cx| this.pointer_moved(cx)),
-                    )
-                    .on_hover(cx.listener(|this, hovered, _, cx| {
+                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                        this.pointer_moved(cx);
+                        this.hover_danmaku(
+                            event.position,
+                            event.pressed_button.is_some(),
+                            window,
+                            cx,
+                        );
+                    }))
+                    .on_hover(cx.listener(|this, hovered, window, cx| {
                         if *hovered {
                             this.pointer_moved(cx);
                         } else {
                             this.pointer_left_video(cx);
+                            this.leave_danmaku(window, cx);
                         }
                     }))
                     .hover_listener_mode(HoverListenerMode::InputModalityIndependent)

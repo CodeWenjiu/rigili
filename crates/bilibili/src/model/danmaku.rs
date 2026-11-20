@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -26,11 +27,27 @@ impl From<u8> for DanmakuMode {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Danmaku {
+    pub id: u64,
     pub time: f64,
     pub mode: DanmakuMode,
     pub font_size: u8,
     pub color: u32,
     pub text: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct DanmakuLike {
+    #[serde(default)]
+    pub likes: u32,
+    #[serde(default, rename = "user_like", deserialize_with = "flag")]
+    pub liked: bool,
+}
+
+fn flag<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(u8::deserialize(deserializer)? != 0)
 }
 
 #[derive(Clone, Copy, Debug, Error)]
@@ -56,6 +73,7 @@ pub(crate) fn parse_segment(bytes: &[u8]) -> Result<Vec<Danmaku>, DanmakuError> 
 
 fn parse_elem(bytes: &[u8]) -> Result<Option<Danmaku>, DanmakuError> {
     let mut reader = Reader::new(bytes);
+    let mut id = 0;
     let mut progress = None;
     let mut mode = 1;
     let mut font_size = 25;
@@ -65,6 +83,7 @@ fn parse_elem(bytes: &[u8]) -> Result<Option<Danmaku>, DanmakuError> {
     while !reader.done() {
         let (field, wire) = reader.tag()?;
         match (field, wire) {
+            (1, 0) => id = reader.varint()?,
             (2, 0) => progress = Some(reader.varint()?),
             (3, 0) => mode = reader.varint()? as u8,
             (4, 0) => font_size = reader.varint()?.clamp(1, u8::MAX as u64) as u8,
@@ -86,6 +105,7 @@ fn parse_elem(bytes: &[u8]) -> Result<Option<Danmaku>, DanmakuError> {
     }
 
     Ok(Some(Danmaku {
+        id,
         time: progress as f64 / 1000.0,
         mode: DanmakuMode::from(mode),
         font_size,
@@ -164,7 +184,7 @@ impl<'a> Reader<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Danmaku, DanmakuMode, parse_segment};
+    use super::{Danmaku, DanmakuLike, DanmakuMode, parse_segment};
 
     fn varint(mut value: u64, out: &mut Vec<u8>) {
         loop {
@@ -189,8 +209,9 @@ mod tests {
         out.extend_from_slice(bytes);
     }
 
-    fn elem(progress: u64, mode: u64, size: u64, color: u64, text: &str) -> Vec<u8> {
+    fn elem(id: u64, progress: u64, mode: u64, size: u64, color: u64, text: &str) -> Vec<u8> {
         let mut out = Vec::new();
+        field_varint(1, id, &mut out);
         field_varint(2, progress, &mut out);
         field_varint(3, mode, &mut out);
         field_varint(4, size, &mut out);
@@ -201,8 +222,8 @@ mod tests {
 
     #[test]
     fn parses_danmaku_segments() {
-        let first = elem(12_500, 1, 25, 0xff0000, "前方高能");
-        let second = elem(3_000, 5, 36, 0xffffff, "顶部弹幕");
+        let first = elem(1001, 12_500, 1, 25, 0xff0000, "前方高能");
+        let second = elem(1002, 3_000, 5, 36, 0xffffff, "顶部弹幕");
         let mut segment = Vec::new();
         field_bytes(1, &first, &mut segment);
         field_bytes(1, &second, &mut segment);
@@ -212,6 +233,7 @@ mod tests {
             items,
             [
                 Danmaku {
+                    id: 1001,
                     time: 12.5,
                     mode: DanmakuMode::Scroll,
                     font_size: 25,
@@ -219,6 +241,7 @@ mod tests {
                     text: "前方高能".into(),
                 },
                 Danmaku {
+                    id: 1002,
                     time: 3.0,
                     mode: DanmakuMode::Top,
                     font_size: 36,
@@ -231,13 +254,13 @@ mod tests {
 
     #[test]
     fn skips_unknown_fields_and_empty_runs() {
-        let mut first = elem(1_000, 4, 18, 0x00ff00, "底部");
+        let mut first = elem(7, 1_000, 4, 18, 0x00ff00, "底部");
         field_varint(99, 42, &mut first);
         field_bytes(98, b"ignored", &mut first);
         let mut segment = Vec::new();
         field_varint(15, 7, &mut segment);
         field_bytes(1, &first, &mut segment);
-        field_bytes(1, &elem(2_000, 1, 25, 0xffffff, ""), &mut segment);
+        field_bytes(1, &elem(8, 2_000, 1, 25, 0xffffff, ""), &mut segment);
 
         let items = parse_segment(&segment).expect("segment");
         assert_eq!(items.len(), 1);
@@ -248,7 +271,7 @@ mod tests {
     #[test]
     fn rejects_truncated_segments() {
         let mut segment = Vec::new();
-        field_bytes(1, &elem(1_000, 1, 25, 0xffffff, "abc"), &mut segment);
+        field_bytes(1, &elem(9, 1_000, 1, 25, 0xffffff, "abc"), &mut segment);
         segment.pop();
         assert!(parse_segment(&segment).is_err());
     }
@@ -259,6 +282,7 @@ mod tests {
         let items = parse_segment(bytes).expect("fixture");
 
         assert!(!items.is_empty());
+        assert!(items.iter().any(|item| item.id != 0));
         for item in &items {
             assert!(!item.text.is_empty());
             assert!(
@@ -269,6 +293,29 @@ mod tests {
             assert!(item.color <= 0x00ff_ffff);
             assert!(item.font_size > 0);
         }
+    }
+
+    #[test]
+    fn parses_the_dmid_and_ignores_the_id_string() {
+        let mut bytes = elem(42, 1_500, 1, 25, 0xffffff, "hi");
+        field_bytes(12, b"9999", &mut bytes);
+        let mut segment = Vec::new();
+        field_bytes(1, &bytes, &mut segment);
+
+        let items = parse_segment(&segment).expect("segment");
+        assert_eq!(items[0].id, 42);
+    }
+
+    #[test]
+    fn deserializes_danmaku_like_stats() {
+        let like: DanmakuLike =
+            serde_json::from_str(r#"{"id_str":"1","likes":12,"user_like":1}"#).expect("like");
+        assert_eq!(like.likes, 12);
+        assert!(like.liked);
+
+        let like: DanmakuLike = serde_json::from_str(r#"{"likes":3}"#).expect("like");
+        assert_eq!(like.likes, 3);
+        assert!(!like.liked);
     }
 
     #[test]
