@@ -25,6 +25,10 @@ const OPTIONS: &[(&str, &str)] = &[
     ("idle", "yes"),
     ("keep-open", "yes"),
     ("cache", "yes"),
+    // The curl stream backend spins at 100% CPU once a paused transfer's
+    // connection is gone; lavf's HTTP backend stays idle in the same state.
+    // Re-test before enabling it again, see "网络传输" in roadmap.md.
+    ("curl-enabled", "no"),
     // Software output scales on the CPU; mpv's lanczos default is too costly.
     ("zimg-scaler", "bilinear"),
     ("terminal", "no"),

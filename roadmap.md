@@ -55,6 +55,7 @@
 | 模块声明 | 已定 | 通过项目统一宏声明，禁止裸 `mod` / `pub mod`；见 `module-setup` skill |
 | 视频后端 | 已验证（M0） | libmpv + software render（`sw`）→ GPUI `RenderImage` |
 | 视频帧合成 | 已验证（M0） | CPU BGRA 帧 → `img(frame)`；控件和弹幕作为 GPUI 元素叠加 |
+| 网络传输 | 规避中 | 关闭 mpv 的 curl 流后端，回退到 lavf HTTP/1.1；原因和复测方法见“视频播放 → 网络传输” |
 | API 层 | 已定 | 所有 B 站请求集中在 `rigili_bilibili`，统一认证、请求头、WBI、限速和错误 |
 | 异步运行时 | 已定（M1） | app 持有 2 worker Tokio runtime，按 Zed `gpui_tokio` 模式桥接 GPUI `Task`；API 使用 async reqwest |
 | 登录 | 已验证（M1） | Web 二维码登录 + 本地 Cookie/会话持久化；`-101` 自动清除会话 |
@@ -104,6 +105,28 @@ M0 实测（2026-11-09，开发机）：
 2. 独立 mpv 窗口/子窗口（零拷贝，但弹幕/控件叠加更难）
 3. GStreamer（LGPL，`gpui-video-player` 可参考）
 4. 扩展 GPUI 的外部纹理入口（成本高，暂不计划）
+
+#### 网络传输
+
+mpv 0.42 新增了自己的 libcurl 流后端（`stream/stream_curl.c`，配合 `demux_lavf` 的
+`io_open` 钩子把嵌套请求也接过去），默认开启，能带来 h2/h3 多路复用、跨文件连接复用、
+HSTS 和基于 `Content-Range` 的中途续传。这套后端在我们这里会空转，所以显式关掉了：
+
+- 现象：暂停后 mpv 的 `curl` 线程占满一个核（18 核机器上整进程约 5.6%），换一个视频
+  即恢复。触发态是「传输已被背压暂停 + 连接已断」，此时 `curl_multi_poll` 立即返回，
+  线程在 `multi_perform` / `multi_wait` 之间空转。
+- 判据（下次复测直接用）：两次 `grep voluntary /proc/<pid>/task/<tid>/status` 数值
+  完全不变（说明从未阻塞），`/proc/<tid>/schedstat` 的 wait 几乎不涨，`/proc/<tid>/io`
+  的 `syscr` 每秒涨上百万而 `rchar` 不动。
+- 对策：`crates/player/src/mpv/handle.rs` 的 `OPTIONS` 里 `curl-enabled=no`。代价是
+  失去多路复用、跨文件连接复用和 curl 的区间续传；单流播放基本无感。
+- 复测：必须用真实应用（本地 libmpv 脚本试过本地文件、大文件、服务端断连、公网 h2
+  片源，都没复现）。播放 → 暂停放着 → `top -H -p <pid>` 看 `curl` 线程应接近 0%。
+- 何时打开：升级 mpv 后先按上面复测，通过就删掉那一行。0.42 周期里这个文件还在连续
+  修补（空文件/416、断点续传、retry 重置等），说明该状态机尚未稳定。
+- 截至 2026-11-21：mpv 最新发布就是 0.42.0（master 的 `stream_curl.c` 自 11-02 起没有
+  新提交，那段 `curl_multi_poll(..., 1000, NULL)` 循环也仍然没有兜底），libcurl 最新发布
+  是 8.23.0；两边都没有可升级的修复。
 
 ### API 层
 
