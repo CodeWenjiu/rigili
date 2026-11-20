@@ -130,8 +130,9 @@ pub fn cover_budget(visible: usize, bytes_each: usize) -> (usize, usize) {
 /// How many covers the tier can still take before it starts evicting. A
 /// look-ahead wider than this evicts what it just started, so the next frame
 /// re-requests the same URLs; callers use it to bound their prefetch.
-pub fn room(cx: &App) -> usize {
-    get(cx).read(cx).room()
+pub fn room(cx: &mut App) -> usize {
+    let covers = get(cx);
+    covers.update(cx, |cache, _| cache.room())
 }
 
 /// Starts a cover load outside the paint path, so a scroll finds it decoded.
@@ -183,25 +184,33 @@ impl LruImageCache {
     }
 
     fn account_pending(&mut self) {
+        if self.pending.is_empty() {
+            return;
+        }
         self.pending.retain(|key| {
             let Some(entry) = self.entries.get_mut(key) else {
                 return false;
             };
-            if entry.bytes == 0
-                && let Some(Ok(image)) = entry.item.get()
-            {
-                entry.bytes = decoded_bytes(&image);
-                self.bytes += entry.bytes;
+            if entry.bytes != 0 {
+                return false;
             }
-            entry.bytes == 0
+            match entry.item.get() {
+                Some(Ok(image)) => {
+                    entry.bytes = decoded_bytes(&image);
+                    self.bytes += entry.bytes;
+                    false
+                }
+                Some(Err(_)) => false,
+                None => true,
+            }
         });
     }
 
     fn evict(&mut self, keep: Option<u64>, window: &mut Window, cx: &mut App) {
+        self.account_pending();
         if self.bytes <= self.budget_bytes && self.entries.len() <= self.max_entries {
             return;
         }
-        self.account_pending();
 
         while (self.bytes > self.budget_bytes || self.entries.len() > self.max_entries)
             && self.entries.len() > 1
@@ -225,7 +234,8 @@ impl LruImageCache {
         }
     }
 
-    fn room(&self) -> usize {
+    fn room(&mut self) -> usize {
+        self.account_pending();
         if self.bytes > self.budget_bytes {
             0
         } else {
