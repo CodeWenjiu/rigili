@@ -26,27 +26,6 @@ fn tune_allocator() {
     }
 }
 
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-fn trim_c_heaps() {
-    // mpv, ffmpeg and Mesa hand multi-megabyte buffers back to glibc, which keeps
-    // the pages in its arenas long after playback ends. Nothing else in the
-    // process returns them, so sweep them on a timer instead of paying the peak
-    // for the rest of the session.
-    std::thread::Builder::new()
-        .name("malloc-trim".into())
-        .spawn(|| {
-            loop {
-                std::thread::sleep(std::time::Duration::from_secs(60));
-                // SAFETY: `malloc_trim` only walks glibc's arena free lists.
-                unsafe { libc::malloc_trim(0) };
-            }
-        })
-        .ok();
-}
-
-#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
-fn trim_c_heaps() {}
-
 #[cfg(feature = "video-monitor")]
 fn monitor_log() -> Option<tracing_appender::non_blocking::WorkerGuard> {
     use tracing_subscriber::{Layer as _, filter::LevelFilter, layer::SubscriberExt as _};
@@ -166,7 +145,6 @@ fn status_kb(status: &str, name: &str) -> u64 {
 
 fn main() {
     tune_allocator();
-    trim_c_heaps();
     let _monitor_log = monitor_log();
     watch_memory();
     app::platform::gpu::prefer_vulkan();
