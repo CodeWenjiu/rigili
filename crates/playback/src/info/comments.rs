@@ -17,6 +17,7 @@ use rigili_bilibili::{Comment, CommentPage, avatar, normalize_url};
 use rigili_core::client;
 use rigili_core::emotes;
 use rigili_core::runtime::spawn_api;
+use rigili_core::toast;
 use rigili_core::{
     api_error_message, api_task_error_message, format_count, format_date, message_markdown,
 };
@@ -524,7 +525,7 @@ impl InfoPanel {
                 this.touch_comment_row(root);
                 let message = api_task_error_message(error, cx);
                 let _ = window_handle.update(cx, |_, window, cx| {
-                    window.push_notification(Notification::error(message), cx);
+                    toast::push(window, cx, Notification::error(message));
                 });
                 cx.notify();
             },
@@ -658,7 +659,7 @@ impl InfoPanel {
                             if let Some(draft) = this.reply_draft.clone() {
                                 draft.update(cx, |state, cx| state.set_value("", window, cx));
                             }
-                            window.push_notification(Notification::success("回复已发布"), cx);
+                            toast::push(window, cx, Notification::success("回复已发布"));
                         });
                         this.reply_target = None;
                         this.close_emote_picker(EmoteTarget::Reply);
@@ -1130,7 +1131,7 @@ impl InfoPanel {
                     Ok(()) => {
                         let _ = window_handle.update(cx, |_, window, cx| {
                             draft.update(cx, |state, cx| state.set_value("", window, cx));
-                            window.push_notification(Notification::success("评论已发布"), cx);
+                            toast::push(window, cx, Notification::success("评论已发布"));
                         });
                         this.comment_count = this.comment_count.saturating_add(1);
                         this.load_comments(cx);

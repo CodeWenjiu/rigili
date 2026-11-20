@@ -11,6 +11,7 @@ use rigili_core::api_task_error_message;
 use rigili_core::format_count;
 use rigili_core::login as login_state;
 use rigili_core::runtime::spawn_api;
+use rigili_core::toast;
 
 use super::super::compose;
 use super::{CloseSpace, SpaceView};
@@ -77,7 +78,7 @@ impl SpaceView {
         let client = match self.cached_client(cx) {
             Ok(client) => client,
             Err(error) => {
-                window.push_notification(Notification::error(error), cx);
+                toast::push(window, cx, Notification::error(error));
                 return;
             }
         };
@@ -103,13 +104,13 @@ impl SpaceView {
                             "已取消关注"
                         });
                         let _ = handle.update(cx, |_, window, cx| {
-                            window.push_notification(note, cx);
+                            toast::push(window, cx, note);
                         });
                     }
                     Err(error) => {
                         let note = Notification::error(api_task_error_message(error, cx));
                         let _ = handle.update(cx, |_, window, cx| {
-                            window.push_notification(note, cx);
+                            toast::push(window, cx, note);
                         });
                     }
                 }

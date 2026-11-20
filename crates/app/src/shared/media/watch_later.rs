@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 
 use gpui_kit::component::notification::Notification;
-use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_core::runtime::Tokio;
-use rigili_core::{api_error_message, client, login};
+use rigili_core::{api_error_message, client, login, toast};
 
 #[derive(Default)]
 struct WatchLaterState {
@@ -157,7 +156,7 @@ pub(crate) fn toggle(bvid: SharedString, window: &mut Window, cx: &mut App) {
             if expired {
                 login::expire(cx);
             }
-            window.push_notification(note, cx);
+            toast::push(window, cx, note);
         });
     })
     .detach();

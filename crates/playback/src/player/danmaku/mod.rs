@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
-use gpui_kit::component::WindowExt;
 use gpui_kit::component::input::InputEvent;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::prelude::*;
@@ -13,6 +12,7 @@ use gpui_kit::*;
 use rigili_bilibili::{Client, Danmaku};
 use rigili_core::api_task_error_message;
 use rigili_core::runtime::spawn_api;
+use rigili_core::toast;
 use rigili_player::OsdOverlay;
 
 use crate::player::surface::PlayerView;
@@ -242,7 +242,7 @@ impl PlayerView {
             return;
         }
         let Some(source) = self.danmaku_source.clone() else {
-            window.push_notification(Notification::error("当前视频暂不支持发送弹幕"), cx);
+            toast::push(window, cx, Notification::error("当前视频暂不支持发送弹幕"));
             return;
         };
         let content = self
@@ -255,9 +255,10 @@ impl PlayerView {
             return;
         }
         if content.chars().count() > DANMAKU_MAX_LEN {
-            window.push_notification(
-                Notification::error(format!("弹幕不能超过 {DANMAKU_MAX_LEN} 字")),
+            toast::push(
+                window,
                 cx,
+                Notification::error(format!("弹幕不能超过 {DANMAKU_MAX_LEN} 字")),
             );
             return;
         }
@@ -291,13 +292,13 @@ impl PlayerView {
                     Ok(()) => {
                         let _ = window_handle.update(cx, |_, window, cx| {
                             input.update(cx, |state, cx| state.set_value("", window, cx));
-                            window.push_notification(Notification::success("弹幕已发送"), cx);
+                            toast::push(window, cx, Notification::success("弹幕已发送"));
                         });
                     }
                     Err(error) => {
                         let message = api_task_error_message(error, cx);
                         let _ = window_handle.update(cx, |_, window, cx| {
-                            window.push_notification(Notification::error(message), cx);
+                            toast::push(window, cx, Notification::error(message));
                         });
                     }
                 }

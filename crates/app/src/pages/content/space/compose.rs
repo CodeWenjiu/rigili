@@ -6,7 +6,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_core::client;
 use rigili_core::runtime::spawn_api;
-use rigili_core::{api_error_message, api_task_error_message};
+use rigili_core::{api_error_message, api_task_error_message, toast};
 
 pub(super) fn open(window: &mut Window, cx: &mut App, receiver: u64, name: String) {
     let view = cx.new(|cx| ComposeMessage::new(window, cx, receiver, name));
@@ -93,7 +93,7 @@ impl ComposeMessage {
                 Ok(()) => {
                     let _ = window.update(cx, |_, window, cx| {
                         window.close_dialog(cx);
-                        window.push_notification(Notification::success("消息已发送"), cx);
+                        toast::push(window, cx, Notification::success("消息已发送"));
                     });
                 }
                 Err(error) => {

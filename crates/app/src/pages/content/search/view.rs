@@ -16,6 +16,7 @@ use items::SearchItem;
 use rigili_core::client;
 use rigili_core::login as login_state;
 use rigili_core::runtime::spawn_api;
+use rigili_core::toast;
 use rigili_core::{
     OpenLive, OpenSpace, OpenVideo, Refresh, api_error_message, api_task_error_message,
 };
@@ -394,7 +395,7 @@ impl SearchView {
                         "已取消关注"
                     });
                     let _ = handle.update(cx, |_, window, cx| {
-                        window.push_notification(note, cx);
+                        toast::push(window, cx, note);
                     });
                     cx.notify();
                 }
@@ -404,7 +405,7 @@ impl SearchView {
                     }
                     let note = Notification::error(api_task_error_message(error, cx));
                     let _ = handle.update(cx, |_, window, cx| {
-                        window.push_notification(note, cx);
+                        toast::push(window, cx, note);
                     });
                     cx.notify();
                 }

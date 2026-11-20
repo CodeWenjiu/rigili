@@ -154,6 +154,7 @@ fn main() {
         .with_assets(AppAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            rigili_core::toast::init(cx);
             rigili_core::init_shortcut_help(cx);
             cx.set_cursor_hide_mode(gpui_kit::CursorHideMode::Never);
             app::shortcuts::bind(cx);

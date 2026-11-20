@@ -141,7 +141,7 @@ impl PictureViewer {
                 }
                 None => Notification::error("复制图片失败"),
             };
-            let _ = this.update_in(cx, |_, window, cx| window.push_notification(note, cx));
+            let _ = this.update_in(cx, |_, window, cx| crate::toast::push(window, cx, note));
         }));
     }
 }
