@@ -300,18 +300,23 @@ impl MainView {
     fn play(&mut self, video: OpenVideo, cx: &mut Context<Self>) {
         self.open_playback(
             PlaybackRequest::video(video.title, video.bvid, video.cid),
+            video.new_tab,
             cx,
         );
     }
 
     fn play_live(&mut self, live: OpenLive, cx: &mut Context<Self>) {
-        self.open_playback(PlaybackRequest::live(live.title, live.room_id), cx);
+        self.open_playback(
+            PlaybackRequest::live(live.title, live.room_id),
+            live.new_tab,
+            cx,
+        );
     }
 
-    fn open_playback(&mut self, request: PlaybackRequest, cx: &mut Context<Self>) {
+    fn open_playback(&mut self, request: PlaybackRequest, new_tab: bool, cx: &mut Context<Self>) {
         preview::stop_all(cx);
         if let Some(playback) = self.playback.as_ref() {
-            if playback.load(request.clone(), cx).is_ok() {
+            if playback.load(request.clone(), new_tab, cx).is_ok() {
                 return;
             }
             self.playback = None;

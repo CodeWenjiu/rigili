@@ -37,6 +37,12 @@ actions!(
         Reload,
         /// 回到主窗口
         SwitchToMain,
+        /// 关闭当前标签页
+        CloseTab,
+        /// 下一个标签页
+        NextTab,
+        /// 上一个标签页
+        PreviousTab,
     ]
 );
 
@@ -123,6 +129,21 @@ const COMMANDS: &[Command] = &[
         keys: "s",
         context: PLAYER,
         action: || Box::new(SwitchToMain),
+    },
+    Command {
+        keys: "ctrl-w",
+        context: PLAYER,
+        action: || Box::new(CloseTab),
+    },
+    Command {
+        keys: "ctrl-tab",
+        context: PLAYER,
+        action: || Box::new(NextTab),
+    },
+    Command {
+        keys: "ctrl-shift-tab",
+        context: PLAYER,
+        action: || Box::new(PreviousTab),
     },
     Command {
         keys: "?",

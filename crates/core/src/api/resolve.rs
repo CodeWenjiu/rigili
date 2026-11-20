@@ -24,5 +24,6 @@ pub async fn resolve_season(
         bvid: episode.bvid,
         cid: (episode.cid != 0).then_some(episode.cid),
         title,
+        new_tab: false,
     }))
 }

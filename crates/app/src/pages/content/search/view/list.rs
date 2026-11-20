@@ -49,8 +49,11 @@ impl SearchView {
             .children((start..end).map(|index| match &state.items[index] {
                 SearchItem::Video(video) => {
                     let open = video.open();
-                    let on_open =
-                        cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(open.clone()));
+                    let on_open = cx.listener(move |_, event: &ClickEvent, _, cx| {
+                        let mut open = open.clone();
+                        open.new_tab = rigili_core::opens_new_tab(event);
+                        cx.emit(open);
+                    });
                     video_card(
                         video,
                         VideoCardKind::Search,
@@ -79,10 +82,11 @@ impl SearchView {
                 SearchItem::Live(live) => {
                     let room_id = live.room_id;
                     let title = live.title.clone();
-                    let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| {
+                    let on_open = cx.listener(move |_, event: &ClickEvent, _, cx| {
                         cx.emit(OpenLive {
                             room_id,
                             title: title.clone(),
+                            new_tab: rigili_core::opens_new_tab(event),
                         });
                     });
                     live_card(

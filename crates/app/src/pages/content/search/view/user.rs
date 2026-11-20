@@ -97,8 +97,11 @@ impl SearchView {
                     .gap(VideoCards::GAP)
                     .children(user.preview.iter().take(columns).map(|video| {
                         let open = video.open();
-                        let on_open =
-                            cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(open.clone()));
+                        let on_open = cx.listener(move |_, event: &ClickEvent, _, cx| {
+                            let mut open = open.clone();
+                            open.new_tab = rigili_core::opens_new_tab(event);
+                            cx.emit(open);
+                        });
                         preview_card(video, style, card_width, window, cx, on_open)
                     })),
             )

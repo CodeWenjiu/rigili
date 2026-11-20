@@ -37,8 +37,8 @@ impl HomeView {
                 let is_opening = item
                     .season_id()
                     .is_some_and(|season_id| opening == Some(season_id));
-                let on_open = cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.open_target(target.clone(), cx);
+                let on_open = cx.listener(move |this, event: &ClickEvent, _, cx| {
+                    this.open_target(target.clone(), rigili_core::opens_new_tab(event), cx);
                 });
                 if let HomeItem::Video(video) = item {
                     let id = video.id().clone();

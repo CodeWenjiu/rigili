@@ -125,10 +125,22 @@ impl HomeView {
         }
     }
 
-    pub(super) fn open_target(&mut self, target: OpenTarget, cx: &mut Context<Self>) {
+    pub(super) fn open_target(
+        &mut self,
+        target: OpenTarget,
+        new_tab: bool,
+        cx: &mut Context<Self>,
+    ) {
         match target {
-            OpenTarget::Video(video) => cx.emit(video),
-            OpenTarget::Live { room_id, title } => cx.emit(OpenLive { room_id, title }),
+            OpenTarget::Video(mut video) => {
+                video.new_tab = new_tab;
+                cx.emit(video);
+            }
+            OpenTarget::Live { room_id, title } => cx.emit(OpenLive {
+                room_id,
+                title,
+                new_tab,
+            }),
             OpenTarget::Season(season_id) => self.open_season(season_id, cx),
         }
     }

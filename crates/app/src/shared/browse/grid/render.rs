@@ -465,7 +465,11 @@ where
     V: EventEmitter<OpenSpace> + EventEmitter<OpenVideo> + 'static,
 {
     let open = card.open();
-    let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(open.clone()));
+    let on_open = cx.listener(move |_, event: &ClickEvent, _, cx| {
+        let mut open = open.clone();
+        open.new_tab = rigili_core::opens_new_tab(event);
+        cx.emit(open);
+    });
     video_card(
         card,
         VideoCardKind::Default,

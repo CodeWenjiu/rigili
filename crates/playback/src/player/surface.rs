@@ -293,6 +293,17 @@ impl PlayerView {
         start: Option<f64>,
         cx: &mut Context<Self>,
     ) {
+        self.load_streams_at(streams, live, start, false, cx);
+    }
+
+    pub(super) fn load_streams_at(
+        &mut self,
+        streams: Streams,
+        live: bool,
+        start: Option<f64>,
+        paused: bool,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(hold) = self.speed_hold.take() {
             self.status.speed = hold.previous;
             self.player.set_speed(hold.previous);
@@ -321,13 +332,18 @@ impl PlayerView {
         self.status = PlayerStatus {
             phase: PlaybackPhase::Loading,
             time_pos: start.unwrap_or_default(),
+            paused,
             volume: self.status.volume,
             muted: self.status.muted,
             speed: self.status.speed,
             ..PlayerStatus::default()
         };
-        self.player
-            .load(&streams.video, streams.audio.as_deref(), start);
+        self.player.switch_video(
+            &streams.video,
+            streams.audio.as_deref(),
+            start.unwrap_or_default(),
+            paused,
+        );
         self.native_requested = self.native.is_some() && !self.native_failed;
         self.native_bounds = None;
         if self.native_requested {
@@ -476,6 +492,86 @@ impl PlayerView {
         self.player.toggle_pause();
         self.status.paused = !self.status.paused;
         cx.notify();
+    }
+
+    pub(super) fn set_paused(&mut self, paused: bool, cx: &mut Context<Self>) {
+        if self.status.paused != paused {
+            self.toggle_pause(cx);
+        }
+    }
+
+    /// Moves the playback handle into another tab's player, returning the
+    /// previous one so the caller can keep it warm for that tab.
+    pub(super) fn swap_player(&mut self, incoming: Player, cx: &mut Context<Self>) -> Player {
+        if self.native_requested {
+            self.player.set_native_output(false);
+        }
+        let outgoing = std::mem::replace(&mut self.player, incoming);
+        if let Some(hold) = self.speed_hold.take() {
+            self.status.speed = hold.previous;
+        }
+        let volume = self.status.volume;
+        let muted = self.status.muted;
+        let speed = self.status.speed;
+        self.player.set_volume(volume);
+        self.player.set_muted(muted);
+        self.player.set_speed(speed);
+        self.status_source = self.player.status();
+        self.status = (*self.status_source).clone();
+        self.status.volume = volume;
+        self.status.muted = muted;
+        self.status.speed = speed;
+        if let Some(frame) = self.frame.take() {
+            self.retired_frames.push(frame);
+        }
+        self.live = false;
+        self.seeking = None;
+        self.play_anchor = None;
+        self.notice = None;
+        self.previews = None;
+        self.preview_time = None;
+        self.preview_hovered = false;
+        self.quality_popover_open = false;
+        self.speed_popover_open = false;
+        self.page_popover_open = false;
+        self.native_bounds = None;
+        self.native_requested = self.native.is_some() && !self.native_failed;
+        if self.native_requested {
+            self.player.set_native_output(true);
+        }
+        if let Some(native) = &mut self.native {
+            if let Ok(surface) = native.composition.platform_surface() {
+                let _ = surface.set_visible(false);
+            }
+            native.visible = false;
+        }
+        self.player.redraw();
+        self.last_pump = Instant::now();
+        cx.notify();
+        outgoing
+    }
+
+    pub(super) fn adopt_streams(&mut self, streams: &Streams, cx: &mut Context<Self>) {
+        self.qualities.clone_from(&streams.qualities);
+        self.selected_quality = streams.video_id;
+        self.audio_url.clone_from(&streams.audio);
+        cx.notify();
+    }
+
+    pub(super) fn sync_streams(&self, streams: &mut Streams) {
+        if self.qualities.is_empty() {
+            return;
+        }
+        streams.video_id = self.selected_quality;
+        streams.audio.clone_from(&self.audio_url);
+        streams.qualities.clone_from(&self.qualities);
+        if let Some(quality) = self
+            .qualities
+            .iter()
+            .find(|quality| quality.id == self.selected_quality)
+        {
+            streams.video.clone_from(&quality.url);
+        }
     }
 
     pub(super) fn playback_time(&self) -> f64 {

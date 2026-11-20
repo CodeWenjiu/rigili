@@ -41,10 +41,12 @@ impl Playback {
         })
     }
 
-    pub(super) fn load(&self, request: PlaybackRequest, cx: &mut App) -> Result<()> {
+    pub(super) fn load(&self, request: PlaybackRequest, new_tab: bool, cx: &mut App) -> Result<()> {
         let view = self.view.clone();
         self.handle.update(cx, |_, window, cx| {
-            view.update(cx, |player_window, cx| player_window.play(request, cx));
+            view.update(cx, |player_window, cx| {
+                player_window.play(request, new_tab, window, cx)
+            });
             window.activate_window();
         })
     }

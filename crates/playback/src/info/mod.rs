@@ -42,6 +42,7 @@ pub(super) enum InfoEvent {
         bvid: String,
         cid: u64,
         title: String,
+        new_tab: bool,
     },
     ToggleFollow {
         mid: u64,

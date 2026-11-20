@@ -18,6 +18,7 @@ const RESUME_TAIL: f64 = 10.;
 
 struct Tick {
     client: Arc<Client>,
+    epoch: u64,
     aid: u64,
     bvid: String,
     cid: u64,
@@ -26,6 +27,7 @@ struct Tick {
 }
 
 struct Session {
+    epoch: u64,
     bvid: String,
     cid: u64,
     started_at: u64,
@@ -37,6 +39,7 @@ struct Session {
 impl Session {
     fn new(tick: &Tick) -> Self {
         Self {
+            epoch: tick.epoch,
             bvid: tick.bvid.clone(),
             cid: tick.cid,
             started_at: unix_now(),
@@ -47,7 +50,7 @@ impl Session {
     }
 
     fn follows(&self, tick: &Tick) -> bool {
-        self.bvid == tick.bvid && self.cid == tick.cid
+        self.epoch == tick.epoch && self.bvid == tick.bvid && self.cid == tick.cid
     }
 }
 
@@ -122,11 +125,12 @@ impl PlayerWindow {
     }
 
     fn watch_tick(&self, cx: &App) -> Option<Tick> {
-        if self.is_live || self.loading {
+        let tab = self.tab();
+        if tab.is_live || tab.loading || self.session != Some(tab.id) {
             return None;
         }
         let client = self.client.clone()?;
-        let PlaybackSource::Video { bvid, cid } = self.request.as_ref()?.source.clone() else {
+        let PlaybackSource::Video { bvid, cid } = tab.request.source.clone() else {
             return None;
         };
         let status = self.player.read(cx).status();
@@ -139,7 +143,8 @@ impl PlayerWindow {
         }
         Some(Tick {
             client,
-            aid: self.info.read(cx).aid()?,
+            epoch: self.epoch,
+            aid: tab.info.read(cx).aid()?,
             bvid,
             cid: cid?,
             played: status.time_pos.round() as u64,

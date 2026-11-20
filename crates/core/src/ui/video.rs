@@ -83,6 +83,7 @@ impl VideoCard {
             bvid: self.bvid.clone(),
             cid: self.cid,
             title: self.title.clone(),
+            new_tab: false,
         }
     }
 }

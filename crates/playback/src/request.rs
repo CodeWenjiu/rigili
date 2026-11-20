@@ -47,6 +47,7 @@ pub(super) struct Resolved {
     pub(super) player_info: PlayerInfo,
 }
 
+#[derive(Clone)]
 pub(crate) struct Streams {
     pub(crate) video: String,
     pub(crate) video_id: u32,

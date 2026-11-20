@@ -345,12 +345,13 @@ impl InfoPanel {
                         index,
                         video,
                         cx,
-                        move |_, _, cx| {
+                        move |event, _, cx| {
                             let _ = play_weak.update(cx, |_, cx| {
                                 cx.emit(InfoEvent::PlayRelated {
                                     bvid: bvid.clone(),
                                     cid,
                                     title: title.clone(),
+                                    new_tab: rigili_core::opens_new_tab(event),
                                 });
                             });
                         },

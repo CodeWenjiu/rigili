@@ -217,8 +217,13 @@ impl SpaceView {
             bvid: archive.bvid.clone(),
             cid: None,
             title: archive.title.clone(),
+            new_tab: false,
         };
-        let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(open.clone()));
+        let on_open = cx.listener(move |_, event: &ClickEvent, _, cx| {
+            let mut open = open.clone();
+            open.new_tab = rigili_core::opens_new_tab(event);
+            cx.emit(open);
+        });
 
         h_flex()
             .id(("space-dynamic-archive", index))

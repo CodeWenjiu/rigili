@@ -6,17 +6,24 @@ use super::PlayerWindow;
 use crate::request::PlaybackSource;
 
 impl PlayerWindow {
-    pub(super) fn load_follow_status(&self, mid: u64, cx: &mut Context<Self>) {
+    pub(super) fn load_follow_status_for(
+        &self,
+        tab_id: u64,
+        generation: u64,
+        mid: u64,
+        cx: &mut Context<Self>,
+    ) {
         let Some(client) = self.client.clone() else {
             return;
         };
-        let generation = self.generation;
-        let info = self.info.clone();
+        let Some(info) = self.tab_info(tab_id) else {
+            return;
+        };
         spawn_api(
             cx,
             async move { client.relation_status(mid).await },
             move |this, result, cx| {
-                if this.generation != generation {
+                if !this.generation_matches(tab_id, generation) {
                     return;
                 }
                 if let Ok(status) = result {
@@ -28,17 +35,24 @@ impl PlayerWindow {
         );
     }
 
-    pub(super) fn load_interactions(&self, aid: u64, cx: &mut Context<Self>) {
+    pub(super) fn load_interactions_for(
+        &self,
+        tab_id: u64,
+        generation: u64,
+        aid: u64,
+        cx: &mut Context<Self>,
+    ) {
         let Some(client) = self.client.clone() else {
             return;
         };
-        let generation = self.generation;
-        let info = self.info.clone();
+        let Some(info) = self.tab_info(tab_id) else {
+            return;
+        };
         spawn_api(
             cx,
             async move { client.archive_relation(aid).await },
             move |this, result, cx| {
-                if this.generation != generation {
+                if !this.generation_matches(tab_id, generation) {
                     return;
                 }
                 if let Ok(relation) = result {
@@ -48,17 +62,24 @@ impl PlayerWindow {
         );
     }
 
-    pub(super) fn load_watch_later(&self, aid: u64, cx: &mut Context<Self>) {
+    pub(super) fn load_watch_later_for(
+        &self,
+        tab_id: u64,
+        generation: u64,
+        aid: u64,
+        cx: &mut Context<Self>,
+    ) {
         let Some(client) = self.client.clone() else {
             return;
         };
-        let generation = self.generation;
-        let info = self.info.clone();
+        let Some(info) = self.tab_info(tab_id) else {
+            return;
+        };
         spawn_api(
             cx,
             async move { client.watch_later().await },
             move |this, result, cx| {
-                if this.generation != generation {
+                if !this.generation_matches(tab_id, generation) {
                     return;
                 }
                 if let Ok(later) = result {
@@ -73,18 +94,18 @@ impl PlayerWindow {
         let Some(client) = self.client.clone() else {
             return;
         };
-        let Some(PlaybackSource::Video { bvid, cid }) =
-            self.request.as_ref().map(|request| request.source.clone())
-        else {
-            return;
+        let (tab_id, generation, bvid, cid, info) = {
+            let tab = self.tab();
+            let PlaybackSource::Video { bvid, cid } = tab.request.source.clone() else {
+                return;
+            };
+            (tab.id, tab.generation, bvid, cid, tab.info.clone())
         };
-        let generation = self.generation;
-        let info = self.info.clone();
         spawn_api(
             cx,
             async move { client.video_detail(&bvid).await },
             move |this, result, cx| {
-                if this.generation != generation {
+                if !this.generation_matches(tab_id, generation) {
                     return;
                 }
                 match result {
@@ -99,7 +120,12 @@ impl PlayerWindow {
                                 cx,
                             )
                         });
-                        if let Some(cid) = cid {
+                        if let Some(index) = this.tab_index(tab_id) {
+                            this.tabs[index].pages = pages.clone();
+                        }
+                        if this.is_active(tab_id, generation)
+                            && let Some(cid) = cid
+                        {
                             this.player
                                 .update(cx, |player, cx| player.set_pages(pages, cid, cx));
                         }
@@ -117,7 +143,7 @@ impl PlayerWindow {
         let Some(client) = self.client.clone() else {
             return;
         };
-        let info = self.info.clone();
+        let info = self.tab().info.clone();
         info.update(cx, |info, cx| info.set_follow_busy(true, cx));
         spawn_api(
             cx,
@@ -135,7 +161,7 @@ impl PlayerWindow {
         let Some(client) = self.client.clone() else {
             return;
         };
-        let info = self.info.clone();
+        let info = self.tab().info.clone();
         info.update(cx, |info, cx| info.set_like_busy(true, cx));
         spawn_api(
             cx,

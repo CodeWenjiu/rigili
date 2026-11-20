@@ -1,48 +1,108 @@
 rigili_macro::mod_prv!(info, media, watch);
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::*;
 use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::tab::{Tab as TabButton, TabBar};
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+use rigili_player::{PlaybackPhase, Player};
 
 use super::history::History;
 use super::surface::{PlayerEvent, PlayerView};
 use crate::info::{InfoEvent, InfoPanel, InfoSelections, InfoTab};
-use crate::request::{PlaybackRequest, PlaybackSource, Streams, resolve, resolve_streams};
-use crate::shortcuts::{
-    HistoryBack, HistoryForward, NextPage, PreviousPage, Reload, SeekBack, SpeedDown, SpeedUp,
-    SwitchToMain, ToggleComments, ToggleDanmaku, ToggleFullscreen, ToggleInfo, ToggleMute,
-    TogglePlayback,
+use crate::request::{
+    PlaybackRequest, PlaybackSource, Resolved, Streams, resolve, resolve_streams,
 };
-use rigili_bilibili::Client;
-use rigili_core::api_error_message;
+use crate::shortcuts::{
+    CloseTab, HistoryBack, HistoryForward, NextPage, NextTab, PreviousPage, PreviousTab, Reload,
+    SeekBack, SpeedDown, SpeedUp, SwitchToMain, ToggleComments, ToggleDanmaku, ToggleFullscreen,
+    ToggleInfo, ToggleMute, TogglePlayback,
+};
+use rigili_bilibili::{Chapter, Client, VideoPage};
 use rigili_core::client;
 use rigili_core::runtime::{ApiTaskError, spawn_api};
 use rigili_core::{FocusMain, OpenSpace};
+use rigili_core::{api_error_message, api_task_error_message};
 
 const INFO_MIN_WINDOW: Pixels = px(1000.);
 
+// Play URLs carry a time-limited CDN token, so a cached one is only trusted
+// for a short while; past that a tab pays the resolve cost again.
+const STREAMS_TTL: Duration = Duration::from_secs(600);
+
+// A warm tab keeps mpv alive with the stream paused, which buys an instant
+// switch at the cost of one decoder and demuxer cache per tab.
+const WARM_TTL: Duration = Duration::from_secs(600);
+const MAX_WARM_TABS: usize = 2;
+
 pub struct PlayerWindow {
     player: Entity<PlayerView>,
-    info: Entity<InfoPanel>,
-    title: SharedString,
     client: Option<Arc<Client>>,
-    request: Option<PlaybackRequest>,
-    history: History,
-    loading: bool,
-    is_live: bool,
-    error: Option<String>,
+    tabs: Vec<Tab>,
+    active: usize,
+    next_tab_id: u64,
     show_info: bool,
-    generation: u64,
-    danmaku_task: Option<Task<()>>,
+    /// The tab whose stream is currently loaded in the shared player.
+    session: Option<u64>,
+    /// Bumped whenever the shared player is handed to another tab, so the
+    /// watch heartbeat does not count time spent on a different video.
+    epoch: u64,
     watch_task: Option<Task<()>>,
-    _info_sub: Subscription,
     _player_sub: Subscription,
     _focus_sub: Subscription,
+}
+
+struct Tab {
+    id: u64,
+    request: PlaybackRequest,
+    history: History,
+    title: SharedString,
+    is_live: bool,
+    loaded: bool,
+    loading: bool,
+    error: Option<String>,
+    generation: u64,
+    danmaku_task: Option<Task<()>>,
+    info: Entity<InfoPanel>,
+    _info_sub: Subscription,
+    resume: Option<f64>,
+    paused: bool,
+    pages: Vec<VideoPage>,
+    chapters: Vec<Chapter>,
+    streams: Option<CachedStreams>,
+    /// Paused player kept alive while this tab is in the background, so
+    /// switching back does not reopen the stream.
+    player: Option<Player>,
+    last_used: Instant,
+    warm_since: Option<Instant>,
+}
+
+struct CachedStreams {
+    streams: Streams,
+    at: Instant,
+}
+
+impl Tab {
+    fn is_warm(&self) -> bool {
+        self.warm_since
+            .is_some_and(|since| since.elapsed() < WARM_TTL)
+            && self.loaded
+            && self.streams.is_some()
+    }
+}
+
+struct StreamTarget {
+    tab_id: u64,
+    generation: u64,
+    bvid: String,
+    cid: u64,
+    resume: Option<f64>,
+    paused: bool,
 }
 
 impl EventEmitter<OpenSpace> for PlayerWindow {}
@@ -51,22 +111,6 @@ impl EventEmitter<FocusMain> for PlayerWindow {}
 impl PlayerWindow {
     fn new(window: &mut Window, cx: &mut Context<Self>, request: PlaybackRequest) -> Self {
         let player = cx.new(|cx| PlayerView::new(window, cx));
-        let selections = InfoSelections::new(window, cx);
-        let info = cx.new(|_| InfoPanel::new(selections));
-        let info_sub = cx.subscribe(&info, |this, _, event: &InfoEvent, cx| match event {
-            InfoEvent::SelectPage(cid) => this.select_page(*cid, cx),
-            InfoEvent::PlayRelated { bvid, cid, title } => this.navigate(
-                PlaybackRequest::video(title.clone(), bvid.clone(), Some(*cid)),
-                cx,
-            ),
-            InfoEvent::ToggleFollow { mid, follow } => this.set_follow(*mid, *follow, cx),
-            InfoEvent::ToggleLike { aid, like } => this.set_like(*aid, *like, cx),
-            InfoEvent::OpenSpace { mid, name } => cx.emit(OpenSpace {
-                mid: *mid,
-                name: name.clone(),
-            }),
-            InfoEvent::Reload => this.refresh_info(cx),
-        });
         let player_sub = cx.subscribe(&player, |this, _, event: &PlayerEvent, cx| match event {
             PlayerEvent::SelectPage(cid) => this.select_page(*cid, cx),
         });
@@ -85,44 +129,369 @@ impl PlayerWindow {
         };
         let mut view = Self {
             player,
-            info,
-            title: request.title.clone().into(),
             client,
-            request: None,
-            history: History::default(),
-            loading: false,
-            is_live: false,
-            error,
+            tabs: Vec::new(),
+            active: 0,
+            next_tab_id: 0,
             show_info: true,
-            generation: 0,
-            danmaku_task: None,
+            session: None,
+            epoch: 0,
             watch_task: None,
-            _info_sub: info_sub,
             _player_sub: player_sub,
             _focus_sub: focus_sub,
         };
+        let mut tab = view.make_tab(window, cx, request.clone());
+        tab.history.open(request.source.clone());
+        tab.error = error;
+        view.tabs.push(tab);
         if view.client.is_some() {
-            view.history.open(request.source.clone());
-            view.start(request, cx);
+            view.start_active(request, cx);
         }
         view.spawn_watch_report(window, cx);
         view
     }
 
-    pub fn play(&mut self, request: PlaybackRequest, cx: &mut Context<Self>) {
-        self.navigate(request, cx);
+    fn make_tab(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        request: PlaybackRequest,
+    ) -> Tab {
+        let id = self.next_tab_id;
+        self.next_tab_id = self.next_tab_id.wrapping_add(1);
+        let selections = InfoSelections::new(window, cx);
+        let info = cx.new(|_| InfoPanel::new(selections));
+        let info_sub = cx.subscribe_in(
+            &info,
+            window,
+            move |this, _, event: &InfoEvent, window, cx| {
+                this.on_info_event(id, event, window, cx);
+            },
+        );
+        let is_live = matches!(request.source, PlaybackSource::Live { .. });
+        Tab {
+            id,
+            history: History::default(),
+            title: if request.title.is_empty() {
+                "加载中…".into()
+            } else {
+                request.title.clone().into()
+            },
+            request,
+            is_live,
+            loaded: false,
+            loading: false,
+            error: None,
+            generation: 0,
+            danmaku_task: None,
+            info,
+            _info_sub: info_sub,
+            resume: None,
+            paused: false,
+            pages: Vec::new(),
+            chapters: Vec::new(),
+            streams: None,
+            player: None,
+            last_used: Instant::now(),
+            warm_since: None,
+        }
+    }
+
+    fn on_info_event(
+        &mut self,
+        tab_id: u64,
+        event: &InfoEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.tabs[self.active].id != tab_id {
+            return;
+        }
+        match event {
+            InfoEvent::SelectPage(cid) => self.select_page(*cid, cx),
+            InfoEvent::PlayRelated {
+                bvid,
+                cid,
+                title,
+                new_tab,
+            } => {
+                let request = PlaybackRequest::video(title.clone(), bvid.clone(), Some(*cid));
+                self.play(request, *new_tab, window, cx);
+            }
+            InfoEvent::ToggleFollow { mid, follow } => self.set_follow(*mid, *follow, cx),
+            InfoEvent::ToggleLike { aid, like } => self.set_like(*aid, *like, cx),
+            InfoEvent::OpenSpace { mid, name } => cx.emit(OpenSpace {
+                mid: *mid,
+                name: name.clone(),
+            }),
+            InfoEvent::Reload => self.refresh_info(cx),
+        }
+    }
+
+    fn tab(&self) -> &Tab {
+        &self.tabs[self.active]
+    }
+
+    fn tab_mut(&mut self) -> &mut Tab {
+        &mut self.tabs[self.active]
+    }
+
+    fn tab_index(&self, id: u64) -> Option<usize> {
+        self.tabs.iter().position(|tab| tab.id == id)
+    }
+
+    fn tab_info(&self, id: u64) -> Option<Entity<InfoPanel>> {
+        self.tab_index(id)
+            .map(|index| self.tabs[index].info.clone())
+    }
+
+    fn is_active(&self, id: u64, generation: u64) -> bool {
+        let tab = self.tab();
+        tab.id == id && tab.generation == generation
+    }
+
+    fn generation_matches(&self, id: u64, generation: u64) -> bool {
+        self.tab_index(id)
+            .is_some_and(|index| self.tabs[index].generation == generation)
+    }
+
+    pub fn play(
+        &mut self,
+        request: PlaybackRequest,
+        new_tab: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if new_tab {
+            self.open_tab(request, window, cx);
+        } else {
+            self.navigate(request, cx);
+        }
+    }
+
+    fn open_tab(&mut self, request: PlaybackRequest, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(index) = self
+            .tabs
+            .iter()
+            .position(|tab| same_source(&tab.request.source, &request.source))
+        {
+            if index != self.active {
+                self.select_tab(index, cx);
+            }
+            return;
+        }
+        let previous = self.active;
+        self.stash_session(cx);
+        let outgoing = self
+            .player
+            .update(cx, |view, cx| view.swap_player(Self::new_player(), cx));
+        self.keep_warm(previous, outgoing);
+        let tab = self.make_tab(window, cx, request.clone());
+        let index = (previous + 1).min(self.tabs.len());
+        self.tabs.insert(index, tab);
+        self.active = index;
+        self.tabs[index].history.open(request.source.clone());
+        self.start_active(request, cx);
+        self.evict_warm();
+        cx.notify();
+    }
+
+    fn select_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index == self.active || index >= self.tabs.len() {
+            return;
+        }
+        let previous = self.active;
+        self.stash_session(cx);
+        self.activate(index, Some(previous), cx);
+    }
+
+    fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if index >= self.tabs.len() {
+            return;
+        }
+        if index != self.active {
+            self.tabs.remove(index);
+            if index < self.active {
+                self.active -= 1;
+            }
+            cx.notify();
+            return;
+        }
+        self.stash_session(cx);
+        self.tabs.remove(index);
+        if self.tabs.is_empty() {
+            window.remove_window();
+            return;
+        }
+        self.active = self.active.min(self.tabs.len() - 1);
+        self.activate(self.active, None, cx);
+    }
+
+    fn activate(&mut self, index: usize, previous: Option<usize>, cx: &mut Context<Self>) {
+        let warm = self.tabs[index].is_warm();
+        let incoming = self.tabs[index]
+            .player
+            .take()
+            .unwrap_or_else(Self::new_player);
+        let outgoing = self
+            .player
+            .update(cx, |view, cx| view.swap_player(incoming, cx));
+        if let Some(previous) = previous {
+            self.keep_warm(previous, outgoing);
+        }
+        self.active = index;
+        self.tabs[index].last_used = Instant::now();
+        self.tabs[index].warm_since = None;
+        if warm {
+            self.resume_warm(cx);
+        } else {
+            self.restore_active(cx);
+        }
+        self.evict_warm();
+        cx.notify();
+    }
+
+    fn keep_warm(&mut self, index: usize, player: Player) {
+        let tab = &mut self.tabs[index];
+        if tab.is_live {
+            return;
+        }
+        tab.player = Some(player);
+        tab.warm_since = Some(Instant::now());
+        tab.last_used = Instant::now();
+    }
+
+    fn resume_warm(&mut self, cx: &mut Context<Self>) {
+        let status = self.player.read(cx).status();
+        if status.error.is_some()
+            || matches!(status.phase, PlaybackPhase::Idle | PlaybackPhase::Ended)
+        {
+            self.restore_active(cx);
+            return;
+        }
+        let data = {
+            let tab = self.tab();
+            match (&tab.request.source, tab.streams.as_ref()) {
+                (
+                    PlaybackSource::Video {
+                        bvid,
+                        cid: Some(cid),
+                    },
+                    Some(cached),
+                ) => Some((
+                    tab.id,
+                    tab.generation,
+                    tab.title.clone(),
+                    cached.streams.clone(),
+                    tab.pages.clone(),
+                    bvid.clone(),
+                    *cid,
+                    tab.chapters.clone(),
+                    tab.paused,
+                )),
+                _ => None,
+            }
+        };
+        let Some((tab_id, generation, title, streams, pages, bvid, cid, chapters, paused)) = data
+        else {
+            self.restore_active(cx);
+            return;
+        };
+        self.tab_mut().error = None;
+        rigili_monitor::monitor!("player", "tab {tab_id}: warm resume");
+        self.session = Some(tab_id);
+        self.player.update(cx, |player, cx| {
+            player.adopt_streams(&streams, cx);
+            player.set_title(title, cx);
+            player.set_pages(pages, cid, cx);
+            player.set_chapters(chapters, cx);
+            player.clear_danmaku_source(cx);
+            player.clear_danmaku(cx);
+            player.set_paused(paused, cx);
+        });
+        self.load_media_for(tab_id, generation, bvid, cid, cx);
+    }
+
+    fn evict_warm(&mut self) {
+        while self.tabs.iter().filter(|tab| tab.player.is_some()).count() > MAX_WARM_TABS {
+            let Some(index) = self
+                .tabs
+                .iter()
+                .enumerate()
+                .filter(|(index, tab)| *index != self.active && tab.player.is_some())
+                .min_by_key(|(_, tab)| tab.last_used)
+                .map(|(index, _)| index)
+            else {
+                break;
+            };
+            rigili_monitor::monitor!("player", "tab {}: evicted warm player", self.tabs[index].id);
+            self.tabs[index].player = None;
+            self.tabs[index].warm_since = None;
+        }
+    }
+
+    fn new_player() -> Player {
+        Player::new(rigili_core::fonts::osd_dir().as_deref())
+    }
+
+    fn stash_session(&mut self, cx: &mut Context<Self>) {
+        let status = self.player.read(cx).status().clone();
+        let session = self.session;
+        let active = self.active;
+        if session == Some(self.tabs[active].id) {
+            let player = self.player.clone();
+            let view = player.read(cx);
+            if let Some(cached) = self.tabs[active].streams.as_mut() {
+                view.sync_streams(&mut cached.streams);
+            }
+        }
+        let interrupted = {
+            let tab = &mut self.tabs[active];
+            if session == Some(tab.id) {
+                tab.resume = stash_resume(status.phase, status.time_pos, tab.resume);
+                tab.paused = status.paused;
+                // A stream that is currently flowing was valid a moment ago, so
+                // the tab can reuse it when it comes back instead of resolving.
+                if !status.paused
+                    && matches!(
+                        status.phase,
+                        PlaybackPhase::Playing | PlaybackPhase::Buffering
+                    )
+                    && let Some(cached) = tab.streams.as_mut()
+                {
+                    cached.at = Instant::now();
+                }
+            }
+            tab.danmaku_task = None;
+            let interrupted = tab.loading;
+            tab.loading = false;
+            if interrupted {
+                tab.loaded = false;
+            }
+            interrupted
+        };
+        if interrupted {
+            let info = self.tabs[active].info.clone();
+            info.update(cx, |info, cx| info.set_busy(false, cx));
+        }
+        if !status.paused {
+            self.player.update(cx, |player, cx| player.toggle_pause(cx));
+        }
+        self.session = None;
+        self.epoch = self.epoch.wrapping_add(1);
     }
 
     fn navigate(&mut self, request: PlaybackRequest, cx: &mut Context<Self>) {
-        self.history.open(request.source.clone());
-        self.start(request, cx);
+        self.tab_mut().history.open(request.source.clone());
+        self.start_active(request, cx);
     }
 
     fn go_back(&mut self, cx: &mut Context<Self>) {
         if self.client.is_none() {
             return;
         }
-        if let Some(source) = self.history.back() {
+        let source = self.tab_mut().history.back();
+        if let Some(source) = source {
             self.start_source(source, cx);
         }
     }
@@ -131,7 +500,8 @@ impl PlayerWindow {
         if self.client.is_none() {
             return;
         }
-        if let Some(source) = self.history.forward() {
+        let source = self.tab_mut().history.forward();
+        if let Some(source) = source {
             self.start_source(source, cx);
         }
     }
@@ -143,138 +513,376 @@ impl PlayerWindow {
                 PlaybackRequest::live(format!("直播间 {room_id}"), room_id)
             }
         };
-        self.start(request, cx);
+        self.start_active(request, cx);
     }
 
     pub(crate) fn toggle_panel(&mut self, tab: InfoTab, cx: &mut Context<Self>) {
-        let current = self.info.read(cx).tab();
+        let current = self.tab().info.read(cx).tab();
         self.show_info = panel_visibility(self.show_info, current, tab);
         if self.show_info {
-            self.info.update(cx, |info, cx| info.show_tab(tab, cx));
+            self.tab()
+                .info
+                .update(cx, |info, cx| info.show_tab(tab, cx));
         }
         cx.notify();
     }
 
-    fn start(&mut self, request: PlaybackRequest, cx: &mut Context<Self>) {
+    fn start_active(&mut self, request: PlaybackRequest, cx: &mut Context<Self>) {
         let Some(client) = self.client.clone() else {
             return;
         };
-
-        self.generation += 1;
-        self.danmaku_task = None;
+        let source = request.source.clone();
+        let is_live = matches!(source, PlaybackSource::Live { .. });
+        let (tab_id, generation, title, info) = {
+            let tab = self.tab_mut();
+            tab.generation = tab.generation.wrapping_add(1);
+            tab.danmaku_task = None;
+            tab.loaded = false;
+            tab.loading = true;
+            tab.error = None;
+            tab.resume = None;
+            tab.paused = false;
+            tab.pages.clear();
+            tab.chapters.clear();
+            tab.streams = None;
+            tab.is_live = is_live;
+            tab.request = request;
+            if !tab.request.title.is_empty() {
+                tab.title = tab.request.title.clone().into();
+            }
+            (tab.id, tab.generation, tab.title.clone(), tab.info.clone())
+        };
+        self.session = None;
         self.player.update(cx, |player, cx| {
             player.clear_danmaku_source(cx);
             player.clear_pages(cx);
+            player.clear_danmaku(cx);
+            player.set_title(title, cx);
         });
-        let generation = self.generation;
-        let source = request.source.clone();
-        let preferred = crate::settings::current(cx).preferred_quality;
-        self.is_live = matches!(source, PlaybackSource::Live { .. });
-        if !request.title.is_empty() {
-            self.title = request.title.clone().into();
-            let title = self.title.clone();
-            self.player
-                .update(cx, |player, cx| player.set_title(title, cx));
-        }
-        self.request = Some(request);
-        self.loading = true;
-        self.error = None;
-        self.info.update(cx, |info, cx| info.clear(cx));
-        self.info.update(cx, |info, cx| info.set_busy(true, cx));
-        self.player
-            .update(cx, |player, cx| player.clear_danmaku(cx));
+        info.update(cx, |info, cx| {
+            info.clear(cx);
+            info.set_busy(true, cx);
+        });
         cx.notify();
 
         match source {
-            PlaybackSource::Video { bvid, cid } => spawn_api(
-                cx,
-                async move { resolve(client, bvid, cid, preferred).await },
-                move |this, result, cx| {
-                    if this.generation != generation {
-                        return;
-                    }
-                    this.loading = false;
-                    match result {
-                        Ok(resolved) => {
-                            let cid = resolved.cid;
-                            let bvid = resolved.info.bvid.clone();
-                            let aid = resolved.info.aid;
-                            let duration = resolved
-                                .info
-                                .pages
-                                .iter()
-                                .find(|page| page.cid == cid)
-                                .map(|page| page.duration)
-                                .unwrap_or(resolved.info.duration);
-                            let owner_mid = resolved.info.owner.mid;
-                            let followers = resolved.followers;
-                            let owner_likes = resolved.owner_likes;
-                            let related = resolved.related;
-                            let pages = resolved.info.pages.clone();
-                            let title: SharedString = resolved.info.title.clone().into();
-                            let start = watch::resume_position(
-                                resolved.player_info.last_play_time,
-                                duration as f64,
-                            );
-                            let chapters = resolved.player_info.chapters();
-                            this.title = title.clone();
-                            this.player
-                                .update(cx, |player, cx| player.set_title(title, cx));
-                            if let Some(PlaybackRequest {
-                                source:
-                                    PlaybackSource::Video {
-                                        cid: request_cid, ..
-                                    },
-                                ..
-                            }) = this.request.as_mut()
-                            {
-                                *request_cid = Some(cid);
-                            }
-                            this.info.update(cx, |info, cx| {
-                                info.set(resolved.info, cid, cx);
-                                info.set_owner_counts(followers, owner_likes, cx);
-                                info.set_related(related, cx);
-                            });
-                            this.player.update(cx, |player, cx| {
-                                player.set_pages(pages, cid, cx);
-                                player.set_chapters(chapters, cx);
-                                player.load_streams(resolved.streams, false, start, cx)
-                            });
-                            this.load_previews(bvid.clone(), cid, cx);
-                            this.load_danmaku(bvid, aid, cid, duration, cx);
-                            this.load_follow_status(owner_mid, cx);
-                            this.load_interactions(aid, cx);
-                            this.load_watch_later(aid, cx);
+            PlaybackSource::Video { bvid, cid } => {
+                let preferred = crate::settings::current(cx).preferred_quality;
+                spawn_api(
+                    cx,
+                    async move { resolve(client, bvid, cid, preferred).await },
+                    move |this, result, cx| {
+                        if !this.is_active(tab_id, generation) {
+                            return;
                         }
-                        Err(error) => {
-                            this.info.update(cx, |info, cx| info.set_busy(false, cx));
-                            this.handle_error(error, cx);
+                        this.tab_mut().loading = false;
+                        match result {
+                            Ok(resolved) => this.apply_resolved(tab_id, generation, resolved, cx),
+                            Err(error) => this.fail_active(tab_id, generation, error, cx),
                         }
-                    }
-                    cx.notify();
-                },
-            ),
-            PlaybackSource::Live { room_id } => spawn_api(
-                cx,
-                async move { client.live_play_url(room_id).await },
-                move |this, result, cx| {
-                    if this.generation != generation {
-                        return;
-                    }
-                    this.loading = false;
-                    match result {
-                        Ok(url) => {
-                            this.info.update(cx, |info, cx| info.clear(cx));
-                            this.player.update(cx, |player, cx| {
-                                player.load_streams(Streams::single(url), true, None, cx)
-                            });
-                        }
-                        Err(error) => this.handle_error(error, cx),
-                    }
-                    cx.notify();
-                },
-            ),
+                        cx.notify();
+                    },
+                );
+            }
+            PlaybackSource::Live { room_id } => {
+                self.load_live(tab_id, generation, room_id, false, cx)
+            }
         }
+    }
+
+    fn restore_active(&mut self, cx: &mut Context<Self>) {
+        if !self.tab().loaded {
+            let request = self.tab().request.clone();
+            self.start_active(request, cx);
+            return;
+        }
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        let (tab_id, generation, request, resume, paused, pages, chapters, title, cached) = {
+            let tab = self.tab_mut();
+            tab.danmaku_task = None;
+            tab.error = None;
+            let cached = tab.streams.as_ref().and_then(|cached| {
+                let age = cached.at.elapsed();
+                (age < STREAMS_TTL).then(|| (cached.streams.clone(), age))
+            });
+            tab.loading = cached.is_none();
+            (
+                tab.id,
+                tab.generation,
+                tab.request.clone(),
+                tab.resume,
+                tab.paused,
+                tab.pages.clone(),
+                tab.chapters.clone(),
+                tab.title.clone(),
+                cached,
+            )
+        };
+        self.session = None;
+        let cid = match &request.source {
+            PlaybackSource::Video { cid, .. } => *cid,
+            PlaybackSource::Live { .. } => None,
+        };
+        self.player.update(cx, |player, cx| {
+            player.clear_danmaku_source(cx);
+            player.clear_danmaku(cx);
+            player.set_title(title, cx);
+            match cid {
+                Some(cid) => player.set_pages(pages, cid, cx),
+                None => player.clear_pages(cx),
+            }
+            player.set_chapters(chapters, cx);
+        });
+        cx.notify();
+
+        if let Some((mut streams, age)) = cached
+            && let PlaybackSource::Video {
+                bvid,
+                cid: Some(cid),
+            } = request.source.clone()
+        {
+            rigili_monitor::monitor!("stream", "tab {tab_id}: reusing streams cached {age:?} ago");
+            apply_preferred_quality(&mut streams, crate::settings::current(cx).preferred_quality);
+            let target = StreamTarget {
+                tab_id,
+                generation,
+                bvid,
+                cid,
+                resume,
+                paused,
+            };
+            self.play_streams(target, streams, cx);
+            return;
+        }
+
+        match request.source.clone() {
+            PlaybackSource::Video {
+                bvid,
+                cid: Some(cid),
+            } => {
+                let preferred = crate::settings::current(cx).preferred_quality;
+                let request_bvid = bvid.clone();
+                spawn_api(
+                    cx,
+                    async move { resolve_streams(&client, &request_bvid, cid, preferred).await },
+                    move |this, result, cx| {
+                        if !this.is_active(tab_id, generation) {
+                            return;
+                        }
+                        this.tab_mut().loading = false;
+                        match result {
+                            Ok(streams) => {
+                                this.tab_mut().streams = Some(CachedStreams {
+                                    streams: streams.clone(),
+                                    at: Instant::now(),
+                                });
+                                let target = StreamTarget {
+                                    tab_id,
+                                    generation,
+                                    bvid,
+                                    cid,
+                                    resume,
+                                    paused,
+                                };
+                                this.play_streams(target, streams, cx);
+                            }
+                            Err(error) => this.fail_active(tab_id, generation, error, cx),
+                        }
+                        cx.notify();
+                    },
+                );
+            }
+            PlaybackSource::Live { room_id } => {
+                self.load_live(tab_id, generation, room_id, paused, cx)
+            }
+            PlaybackSource::Video { cid: None, .. } => self.start_active(request, cx),
+        }
+    }
+
+    fn play_streams(&mut self, target: StreamTarget, streams: Streams, cx: &mut Context<Self>) {
+        let StreamTarget {
+            tab_id,
+            generation,
+            bvid,
+            cid,
+            resume,
+            paused,
+        } = target;
+        self.session = Some(tab_id);
+        self.player.update(cx, |player, cx| {
+            player.load_streams_at(streams, false, resume, paused, cx)
+        });
+        self.load_media_for(tab_id, generation, bvid, cid, cx);
+    }
+
+    fn load_media_for(
+        &mut self,
+        tab_id: u64,
+        generation: u64,
+        bvid: String,
+        cid: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(info) = self.tab_info(tab_id) else {
+            return;
+        };
+        let (aid, duration) = {
+            let info = info.read(cx);
+            (
+                info.aid().unwrap_or_default(),
+                info.page_duration(cid).unwrap_or_default(),
+            )
+        };
+        self.load_previews_for(tab_id, generation, bvid.clone(), cid, cx);
+        self.load_danmaku_for(
+            media::DanmakuRequest {
+                tab_id,
+                generation,
+                bvid,
+                aid,
+                cid,
+                duration,
+            },
+            cx,
+        );
+    }
+
+    fn load_live(
+        &mut self,
+        tab_id: u64,
+        generation: u64,
+        room_id: u64,
+        paused: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        spawn_api(
+            cx,
+            async move { client.live_play_url(room_id).await },
+            move |this, result, cx| {
+                if !this.is_active(tab_id, generation) {
+                    return;
+                }
+                this.tab_mut().loading = false;
+                match result {
+                    Ok(url) => {
+                        this.session = Some(tab_id);
+                        {
+                            let tab = this.tab_mut();
+                            tab.loaded = true;
+                            tab.info.update(cx, |info, cx| info.clear(cx));
+                        }
+                        this.player.update(cx, |player, cx| {
+                            player.load_streams_at(Streams::single(url), true, None, paused, cx)
+                        });
+                    }
+                    Err(error) => this.fail_active(tab_id, generation, error, cx),
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    fn apply_resolved(
+        &mut self,
+        tab_id: u64,
+        generation: u64,
+        resolved: Resolved,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.is_active(tab_id, generation) {
+            return;
+        }
+        let Resolved {
+            info: video,
+            related,
+            followers,
+            owner_likes,
+            cid,
+            streams,
+            player_info,
+        } = resolved;
+        let bvid = video.bvid.clone();
+        let aid = video.aid;
+        let duration = video
+            .pages
+            .iter()
+            .find(|page| page.cid == cid)
+            .map(|page| page.duration)
+            .unwrap_or(video.duration);
+        let start = watch::resume_position(player_info.last_play_time, duration as f64);
+        let chapters = player_info.chapters();
+        let pages = video.pages.clone();
+        let title: SharedString = video.title.clone().into();
+        let owner_mid = video.owner.mid;
+        {
+            let tab = self.tab_mut();
+            tab.loaded = true;
+            tab.loading = false;
+            tab.title = title.clone();
+            tab.request.source = PlaybackSource::Video {
+                bvid: bvid.clone(),
+                cid: Some(cid),
+            };
+            tab.pages = pages.clone();
+            tab.chapters = chapters.clone();
+            tab.streams = Some(CachedStreams {
+                streams: streams.clone(),
+                at: Instant::now(),
+            });
+            tab.is_live = false;
+            tab.info.update(cx, |info, cx| {
+                info.set(video, cid, cx);
+                info.set_owner_counts(followers, owner_likes, cx);
+                info.set_related(related, cx);
+            });
+        }
+        self.session = Some(tab_id);
+        self.player.update(cx, |player, cx| {
+            player.set_title(title, cx);
+            player.set_pages(pages, cid, cx);
+            player.set_chapters(chapters, cx);
+            player.load_streams(streams, false, start, cx);
+        });
+        self.load_previews_for(tab_id, generation, bvid.clone(), cid, cx);
+        self.load_danmaku_for(
+            media::DanmakuRequest {
+                tab_id,
+                generation,
+                bvid,
+                aid,
+                cid,
+                duration,
+            },
+            cx,
+        );
+        self.load_follow_status_for(tab_id, generation, owner_mid, cx);
+        self.load_interactions_for(tab_id, generation, aid, cx);
+        self.load_watch_later_for(tab_id, generation, aid, cx);
+    }
+
+    fn fail_active(
+        &mut self,
+        tab_id: u64,
+        generation: u64,
+        error: ApiTaskError,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.is_active(tab_id, generation) {
+            return;
+        }
+        let message = api_task_error_message(error, cx);
+        let info = {
+            let tab = self.tab_mut();
+            tab.loading = false;
+            tab.error = Some(message);
+            tab.info.clone()
+        };
+        info.update(cx, |info, cx| info.set_busy(false, cx));
     }
 
     fn step_page(&mut self, delta: isize, cx: &mut Context<Self>) {
@@ -285,47 +893,47 @@ impl PlayerWindow {
     }
 
     fn select_page(&mut self, cid: u64, cx: &mut Context<Self>) {
-        if self.is_live || self.loading {
-            return;
-        }
         let Some(client) = self.client.clone() else {
             return;
         };
-        let Some(PlaybackSource::Video {
-            bvid,
-            cid: current_cid,
-        }) = self.request.as_ref().map(|request| request.source.clone())
-        else {
-            return;
+        let (bvid, current_cid) = {
+            let tab = self.tab();
+            if tab.is_live || tab.loading {
+                return;
+            }
+            let PlaybackSource::Video { bvid, cid } = tab.request.source.clone() else {
+                return;
+            };
+            (bvid, cid)
         };
         if current_cid == Some(cid) {
             return;
         }
 
-        if let Some(PlaybackRequest {
-            source: PlaybackSource::Video {
-                cid: request_cid, ..
-            },
-            ..
-        }) = self.request.as_mut()
-        {
-            *request_cid = Some(cid);
-        }
-        self.generation += 1;
-        self.danmaku_task = None;
+        let (tab_id, generation, info, duration) = {
+            let tab = self.tab_mut();
+            tab.request.source = PlaybackSource::Video {
+                bvid: bvid.clone(),
+                cid: Some(cid),
+            };
+            tab.generation = tab.generation.wrapping_add(1);
+            tab.danmaku_task = None;
+            tab.loading = true;
+            tab.error = None;
+            tab.paused = false;
+            tab.resume = None;
+            tab.streams = None;
+            let duration = tab.info.read(cx).page_duration(cid).unwrap_or_default();
+            (tab.id, tab.generation, tab.info.clone(), duration)
+        };
+        self.session = None;
         self.player
             .update(cx, |player, cx| player.clear_danmaku_source(cx));
-        let generation = self.generation;
-        self.loading = true;
-        self.error = None;
-        self.info.update(cx, |info, cx| info.set_busy(true, cx));
+        info.update(cx, |info, cx| info.set_busy(true, cx));
         cx.notify();
 
-        let preview_bvid = bvid.clone();
-        let danmaku_bvid = bvid.clone();
+        let media_bvid = bvid.clone();
         let preferred = crate::settings::current(cx).preferred_quality;
-        let aid = self.info.read(cx).aid().unwrap_or_default();
-        let duration = self.info.read(cx).page_duration(cid).unwrap_or_default();
         spawn_api(
             cx,
             async move {
@@ -336,28 +944,36 @@ impl PlayerWindow {
                 streams.map(|streams| (streams, player_info.unwrap_or_default()))
             },
             move |this, result, cx| {
-                if this.generation != generation {
+                if !this.is_active(tab_id, generation) {
                     return;
                 }
-                this.loading = false;
+                this.tab_mut().loading = false;
                 match result {
                     Ok((streams, player_info)) => {
                         let start =
                             watch::resume_position(player_info.last_play_time, duration as f64);
                         let chapters = player_info.chapters();
-                        this.history.remember_cid(cid);
-                        this.info.update(cx, |info, cx| info.select(cid, cx));
+                        {
+                            let tab = this.tab_mut();
+                            tab.chapters = chapters.clone();
+                            tab.history.remember_cid(cid);
+                            tab.streams = Some(CachedStreams {
+                                streams: streams.clone(),
+                                at: Instant::now(),
+                            });
+                        }
+                        info.update(cx, |info, cx| info.select(cid, cx));
+                        this.session = Some(tab_id);
                         this.player.update(cx, |player, cx| {
                             player.set_selected_page(cid, cx);
                             player.set_chapters(chapters, cx);
                             player.load_streams(streams, false, start, cx)
                         });
-                        this.load_previews(preview_bvid, cid, cx);
-                        this.load_danmaku(danmaku_bvid, aid, cid, duration, cx);
+                        this.load_media_for(tab_id, generation, media_bvid, cid, cx);
                     }
                     Err(error) => {
-                        this.info.update(cx, |info, cx| info.set_busy(false, cx));
-                        this.handle_error(error, cx);
+                        info.update(cx, |info, cx| info.set_busy(false, cx));
+                        this.fail_active(tab_id, generation, error, cx);
                     }
                 }
                 cx.notify();
@@ -365,30 +981,27 @@ impl PlayerWindow {
         );
     }
 
-    fn handle_error(&mut self, error: ApiTaskError, cx: &mut Context<Self>) {
-        self.error = Some(rigili_core::api_task_error_message(error, cx));
-    }
-
     fn retry(&mut self, cx: &mut Context<Self>) {
-        if let Some(request) = self.request.clone() {
-            self.start(request, cx);
-        }
+        let request = self.tab().request.clone();
+        self.start_active(request, cx);
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
-        if self.loading {
-            return;
-        }
-        let Some(source) = self.request.as_ref().map(|request| request.source.clone()) else {
-            return;
+        let (loading, is_live) = {
+            let tab = self.tab();
+            (tab.loading, tab.is_live)
         };
-        if matches!(source, PlaybackSource::Live { .. }) {
-            if let Some(request) = self.request.clone() {
-                self.start(request, cx);
-            }
+        if loading {
             return;
         }
-        self.info.update(cx, |info, cx| info.reload_current(cx));
+        if is_live {
+            let request = self.tab().request.clone();
+            self.start_active(request, cx);
+            return;
+        }
+        self.tab()
+            .info
+            .update(cx, |info, cx| info.reload_current(cx));
         self.reload_stream(cx);
     }
 
@@ -396,33 +1009,46 @@ impl PlayerWindow {
         let Some(client) = self.client.clone() else {
             return;
         };
-        let Some(PlaybackSource::Video { bvid, cid }) =
-            self.request.as_ref().map(|request| request.source.clone())
-        else {
-            return;
-        };
-        let Some(cid) = cid else {
-            return;
+        let (tab_id, generation, bvid, cid) = {
+            let tab = self.tab_mut();
+            let PlaybackSource::Video {
+                bvid,
+                cid: Some(cid),
+            } = tab.request.source.clone()
+            else {
+                return;
+            };
+            tab.danmaku_task = None;
+            tab.loading = true;
+            tab.error = None;
+            tab.streams = None;
+            (tab.id, tab.generation, bvid, cid)
         };
         let preferred = self.player.read(cx).selected_quality();
-        let generation = self.generation;
-        self.loading = true;
-        self.error = None;
+        self.session = Some(tab_id);
+        self.player
+            .update(cx, |player, cx| player.clear_danmaku_source(cx));
         cx.notify();
 
         spawn_api(
             cx,
             async move { resolve_streams(&client, &bvid, cid, Some(preferred)).await },
             move |this, result, cx| {
-                if this.generation != generation {
+                if !this.is_active(tab_id, generation) {
                     return;
                 }
-                this.loading = false;
+                this.tab_mut().loading = false;
                 match result {
-                    Ok(streams) => this
-                        .player
-                        .update(cx, |player, cx| player.reload_streams(streams, cx)),
-                    Err(error) => this.handle_error(error, cx),
+                    Ok(streams) => {
+                        this.tab_mut().streams = Some(CachedStreams {
+                            streams: streams.clone(),
+                            at: Instant::now(),
+                        });
+                        this.session = Some(tab_id);
+                        this.player
+                            .update(cx, |player, cx| player.reload_streams(streams, cx));
+                    }
+                    Err(error) => this.fail_active(tab_id, generation, error, cx),
                 }
                 cx.notify();
             },
@@ -439,15 +1065,43 @@ impl Render for PlayerWindow {
         let fullscreen = window.is_fullscreen();
         let client_decorated = matches!(window.window_decorations(), Decorations::Client { .. });
         let wide_enough = window.viewport_size().width >= INFO_MIN_WINDOW;
-        let show_info = self.show_info && !self.is_live && (fullscreen || wide_enough);
-        let title = self.title.clone();
+        let (title, can_go_back, can_go_forward, is_live, loading, error, info) = {
+            let tab = self.tab();
+            (
+                tab.title.clone(),
+                tab.history.can_back(),
+                tab.history.can_forward(),
+                tab.is_live,
+                tab.loading,
+                tab.error.clone(),
+                tab.info.clone(),
+            )
+        };
+        let show_info = self.show_info && !is_live && (fullscreen || wide_enough);
         let weak = cx.entity().downgrade();
-        let can_go_back = self.history.can_back();
-        let can_go_forward = self.history.can_forward();
 
         if window.window_title() != title.as_ref() {
-            window.set_window_title(&title);
+            window.set_window_title(title.as_ref());
         }
+
+        let tabs = TabBar::new("player-tabs")
+            .selected_index(self.active)
+            .max_width(px(200.))
+            .menu(true)
+            .children(self.tabs.iter().enumerate().map(|(index, tab)| {
+                TabButton::new().label(tab.title.clone()).suffix(
+                    Button::new(("player-tab-close", tab.id))
+                        .ghost()
+                        .small()
+                        .icon(IconName::Close)
+                        .accessibility_label("关闭标签页")
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.close_tab(index, window, cx);
+                        })),
+                )
+            }))
+            .on_click(cx.listener(|this, index: &usize, _, cx| this.select_tab(*index, cx)));
 
         v_flex()
             .image_cache(rigili_core::image_cache::get(cx))
@@ -459,7 +1113,7 @@ impl Render for PlayerWindow {
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape"
                     && (this.player.read(cx).text_input_focused(window, cx)
-                        || this.info.read(cx).text_input_focused(window, cx))
+                        || this.tab().info.read(cx).text_input_focused(window, cx))
                 {
                     window.blur(cx);
                     this.player
@@ -477,7 +1131,7 @@ impl Render for PlayerWindow {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
-                    this.info.update(cx, |info, cx| {
+                    this.tab().info.update(cx, |info, cx| {
                         info.clear_spanning_selection(window, cx);
                     });
                 }),
@@ -528,6 +1182,19 @@ impl Render for PlayerWindow {
             .on_action(cx.listener(|this, _: &Reload, _, cx| {
                 this.reload(cx);
             }))
+            .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
+                this.close_tab(this.active, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NextTab, _, cx| {
+                if this.tabs.len() > 1 {
+                    this.select_tab((this.active + 1) % this.tabs.len(), cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PreviousTab, _, cx| {
+                if this.tabs.len() > 1 {
+                    this.select_tab((this.active + this.tabs.len() - 1) % this.tabs.len(), cx);
+                }
+            }))
             .on_action(cx.listener(|_, _: &SwitchToMain, _, cx| {
                 cx.emit(FocusMain);
             }))
@@ -543,7 +1210,7 @@ impl Render for PlayerWindow {
                         h_flex()
                             .w_full()
                             .items_center()
-                            .justify_between()
+                            .gap_2()
                             .pr_6()
                             .child(
                                 h_flex()
@@ -572,6 +1239,7 @@ impl Render for PlayerWindow {
                                             ),
                                     ),
                             )
+                            .child(div().flex_1().min_w_0().child(tabs))
                             .when(!client_decorated, |this| {
                                 this.child(
                                     Button::new("window-close")
@@ -597,7 +1265,7 @@ impl Render for PlayerWindow {
                             .min_w_0()
                             .min_h_0()
                             .child(self.player.clone())
-                            .when(self.loading, |this| {
+                            .when(loading, |this| {
                                 this.child(overlay(
                                     v_flex()
                                         .items_center()
@@ -612,7 +1280,7 @@ impl Render for PlayerWindow {
                                     cx,
                                 ))
                             })
-                            .children(self.error.clone().map(|error| {
+                            .children(error.clone().map(|error| {
                                 overlay(
                                     v_flex()
                                         .items_center()
@@ -634,7 +1302,7 @@ impl Render for PlayerWindow {
                                 )
                             })),
                     )
-                    .when(show_info, |this| this.child(self.info.clone())),
+                    .when(show_info, |this| this.child(info)),
             )
     }
 }
@@ -663,6 +1331,38 @@ fn panel_visibility(visible: bool, current: InfoTab, target: InfoTab) -> bool {
     !(visible && current == target)
 }
 
+fn same_source(a: &PlaybackSource, b: &PlaybackSource) -> bool {
+    match (a, b) {
+        (PlaybackSource::Video { bvid: a, .. }, PlaybackSource::Video { bvid: b, .. }) => a == b,
+        (PlaybackSource::Live { room_id: a }, PlaybackSource::Live { room_id: b }) => a == b,
+        _ => false,
+    }
+}
+
+fn stash_resume(phase: PlaybackPhase, time_pos: f64, resume: Option<f64>) -> Option<f64> {
+    match phase {
+        PlaybackPhase::Ended => Some(0.),
+        PlaybackPhase::Playing | PlaybackPhase::Buffering => Some(time_pos.max(0.)),
+        _ => resume,
+    }
+}
+
+fn apply_preferred_quality(streams: &mut Streams, preferred: Option<u32>) {
+    let Some((url, id)) = preferred
+        .and_then(|preferred| {
+            streams
+                .qualities
+                .iter()
+                .find(|quality| quality.id == preferred)
+        })
+        .map(|quality| (quality.url.clone(), quality.id))
+    else {
+        return;
+    };
+    streams.video = url;
+    streams.video_id = id;
+}
+
 pub fn open(
     request: PlaybackRequest,
     cx: &mut App,
@@ -687,7 +1387,69 @@ pub fn open(
 
 #[cfg(test)]
 mod tests {
-    use super::{InfoTab, panel_visibility};
+    use rigili_player::PlaybackPhase;
+
+    use super::{
+        InfoTab, PlaybackSource, apply_preferred_quality, panel_visibility, same_source,
+        stash_resume,
+    };
+    use crate::request::{Streams, VideoQuality};
+
+    #[test]
+    fn identifies_tabs_by_video_or_room() {
+        let video = PlaybackSource::Video {
+            bvid: "BV1".into(),
+            cid: Some(1),
+        };
+        let same_video = PlaybackSource::Video {
+            bvid: "BV1".into(),
+            cid: Some(2),
+        };
+        let other_video = PlaybackSource::Video {
+            bvid: "BV2".into(),
+            cid: Some(1),
+        };
+        let live = PlaybackSource::Live { room_id: 7 };
+        assert!(same_source(&video, &same_video));
+        assert!(!same_source(&video, &other_video));
+        assert!(!same_source(&video, &live));
+        assert!(same_source(&live, &PlaybackSource::Live { room_id: 7 }));
+    }
+
+    #[test]
+    fn stashes_the_playback_position_only_while_playing() {
+        assert_eq!(stash_resume(PlaybackPhase::Playing, 12.5, None), Some(12.5));
+        assert_eq!(stash_resume(PlaybackPhase::Ended, 99., Some(3.)), Some(0.));
+        assert_eq!(stash_resume(PlaybackPhase::Loading, 0., Some(3.)), Some(3.));
+        assert_eq!(stash_resume(PlaybackPhase::Idle, 0., None), None);
+    }
+
+    #[test]
+    fn applies_the_preferred_quality_to_cached_streams() {
+        let quality = |id: u32, url: &str| VideoQuality {
+            id,
+            label: format!("{id}P"),
+            short_label: format!("{id}P"),
+            url: url.into(),
+        };
+        let mut streams = Streams {
+            video: "high".into(),
+            video_id: 80,
+            audio: None,
+            qualities: vec![quality(80, "high"), quality(64, "low")],
+        };
+
+        apply_preferred_quality(&mut streams, Some(64));
+        assert_eq!(streams.video_id, 64);
+        assert_eq!(streams.video, "low");
+
+        apply_preferred_quality(&mut streams, Some(32));
+        assert_eq!(streams.video_id, 64);
+        assert_eq!(streams.video, "low");
+
+        apply_preferred_quality(&mut streams, None);
+        assert_eq!(streams.video_id, 64);
+    }
 
     #[test]
     fn toggles_only_the_active_panel_tab() {
