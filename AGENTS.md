@@ -57,13 +57,17 @@ just install-desktop        # 安装 .desktop 与 hicolor 图标到 $XDG_DATA_HO
 nix build .#default         # 构建包含 .desktop 与图标的 Nix 包
 ```
 
-视频流排障（编译期开关，关闭时零开销，日志输出到 stderr）：
+视频流排障（编译期开关，关闭时零开销）：
 
 ```bash
 cargo run --features video-monitor                        # API 请求、选流、mpv 事件与缓存快照
 RIGILI_MPV_LOG=debug cargo run --features video-monitor   # 同时提高 mpv 日志级别
 just run-monitor                                          # 同上，等价于第一条
 ```
+
+日志异步写入 `$XDG_DATA_HOME/rigili/monitor.log`（`RIGILI_DATA_DIR` 可改），权限 0600；
+每 30 秒一行 `mem:`，记录 RSS、swap、线程数、mimalloc 提交量（Rust 侧上界）与峰值，
+用来区分 Rust 堆与 mpv/ffmpeg/图形栈的增长。
 
 性能分析（dev shell 内，`perf` 需要以子进程方式启动应用）：
 

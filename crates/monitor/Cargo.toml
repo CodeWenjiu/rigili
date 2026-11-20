@@ -5,7 +5,8 @@ edition.workspace = true
 publish = false
 
 [features]
-video-monitor = []
+video-monitor = ["dep:tracing"]
 
 [dependencies]
 rigili_macro.workspace = true
+tracing = { workspace = true, optional = true }

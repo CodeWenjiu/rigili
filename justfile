@@ -27,7 +27,8 @@ mem-profile *args:
     MIMALLOC_SHOW_STATS=1 heaptrack -o target/mem/heaptrack --record-only target/release/rigili {{args}}
     heaptrack_print -f target/mem/heaptrack.zst -p 1 -l 1 -a 0 -T 0 | tee target/mem/report.txt
 
-# 运行应用并开启视频流监视；RIGILI_MPV_LOG=debug just run-monitor 可提高 mpv 日志级别
+# 运行应用并开启视频流监视，日志异步写入 $XDG_DATA_HOME/rigili/monitor.log
+# RIGILI_MPV_LOG=debug just run-monitor 可提高 mpv 日志级别
 run-monitor *args:
     @cargo run -p rigili_app --features video-monitor -- {{args}}
 

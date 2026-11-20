@@ -21,6 +21,9 @@ libc = "0.2"
 libmimalloc-sys = { version = "0.1", features = ["extended"] }
 mimalloc = "0.1"
 tokio = "1"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = "0.3"
 rigili_macro = { path = "crates/macro" }
 rigili_bilibili = { path = "crates/bilibili" }
 rigili_core = { path = "crates/core" }
