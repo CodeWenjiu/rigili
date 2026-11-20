@@ -123,7 +123,7 @@ impl SearchView {
                         name: name.clone(),
                     });
                 });
-                user_row(user, style, on_open)
+                user_row(user, style, on_open, cx)
             }
             _ => div().into_any_element(),
         }

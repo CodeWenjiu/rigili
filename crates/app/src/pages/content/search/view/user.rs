@@ -1,5 +1,4 @@
 use gpui_kit::assets::IconName;
-use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
@@ -7,7 +6,7 @@ use gpui_kit::*;
 use rigili_core::OpenSpace;
 
 use super::SearchView;
-use super::cards::{level_badge, preview_card, user_block_height};
+use super::cards::{preview_card, user_block_height};
 use super::items::UserItem;
 use crate::shared::browse::grid::{CardGrid, CardStyle, VideoCards};
 
@@ -36,75 +35,36 @@ impl SearchView {
             .border_1()
             .border_color(style.border())
             .child(
-                h_flex()
-                    .items_center()
-                    .gap_3()
-                    .child(
+                rigili_core::user::UserRow::new(user.face.clone(), user.name.clone())
+                    .key(mid)
+                    .avatar_size(px(64.))
+                    .name_size(px(18.))
+                    .level(user.level)
+                    .open(Some(std::rc::Rc::new({
+                        let weak = cx.entity().downgrade();
+                        let name = name.clone();
+                        move |_: &mut Window, cx: &mut App| {
+                            let _ = weak.update(cx, |_, cx| {
+                                cx.emit(OpenSpace {
+                                    mid,
+                                    name: name.clone(),
+                                });
+                            });
+                        }
+                    })))
+                    .meta(
                         h_flex()
-                            .id(SharedString::from(format!("search-user-space-{mid}")))
-                            .group("search-user-link")
-                            .flex_1()
-                            .min_w_0()
                             .items_center()
-                            .gap_3()
-                            .cursor_pointer()
-                            .on_click({
-                                let name = name.clone();
-                                cx.listener(move |_, _: &ClickEvent, _, cx| {
-                                    cx.emit(OpenSpace {
-                                        mid,
-                                        name: name.clone(),
-                                    });
-                                })
-                            })
-                            .child(
-                                Avatar::new()
-                                    .src(user.face.clone())
-                                    .name(user.name.clone())
-                                    .size(px(64.)),
-                            )
-                            .child(
-                                v_flex()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .gap_1()
-                                    .child(
-                                        h_flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .child(
-                                                div()
-                                                    .truncate()
-                                                    .text_lg()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(style.foreground())
-                                                    .group_hover("search-user-link", move |this| {
-                                                        this.text_color(style.primary())
-                                                    })
-                                                    .child(user.name.clone()),
-                                            )
-                                            .child(level_badge(user.level, style)),
-                                    )
-                                    .child(
-                                        h_flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .min_w_0()
-                                            .text_xs()
-                                            .text_color(style.muted())
-                                            .child(format!("粉丝: {}", user.fans))
-                                            .child("·")
-                                            .child(format!("视频: {}", user.videos))
-                                            .child(
-                                                div()
-                                                    .ml_2()
-                                                    .truncate()
-                                                    .child(user.description.clone()),
-                                            ),
-                                    ),
-                            ),
+                            .gap_2()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(style.muted())
+                            .child(format!("粉丝: {}", user.fans))
+                            .child("·")
+                            .child(format!("视频: {}", user.videos))
+                            .child(div().ml_2().truncate().child(user.description.clone())),
                     )
-                    .child(
+                    .trailing(
                         Button::new(("search-user-follow", mid))
                             .small()
                             .min_w(px(84.))
@@ -129,7 +89,8 @@ impl SearchView {
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.toggle_follow(mid, window, cx)
                             })),
-                    ),
+                    )
+                    .render(cx),
             )
             .child(
                 h_flex()

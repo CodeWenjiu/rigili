@@ -1,5 +1,4 @@
 use gpui_kit::assets::IconName;
-use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -87,13 +86,13 @@ pub(crate) fn user_row(
     user: &UserItem,
     style: CardStyle,
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    cx: &App,
 ) -> AnyElement {
     h_flex()
         .id(ElementId::NamedInteger("search-user".into(), user.mid))
         .h(ROW_HEIGHT)
         .w_full()
         .items_center()
-        .gap_4()
         .px_4()
         .rounded(style.radius())
         .border_1()
@@ -102,52 +101,32 @@ pub(crate) fn user_row(
         .hover(move |this| this.bg(style.hover()))
         .on_click(on_open)
         .child(
-            Avatar::new()
-                .src(user.face.clone())
-                .name(user.name.clone())
-                .size(px(64.)),
-        )
-        .child(
-            v_flex()
-                .flex_1()
-                .min_w_0()
-                .gap_1()
-                .child(
-                    h_flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(style.foreground())
-                                .child(user.name.clone()),
-                        )
-                        .child(level_badge(user.level, style)),
-                )
-                .child(
+            rigili_core::user::UserRow::new(user.face.clone(), user.name.clone())
+                .key(user.mid)
+                .grow()
+                .avatar_size(px(64.))
+                .level(user.level)
+                .meta(
                     div()
                         .text_xs()
                         .text_color(style.muted())
                         .child(format!("粉丝: {} · 视频: {}", user.fans, user.videos)),
                 )
-                .child(
+                .meta(
                     div()
                         .text_xs()
                         .text_color(style.muted())
                         .truncate()
                         .child(user.description.clone()),
-                ),
-        )
-        .child(
-            Icon::new(IconName::ChevronRight)
-                .with_size(px(16.))
-                .text_color(style.muted()),
+                )
+                .trailing(
+                    Icon::new(IconName::ChevronRight)
+                        .with_size(px(16.))
+                        .text_color(style.muted()),
+                )
+                .render(cx),
         )
         .into_any_element()
-}
-
-pub(crate) fn level_badge(level: u32, style: CardStyle) -> AnyElement {
-    crate::shared::ui::profile::level_badge(level, style.primary().opacity(0.12), style.primary())
 }
 
 pub(crate) fn user_block_height(width: Pixels) -> Pixels {

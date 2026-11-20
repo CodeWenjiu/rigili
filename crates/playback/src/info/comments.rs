@@ -2,7 +2,6 @@ use std::collections::VecDeque;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::SelectableText;
-use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
 use gpui_kit::component::notification::Notification;
@@ -1336,7 +1335,6 @@ impl InfoPanel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let primary = cx.theme().primary;
-        let link_hover = cx.theme().link_hover;
         let foreground = cx.theme().foreground;
         let muted = cx.theme().muted_foreground;
         let danger = cx.theme().danger;
@@ -1474,6 +1472,22 @@ impl InfoPanel {
         } else {
             foreground
         };
+        let open: Option<rigili_core::user::Open> = if mid > 0 {
+            let weak = cx.entity().downgrade();
+            let uname = uname.clone();
+            let handler: rigili_core::user::Open =
+                std::rc::Rc::new(move |_: &mut Window, cx: &mut App| {
+                    let _ = weak.update(cx, |_, cx| {
+                        cx.emit(InfoEvent::OpenSpace {
+                            mid,
+                            name: uname.to_string(),
+                        });
+                    });
+                });
+            Some(handler)
+        } else {
+            None
+        };
 
         v_flex()
             .gap_2()
@@ -1481,68 +1495,26 @@ impl InfoPanel {
                 h_flex()
                     .items_start()
                     .gap_2()
-                    .child(
-                        div()
-                            .id(("comment-avatar", comment.rpid))
-                            .when(mid > 0, |this| {
-                                this.cursor_pointer().on_click(cx.listener({
-                                    let uname = uname.clone();
-                                    move |_, _, _, cx| {
-                                        cx.emit(InfoEvent::OpenSpace {
-                                            mid,
-                                            name: uname.to_string(),
-                                        });
-                                    }
-                                }))
-                            })
-                            .child(
-                                Avatar::new()
-                                    .src(avatar(&member.avatar, 64))
-                                    .name(member.uname.clone())
-                                    .size(avatar_size),
-                            ),
-                    )
+                    .child(rigili_core::user::avatar(
+                        avatar(&member.avatar, 64),
+                        member.uname.clone(),
+                        avatar_size,
+                        comment.rpid,
+                        open.clone(),
+                    ))
                     .child(
                         v_flex()
                             .flex_1()
                             .min_w_0()
                             .gap_1()
                             .child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .id(("comment-author", comment.rpid))
-                                            .text_sm()
-                                            .text_color(primary)
-                                            .when(mid > 0, |this| {
-                                                this.cursor_pointer()
-                                                    .hover(move |this| this.text_color(link_hover))
-                                                    .on_click(cx.listener({
-                                                        let uname = uname.clone();
-                                                        move |_, _, _, cx| {
-                                                            cx.emit(InfoEvent::OpenSpace {
-                                                                mid,
-                                                                name: uname.to_string(),
-                                                            });
-                                                        }
-                                                    }))
-                                            })
-                                            .child(member.uname.clone()),
-                                    )
-                                    .when(level > 0, |this| {
-                                        this.child(
-                                            div()
-                                                .px_1()
-                                                .rounded(px(3.))
-                                                .bg(primary.opacity(0.12))
-                                                .text_color(primary)
-                                                .text_xs()
-                                                .child(format!("LV{level}")),
-                                        )
-                                    })
-                                    .child(div().text_xs().text_color(muted).child(time)),
+                                rigili_core::user::Identity::new(member.uname.clone())
+                                    .key(comment.rpid)
+                                    .name_color(primary)
+                                    .level(level)
+                                    .detail(div().text_xs().text_color(muted).child(time))
+                                    .open(open.clone())
+                                    .render(cx),
                             )
                             .child(message)
                             .when(!comment.content.pictures.is_empty(), |this| {

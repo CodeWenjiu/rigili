@@ -1,6 +1,5 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::base::SelectableText;
-use gpui_kit::component::avatar::Avatar;
 use gpui_kit::component::button::*;
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::scroll::Scrollbar;
@@ -237,51 +236,32 @@ impl InfoPanel {
                             .p_4()
                             .pb_6()
                             .child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_3()
-                                    .child(
-                                        Avatar::new()
-                                            .src(avatar(&details.avatar, 96))
-                                            .name(details.owner.clone())
-                                            .size(px(40.)),
-                                    )
-                                    .child(
-                                        v_flex()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .id(("info-owner", aid))
-                                                    .text_sm()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .truncate()
-                                                    .cursor_pointer()
-                                                    .hover(move |this| this.text_color(link_hover))
-                                                    .on_click({
-                                                        let weak = weak.clone();
-                                                        let name = details.owner.to_string();
-                                                        move |_, _, cx| {
-                                                            let _ = weak.update(cx, |_, cx| {
-                                                                cx.emit(InfoEvent::OpenSpace {
-                                                                    mid: owner_mid,
-                                                                    name: name.clone(),
-                                                                });
-                                                            });
-                                                        }
-                                                    })
-                                                    .child(details.owner.clone()),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(muted)
-                                                    .truncate()
-                                                    .child(owner_meta),
-                                            ),
-                                    )
-                                    .child(follow_button),
+                                rigili_core::user::UserRow::new(
+                                    avatar(&details.avatar, 96),
+                                    details.owner.clone(),
+                                )
+                                .key(aid)
+                                .open(Some(std::rc::Rc::new({
+                                    let weak = weak.clone();
+                                    let name = details.owner.to_string();
+                                    move |_: &mut Window, cx: &mut App| {
+                                        let _ = weak.update(cx, |_, cx| {
+                                            cx.emit(InfoEvent::OpenSpace {
+                                                mid: owner_mid,
+                                                name: name.clone(),
+                                            });
+                                        });
+                                    }
+                                })))
+                                .meta(
+                                    div()
+                                        .text_xs()
+                                        .text_color(muted)
+                                        .truncate()
+                                        .child(owner_meta),
+                                )
+                                .trailing(follow_button)
+                                .render(cx),
                             )
                             .child(
                                 h_flex()

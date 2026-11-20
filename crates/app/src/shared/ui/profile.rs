@@ -19,17 +19,6 @@ pub(crate) fn profile_badge(
         .into_any_element()
 }
 
-pub(crate) fn level_badge(level: u32, background: Hsla, foreground: Hsla) -> AnyElement {
-    div()
-        .px_1()
-        .rounded(px(3.))
-        .bg(background)
-        .text_color(foreground)
-        .text_xs()
-        .child(format!("LV{level}"))
-        .into_any_element()
-}
-
 pub(crate) fn profile_title(
     name: impl Into<SharedString>,
     level: Option<u32>,
