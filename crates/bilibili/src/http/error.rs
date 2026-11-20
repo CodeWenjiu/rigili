@@ -29,6 +29,10 @@ impl ApiError {
             }
         ) || matches!(self, Self::Status(status) if status.as_u16() == 412)
     }
+
+    pub fn is_captcha_required(&self) -> bool {
+        matches!(self, Self::Bilibili { code: -401, .. })
+    }
 }
 
 impl From<ReqwestError> for ApiError {

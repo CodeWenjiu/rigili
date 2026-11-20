@@ -7,6 +7,8 @@ pub fn api_error_message(error: &ApiError) -> String {
         "登录已过期，请重新登录".into()
     } else if error.is_risk_control() {
         "请求过于频繁，请稍后再试".into()
+    } else if error.is_captcha_required() {
+        "B 站要求人机验证，请稍后再试或在网页端操作".into()
     } else {
         error.to_string()
     }
@@ -142,6 +144,15 @@ mod tests {
             message: "风控校验失败".into(),
         };
         assert_eq!(api_error_message(&risk), "请求过于频繁，请稍后再试");
+
+        let captcha = ApiError::Bilibili {
+            code: -401,
+            message: "非法访问".into(),
+        };
+        assert_eq!(
+            api_error_message(&captcha),
+            "B 站要求人机验证，请稍后再试或在网页端操作"
+        );
 
         let other = ApiError::Bilibili {
             code: -400,

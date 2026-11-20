@@ -387,6 +387,7 @@ impl InfoPanel {
                                                         CoinDialog::new(
                                                             window,
                                                             details.aid,
+                                                            details.bvid.clone(),
                                                             panel,
                                                             given,
                                                             liked,

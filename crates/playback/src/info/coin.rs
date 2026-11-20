@@ -15,6 +15,7 @@ const MAX_COINS: u32 = 2;
 
 pub(super) struct CoinDialog {
     aid: u64,
+    bvid: SharedString,
     panel: Entity<InfoPanel>,
     window: AnyWindowHandle,
     given: u32,
@@ -29,12 +30,14 @@ impl CoinDialog {
     pub(super) fn new(
         window: &Window,
         aid: u64,
+        bvid: SharedString,
         panel: Entity<InfoPanel>,
         given: u32,
         liked: bool,
     ) -> Self {
         Self {
             aid,
+            bvid,
             panel,
             window: window.window_handle(),
             given: given.min(MAX_COINS),
@@ -64,6 +67,7 @@ impl CoinDialog {
             }
         };
         let aid = self.aid;
+        let bvid = self.bvid.clone();
         let count = self.count.min(remaining);
         let also_like = self.also_like && !self.liked;
         let panel = self.panel.clone();
@@ -74,7 +78,7 @@ impl CoinDialog {
 
         spawn_api(
             cx,
-            async move { client.add_coin(aid, count, also_like).await },
+            async move { client.add_coin(aid, &bvid, count, also_like).await },
             move |this, result, cx| {
                 this.submitting = false;
                 match result {

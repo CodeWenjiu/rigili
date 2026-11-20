@@ -8,7 +8,7 @@ use std::{
 use reqwest::{
     Client as HttpClient, RequestBuilder, Response, StatusCode, Url,
     cookie::{CookieStore, Jar},
-    header::{ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderValue, RANGE, REFERER},
+    header::{ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderValue, ORIGIN, RANGE, REFERER},
 };
 use serde::{Deserialize, de::DeserializeOwned};
 use tokio::sync::{Mutex, OnceCell, Semaphore};
@@ -61,6 +61,7 @@ impl Client {
 
         let mut headers = HeaderMap::new();
         headers.insert(REFERER, HeaderValue::from_static(API_REFERER));
+        headers.insert(ORIGIN, HeaderValue::from_static("https://www.bilibili.com"));
         headers.insert(
             ACCEPT,
             HeaderValue::from_static("application/json, text/plain, */*"),
@@ -208,7 +209,25 @@ impl Client {
         url: &str,
         params: &[(&str, String)],
     ) -> Result<(), ApiError> {
-        let response = self.send(url, || self.http.post(url).form(params)).await?;
+        self.post_form_ack_with_referer(url, None, params).await
+    }
+
+    pub(crate) async fn post_form_ack_with_referer(
+        &self,
+        url: &str,
+        referer: Option<&str>,
+        params: &[(&str, String)],
+    ) -> Result<(), ApiError> {
+        let response = self
+            .send(url, || {
+                let request = self.http.post(url);
+                let request = match referer {
+                    Some(referer) => request.header(REFERER, referer),
+                    None => request,
+                };
+                request.form(params)
+            })
+            .await?;
         let body = self.body(url, response).await?;
         self.parse_ack(&body)
     }
@@ -359,6 +378,20 @@ impl Client {
 
     fn parse_ack(&self, body: &str) -> Result<(), ApiError> {
         let envelope: Envelope<serde_json::Value> = serde_json::from_str(body)?;
+        if envelope.code == -401
+            && let Some(decisions) = envelope
+                .data
+                .as_ref()
+                .and_then(|data| data.get("ga_data"))
+                .and_then(|gaia| gaia.get("decisions"))
+                .and_then(|decisions| decisions.as_array())
+        {
+            let decisions = decisions
+                .iter()
+                .filter_map(|decision| decision.as_str())
+                .collect::<Vec<_>>();
+            rigili_monitor::monitor!("http", "risk control: {decisions:?}");
+        }
         self.check_code(envelope.code, envelope.message)
     }
 
