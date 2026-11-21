@@ -11,11 +11,16 @@ use gpui_kit::component::*;
 use gpui_kit::http_client::{AsyncBody, HttpClient, http};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_bilibili::{CommentPicture, normalize_url, scaled, scaled_png, square};
+use rigili_bilibili::{CommentPicture, normalize_url, scaled, scaled_png};
 
-const PICTURE_SIZE: f32 = 80.;
 const PICTURE_LIMIT: usize = 9;
-const THUMBNAIL_WIDTH: u32 = 160;
+const PICTURE_MIN_EDGE: f32 = 32.;
+const PICTURE_THUMBNAIL_HEIGHT: f32 = 80.;
+const PICTURE_THUMBNAIL_MAX_WIDTH: f32 = 128.;
+const PICTURE_SINGLE_MAX_WIDTH: f32 = 240.;
+const PICTURE_SINGLE_MAX_HEIGHT: f32 = 320.;
+const PICTURE_ANIMATED_MAX_WIDTH: f32 = 160.;
+const PICTURE_PIXEL_RATIO: f32 = 2.;
 const FULL_WIDTH: u32 = 1280;
 const FULL_HEIGHT: u32 = 8192;
 const FULL_PIXELS: f32 = 6_000_000.;
@@ -25,6 +30,7 @@ const MAX_COPY_BYTES: usize = 20 * 1024 * 1024;
 pub fn grid(rpid: u64, pictures: &[CommentPicture], cx: &App) -> AnyElement {
     let placeholder = cx.theme().muted;
     let images = crate::image_cache::comment_pictures(cx);
+    let single = pictures.len() == 1;
     h_flex()
         .flex_wrap()
         .gap_1()
@@ -36,11 +42,16 @@ pub fn grid(rpid: u64, pictures: &[CommentPicture], cx: &App) -> AnyElement {
                 .map(|(index, picture)| {
                     let all = pictures.to_vec();
                     let src = picture.img_src.clone();
+                    let (width, height) = tile_size(picture.img_width, picture.img_height, single);
+                    let thumbnail = thumbnail_url(&src, width, picture.img_width);
                     div()
                         .id(("comment-picture", rpid * 10 + index as u64))
+                        .test_support()
                         .role(Role::Button)
                         .aria_label("查看图片")
-                        .size(px(PICTURE_SIZE))
+                        .w(px(width))
+                        .h(px(height))
+                        .max_w_full()
                         .rounded(px(4.))
                         .overflow_hidden()
                         .bg(placeholder)
@@ -49,7 +60,7 @@ pub fn grid(rpid: u64, pictures: &[CommentPicture], cx: &App) -> AnyElement {
                             show(all.clone(), index, window, cx);
                         })
                         .child(
-                            img(square(&src, THUMBNAIL_WIDTH))
+                            img(thumbnail)
                                 .image_cache(&images)
                                 .size_full()
                                 .object_fit(ObjectFit::Cover),
@@ -57,6 +68,52 @@ pub fn grid(rpid: u64, pictures: &[CommentPicture], cx: &App) -> AnyElement {
                 }),
         )
         .into_any_element()
+}
+
+fn tile_size(width: u32, height: u32, single: bool) -> (f32, f32) {
+    let (width, height) = if width == 0 || height == 0 {
+        (4., 3.)
+    } else {
+        (width as f32, height as f32)
+    };
+    let (max_width, max_height) = if single {
+        (PICTURE_SINGLE_MAX_WIDTH, PICTURE_SINGLE_MAX_HEIGHT)
+    } else {
+        (PICTURE_THUMBNAIL_MAX_WIDTH, PICTURE_THUMBNAIL_HEIGHT)
+    };
+    let scale = (max_width / width).min(max_height / height);
+    let scale = if single { scale.min(1.) } else { scale };
+    (
+        (width * scale).round().max(PICTURE_MIN_EDGE),
+        (height * scale).round().max(PICTURE_MIN_EDGE),
+    )
+}
+
+fn thumbnail_url(src: &str, width: f32, native: u32) -> String {
+    if is_animated_source(src) {
+        let width = width.min(PICTURE_ANIMATED_MAX_WIDTH);
+        scaled(src, request_width(width, native, 1.))
+    } else {
+        scaled_png(src, request_width(width, native, PICTURE_PIXEL_RATIO))
+    }
+}
+
+fn is_animated_source(src: &str) -> bool {
+    src.split(['?', '#', '@'])
+        .next()
+        .unwrap_or(src)
+        .rsplit('.')
+        .next()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("gif") || ext.eq_ignore_ascii_case("webp"))
+}
+
+fn request_width(width: f32, native: u32, ratio: f32) -> u32 {
+    let width = (width * ratio).round().max(1.) as u32;
+    if native == 0 {
+        width
+    } else {
+        width.min(native)
+    }
 }
 
 fn show(pictures: Vec<CommentPicture>, index: usize, window: &mut Window, cx: &mut App) {
@@ -161,7 +218,9 @@ impl Render for PictureViewer {
         };
         let (width, height) = fit(picture.img_width, picture.img_height, viewport);
         let muted = cx.theme().muted_foreground;
-        let images = crate::image_cache::comment_pictures(cx);
+        let background = cx.theme().background;
+        let canvas = cx.theme().muted;
+        let images = crate::image_cache::comment_previews(cx);
         let total = self.pictures.len();
 
         let image = img(full_url(
@@ -180,6 +239,7 @@ impl Render for PictureViewer {
                 .h(px(stage_height))
                 .overflow_y_scroll()
                 .track_scroll(&self.scroll)
+                .bg(canvas)
                 .child(v_flex().w_full().items_center().child(image))
                 .into_any_element()
         } else {
@@ -189,6 +249,7 @@ impl Render for PictureViewer {
                 .flex()
                 .items_center()
                 .justify_center()
+                .bg(canvas)
                 .child(image)
                 .into_any_element()
         };
@@ -197,6 +258,7 @@ impl Render for PictureViewer {
             .id("comment-picture-viewer")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
+            .bg(background)
             .gap_2()
             .child(stage)
             .child(
@@ -347,8 +409,8 @@ fn preview_size(width: u32, height: u32) -> (u32, u32) {
 
 fn limits(viewport: gpui_kit::Size<Pixels>) -> (f32, f32) {
     // Room for the dialog's 16px padding, its close button and window margins.
-    let max_width = (f32::from(viewport.width) - 96.).clamp(200., 880.);
-    let max_height = (f32::from(viewport.height) - 160.).clamp(160., 660.);
+    let max_width = (f32::from(viewport.width) - 96.).max(200.);
+    let max_height = (f32::from(viewport.height) - 160.).max(160.);
     (max_width, max_height)
 }
 
@@ -364,7 +426,10 @@ fn fit(width: u32, height: u32, viewport: gpui_kit::Size<Pixels>) -> (f32, f32) 
 
 #[cfg(test)]
 mod tests {
-    use super::{PictureViewer, copy_url, fit, full_url};
+    use super::{
+        PictureViewer, copy_url, fit, full_url, limits, request_width, thumbnail_url, tile_size,
+    };
+    use gpui_kit::base::v_flex;
     use gpui_kit::prelude::*;
     use gpui_kit::test::TestWindowExt;
     use gpui_kit::{
@@ -382,6 +447,19 @@ mod tests {
 
     struct ViewerHarness {
         viewer: Entity<PictureViewer>,
+    }
+
+    struct GridHarness {
+        width: gpui_kit::Pixels,
+        pictures: Vec<CommentPicture>,
+    }
+
+    impl Render for GridHarness {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            v_flex()
+                .w(self.width)
+                .child(super::grid(0, &self.pictures, cx))
+        }
     }
 
     impl Render for ViewerHarness {
@@ -429,6 +507,88 @@ mod tests {
 
         cx.simulate_keystrokes(window, "left");
         assert_eq!(cx.update(|cx| viewer.read(cx).index), 2);
+    }
+
+    #[gpui_kit::test]
+    fn keeps_a_wide_picture_inside_a_narrow_body(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(crate::image_cache::init);
+        let pictures = vec![CommentPicture {
+            img_src: String::new(),
+            img_width: 1920,
+            img_height: 1080,
+        }];
+        let (window, _) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Default::default(),
+                        size(px(800.), px(600.)),
+                    ))),
+                    ..Default::default()
+                },
+                cx,
+                |_, cx| {
+                    cx.new(|_| GridHarness {
+                        width: px(200.),
+                        pictures,
+                    })
+                },
+            )
+            .expect("open grid window")
+        });
+
+        let bounds = cx
+            .update_window(window, |_, window, cx| {
+                window.render_frame(cx);
+                window.find(("comment-picture", 0u64)).bounds()
+            })
+            .expect("grid bounds");
+        assert_eq!(bounds.size.width, px(200.));
+        assert_eq!(bounds.size.height, px(135.));
+    }
+
+    #[test]
+    fn sizes_tiles_by_aspect_ratio() {
+        assert_eq!(tile_size(1920, 1080, false), (128., 72.));
+        assert_eq!(tile_size(1080, 1920, false), (45., 80.));
+        assert_eq!(tile_size(1920, 1080, true), (240., 135.));
+        assert_eq!(tile_size(1080, 1920, true), (180., 320.));
+        assert_eq!(tile_size(40, 40, true), (40., 40.));
+        assert_eq!(tile_size(4000, 100, false), (128., 32.));
+        assert_eq!(tile_size(0, 0, false), (107., 80.));
+    }
+
+    #[test]
+    fn requests_still_and_animated_thumbnails_at_their_sizes() {
+        assert_eq!(request_width(240., 1920, 2.), 480);
+        assert_eq!(request_width(40., 40, 2.), 40);
+        assert_eq!(request_width(160., 0, 1.), 160);
+    }
+
+    #[test]
+    fn animates_dynamic_thumbnails() {
+        assert_eq!(
+            thumbnail_url("//i0.hdslb.com/bfs/new_dyn/a.gif", 240., 1600),
+            "https://i0.hdslb.com/bfs/new_dyn/a.gif@160w.webp"
+        );
+        assert_eq!(
+            thumbnail_url("//i0.hdslb.com/bfs/new_dyn/a.gif@320w_1c.webp", 128., 1600),
+            "https://i0.hdslb.com/bfs/new_dyn/a.gif@128w.webp"
+        );
+        assert_eq!(
+            thumbnail_url("//i0.hdslb.com/bfs/new_dyn/a.webp", 128., 1600),
+            "https://i0.hdslb.com/bfs/new_dyn/a.webp@128w.webp"
+        );
+        assert_eq!(
+            thumbnail_url("//i0.hdslb.com/bfs/new_dyn/a.jpg", 240., 1920),
+            "https://i0.hdslb.com/bfs/new_dyn/a.jpg@480w.png"
+        );
+    }
+
+    #[test]
+    fn lets_large_pictures_use_the_window() {
+        assert_eq!(limits(size(px(1600.), px(1000.))), (1504., 840.));
     }
 
     #[test]

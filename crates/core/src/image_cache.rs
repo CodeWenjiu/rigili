@@ -28,13 +28,19 @@ const RELATED_MAX_ENTRIES: usize = 64;
 // which decode to frames times a picture.
 const EMOTE_BUDGET_BYTES: usize = 32 * 1024 * 1024;
 const EMOTE_MAX_ENTRIES: usize = 1024;
-// Comment pictures are user-uploaded photos: the list draws 160px thumbnails
-// and the viewer a 1280px copy, so bytes bind long before the entry cap. Kept
-// apart from emotes so a few full-size views cannot evict a whole panel.
-const COMMENT_PICTURE_BUDGET_BYTES: usize = 32 * 1024 * 1024;
+// Comment pictures are user-uploaded photos and GIFs: the list requests small
+// thumbnails and the viewer a 1280px copy, so bytes bind long before the entry
+// cap. Animated thumbnails decode every frame, which needs more room than the
+// still pictures this tier used to hold.
+const COMMENT_PICTURE_BUDGET_BYTES: usize = 64 * 1024 * 1024;
 const COMMENT_PICTURE_MAX_ENTRIES: usize = 128;
+// The viewer draws one picture at a time. Sharing the list's tier made a large
+// animated picture evict the thumbnails behind it, which immediately reloaded
+// and evicted the picture again; a separate tier keeps both stable.
+const COMMENT_PREVIEW_BUDGET_BYTES: usize = 32 * 1024 * 1024;
+const COMMENT_PREVIEW_MAX_ENTRIES: usize = 4;
 
-const TIER_COUNT: usize = 5;
+const TIER_COUNT: usize = 6;
 
 #[repr(usize)]
 #[derive(Clone, Copy)]
@@ -44,6 +50,7 @@ enum Tier {
     Related,
     Emotes,
     CommentPictures,
+    CommentPreviews,
 }
 
 impl Tier {
@@ -53,6 +60,7 @@ impl Tier {
         Self::Related,
         Self::Emotes,
         Self::CommentPictures,
+        Self::CommentPreviews,
     ];
 
     fn limits(self) -> (usize, usize) {
@@ -62,6 +70,7 @@ impl Tier {
             Self::Related => (RELATED_BUDGET_BYTES, RELATED_MAX_ENTRIES),
             Self::Emotes => (EMOTE_BUDGET_BYTES, EMOTE_MAX_ENTRIES),
             Self::CommentPictures => (COMMENT_PICTURE_BUDGET_BYTES, COMMENT_PICTURE_MAX_ENTRIES),
+            Self::CommentPreviews => (COMMENT_PREVIEW_BUDGET_BYTES, COMMENT_PREVIEW_MAX_ENTRIES),
         }
     }
 
@@ -105,6 +114,11 @@ pub fn emotes(cx: &App) -> Entity<LruImageCache> {
 /// Pictures posted in comments, kept apart from the emotes beside them.
 pub fn comment_pictures(cx: &App) -> Entity<LruImageCache> {
     Tier::CommentPictures.cached(cx)
+}
+
+/// Full-size pictures opened from a comment, kept apart from their thumbnails.
+pub fn comment_previews(cx: &App) -> Entity<LruImageCache> {
+    Tier::CommentPreviews.cached(cx)
 }
 
 /// Sizes the cover tier against what the grid actually draws.
