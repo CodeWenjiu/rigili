@@ -74,7 +74,6 @@ impl EglContext {
         let context = match egl.create_context(display, config, None, &context_attributes) {
             Ok(context) => context,
             Err(error) => {
-                let _ = egl.terminate(display);
                 return Err(MpvError::invalid_argument(format!(
                     "无法创建 OpenGL 上下文：{error}"
                 )));
@@ -82,7 +81,6 @@ impl EglContext {
         };
         if let Err(error) = egl.make_current(display, None, None, Some(context)) {
             let _ = egl.destroy_context(display, context);
-            let _ = egl.terminate(display);
             return Err(MpvError::invalid_argument(format!(
                 "无法激活 OpenGL 上下文：{error}"
             )));
@@ -104,11 +102,12 @@ impl EglContext {
     }
 }
 
+// Every player opens the same surfaceless display, so it is never terminated:
+// terminating it takes the display away from the players still rendering.
 impl Drop for EglContext {
     fn drop(&mut self) {
         let _ = self.egl.make_current(self.display, None, None, None);
         let _ = self.egl.destroy_context(self.display, self.context);
-        let _ = self.egl.terminate(self.display);
     }
 }
 
@@ -257,5 +256,65 @@ pub(super) extern "C" fn load_proc_address(
     {
         Some(proc) => proc as *const () as *mut c_void,
         None => null_mut(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use glow::HasContext as _;
+
+    use super::*;
+
+    fn texture(egl: &EglContext) -> glow::Texture {
+        unsafe {
+            let texture = egl.gl.create_texture().expect("texture");
+            egl.gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+            egl.gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA8 as i32,
+                4,
+                4,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(None),
+            );
+            egl.gl.bind_texture(glow::TEXTURE_2D, None);
+            egl.gl.finish();
+            texture
+        }
+    }
+
+    #[test]
+    #[ignore = "requires EGL and a GPU"]
+    fn dropping_one_player_leaves_the_shared_display_usable() {
+        let first = EglContext::new().expect("first context");
+        let (ready, ready_rx) = mpsc::channel();
+        let (go, go_rx) = mpsc::channel();
+        let other = std::thread::spawn(move || {
+            let context = EglContext::new().expect("second context");
+            let texture = texture(&context);
+            ready.send(()).expect("ready");
+            go_rx.recv().expect("go");
+            let result = export_texture(&context, texture, 1);
+            let outcome = result.as_ref().map(drop).map_err(ToString::to_string);
+            if let Ok((image, _)) = result {
+                let _ = context.egl.destroy_image(context.display, image);
+            }
+            unsafe {
+                context.gl.delete_texture(texture);
+            }
+            outcome
+        });
+
+        ready_rx.recv().expect("second context is up");
+        drop(first);
+        go.send(()).expect("go");
+
+        let exported = other.join().expect("second thread");
+        assert!(exported.is_ok(), "{:?}", exported.err());
     }
 }
