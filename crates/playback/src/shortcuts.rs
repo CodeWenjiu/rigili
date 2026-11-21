@@ -136,12 +136,12 @@ const COMMANDS: &[Command] = &[
         action: || Box::new(CloseTab),
     },
     Command {
-        keys: "ctrl-tab",
+        keys: "tab",
         context: PLAYER,
         action: || Box::new(NextTab),
     },
     Command {
-        keys: "ctrl-shift-tab",
+        keys: "shift-tab",
         context: PLAYER,
         action: || Box::new(PreviousTab),
     },
