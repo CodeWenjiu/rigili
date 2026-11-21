@@ -13,6 +13,8 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::{CommentPicture, normalize_url, scaled, scaled_png};
 
+use super::animated_image::AnimatedImage;
+
 const PICTURE_LIMIT: usize = 9;
 const PICTURE_MIN_EDGE: f32 = 32.;
 const PICTURE_THUMBNAIL_HEIGHT: f32 = 80.;
@@ -44,6 +46,7 @@ pub fn grid(rpid: u64, pictures: &[CommentPicture], cx: &App) -> AnyElement {
                     let src = picture.img_src.clone();
                     let (width, height) = tile_size(picture.img_width, picture.img_height, single);
                     let thumbnail = thumbnail_url(&src, width, picture.img_width);
+                    let image_id = ("comment-picture-image", rpid * 10 + index as u64);
                     div()
                         .id(("comment-picture", rpid * 10 + index as u64))
                         .test_support()
@@ -60,10 +63,12 @@ pub fn grid(rpid: u64, pictures: &[CommentPicture], cx: &App) -> AnyElement {
                             show(all.clone(), index, window, cx);
                         })
                         .child(
-                            img(thumbnail)
-                                .image_cache(&images)
-                                .size_full()
-                                .object_fit(ObjectFit::Cover),
+                            AnimatedImage::new(
+                                image_id,
+                                SharedUri::from(thumbnail),
+                                images.clone(),
+                            )
+                            .radius(px(4.)),
                         )
                 }),
         )
@@ -223,15 +228,15 @@ impl Render for PictureViewer {
         let images = crate::image_cache::comment_previews(cx);
         let total = self.pictures.len();
 
-        let image = img(full_url(
-            &picture.img_src,
-            picture.img_width,
-            picture.img_height,
-        ))
-        .image_cache(&images)
-        .w(px(width))
-        .h(px(height))
-        .object_fit(ObjectFit::Contain);
+        let image = div().w(px(width)).h(px(height)).child(AnimatedImage::new(
+            ("comment-picture-preview", hash(&picture.img_src)),
+            SharedUri::from(full_url(
+                &picture.img_src,
+                picture.img_width,
+                picture.img_height,
+            )),
+            images.clone(),
+        ));
         let stage = if height > stage_height {
             div()
                 .id("comment-picture-scroll")
