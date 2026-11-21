@@ -95,11 +95,11 @@ impl DanmakuLayer {
         }
     }
 
-    pub(super) fn update(&mut self, time: f64, width: f32, height: f32, scale: f32) -> bool {
+    pub(super) fn update(&mut self, time: f64, width: f32, height: f32) -> bool {
         if !self.state.settings().enabled {
             return false;
         }
-        self.state.update(time, width, height, scale)
+        self.state.update(time, width, height)
     }
 
     pub(super) fn ass(&self, device_scale: f32) -> String {
@@ -156,15 +156,8 @@ impl PlayerView {
         cx.notify();
     }
 
-    pub(super) fn update_danmaku(
-        &mut self,
-        time: f64,
-        width: f32,
-        height: f32,
-        scale: f32,
-        device_scale: f32,
-    ) {
-        if self.danmaku_layer.update(time, width, height, scale) {
+    pub(super) fn update_danmaku(&mut self, time: f64, width: f32, height: f32, device_scale: f32) {
+        if self.danmaku_layer.update(time, width, height) {
             self.set_danmaku_overlay(Some(OsdOverlay {
                 data: self.danmaku_layer.ass(device_scale),
                 width: (width * device_scale).round() as u32,

@@ -14,6 +14,7 @@ const SPAWN_GRACE: f64 = 0.5;
 const SEEK_BACK: f64 = 1.0;
 const SEEK_FORWARD: f64 = 1.0;
 const TIME_EPSILON: f64 = 0.001;
+const FONT_SIZE_FACTOR: f32 = 0.7;
 // Fingers are not precise, and a frozen danmaku is easier to grab than to miss.
 const PIN_PADDING: f32 = 4.;
 // A pinned danmaku carries the like affordance after its text, so the pointer
@@ -26,7 +27,6 @@ pub(super) struct DanmakuState {
     cursor: usize,
     last_time: Option<f64>,
     area: Option<(f32, f32)>,
-    scale: f32,
     lane_height: f32,
     lanes: Vec<f64>,
     active: Vec<ActiveDanmaku>,
@@ -38,7 +38,6 @@ pub(super) struct DanmakuState {
 struct ActiveDanmaku {
     id: u64,
     text: String,
-    base_font_size: u8,
     font_size: f32,
     color: u32,
     position: (f32, f32),
@@ -177,7 +176,7 @@ impl DanmakuState {
         let Some((_, height)) = self.area else {
             return;
         };
-        self.lane_height = (self.scale * self.settings.font_scale * 25. * 1.5).max(1.);
+        self.lane_height = (FONT_SIZE_FACTOR * self.settings.font_scale * 25. * 1.5).max(1.);
         let lanes = (height * self.settings.area_ratio / self.lane_height).floor() as usize;
         self.lanes = vec![0.; lanes.max(1)];
     }
@@ -192,7 +191,7 @@ impl DanmakuState {
     }
 
     fn font_size(&self, base: u8) -> f32 {
-        (f32::from(base.max(18)) * self.scale * self.settings.font_scale).clamp(14., 64.)
+        (f32::from(base.max(18)) * FONT_SIZE_FACTOR * self.settings.font_scale).clamp(14., 64.)
     }
 
     fn layout_active(&mut self, active: &mut Vec<ActiveDanmaku>, time: f64, width: f32) {
@@ -225,29 +224,20 @@ impl DanmakuState {
         lane_free_at(item, self.settings.scroll_seconds, width)
     }
 
-    pub(super) fn update(&mut self, time: f64, width: f32, height: f32, scale: f32) -> bool {
+    pub(super) fn update(&mut self, time: f64, width: f32, height: f32) -> bool {
         if width <= 0. || height <= 0. {
             return false;
         }
 
-        let scale = scale.clamp(0.7, 1.6);
         let resized = self.area.is_none_or(|last| last != (width, height));
-        let rescaled = (self.scale - scale).abs() > f32::EPSILON;
         self.area = Some((width, height));
 
         let mut active = std::mem::take(&mut self.active);
         let mut changed = std::mem::take(&mut self.dirty);
 
-        if resized || rescaled {
-            self.scale = scale;
+        if resized {
             for item in active.iter_mut() {
                 item.frozen = None;
-            }
-            if rescaled {
-                for item in active.iter_mut() {
-                    item.font_size = self.font_size(item.base_font_size);
-                    item.width = estimate_width(&item.text, item.font_size);
-                }
             }
             self.apply_metrics();
             self.layout_active(&mut active, time, width);
@@ -260,7 +250,7 @@ impl DanmakuState {
                 .items
                 .get(self.cursor)
                 .is_some_and(|item| item.time <= time);
-            if !resized && !rescaled && (time - last).abs() < TIME_EPSILON && !backlog {
+            if !resized && (time - last).abs() < TIME_EPSILON && !backlog {
                 self.active = active;
                 return changed;
             }
@@ -390,7 +380,6 @@ impl DanmakuState {
         active.push(ActiveDanmaku {
             id: item.id,
             text: item.text.clone(),
-            base_font_size: item.font_size,
             font_size,
             color: item.color,
             position: (x, y),
@@ -582,52 +571,32 @@ mod tests {
     fn seeking_requests_one_redraw() {
         let mut state = DanmakuState {
             area: Some((1280., 720.)),
-            scale: 1.,
             last_time: Some(3.),
             ..DanmakuState::default()
         };
         state.apply_metrics();
         state.seek(3.);
 
-        assert!(state.update(3., 1280., 720., 1.));
-        assert!(!state.update(3., 1280., 720., 1.));
+        assert!(state.update(3., 1280., 720.));
+        assert!(!state.update(3., 1280., 720.));
     }
 
     #[test]
-    fn active_danmaku_follow_the_video_scale() {
-        let mut state = DanmakuState {
-            area: Some((640., 360.)),
-            scale: 1.,
-            ..DanmakuState::default()
-        };
-        state.apply_metrics();
+    fn font_size_only_follows_the_danmaku_settings() {
+        let mut state = DanmakuState::default();
+        assert!((state.font_size(25) - 17.5).abs() < 0.01);
+        assert!((state.font_size(18) - 14.).abs() < 0.01);
+        assert!((state.font_size(4) - 14.).abs() < 0.01);
 
-        let item = Danmaku {
-            id: 1,
-            time: 1.0,
-            mode: DanmakuMode::Scroll,
-            font_size: 25,
-            color: 0x00ff_ffff,
-            text: "hello".into(),
-        };
-        let mut active = Vec::new();
-        assert!(state.spawn(&item, 1.0, 640., &mut active));
-        let size = active[0].font_size;
-        let width = active[0].width;
-        state.active = active;
-
-        assert!(state.update(1.0, 1280., 720., 1.5));
-
-        let item = &state.active[0];
-        assert!((item.font_size - size * 1.5).abs() < 0.01);
-        assert!((item.width - width * 1.5).abs() < 0.01);
+        state.settings.font_scale = 1.5;
+        assert!((state.font_size(25) - 26.25).abs() < 0.01);
+        assert!((state.font_size(64) - 64.).abs() < 0.01);
     }
 
     #[test]
     fn writes_ass_events_with_position_and_colour() {
         let mut state = DanmakuState {
             area: Some((1280., 720.)),
-            scale: 1.,
             ..DanmakuState::default()
         };
         state.apply_metrics();
@@ -652,7 +621,7 @@ mod tests {
         assert!(
             ass.contains(&format!(
                 "\\fs{:.1}",
-                25. * rigili_core::fonts::libass_em_scale()
+                25. * super::FONT_SIZE_FACTOR * rigili_core::fonts::libass_em_scale()
             )),
             "{ass}"
         );
@@ -676,7 +645,6 @@ mod tests {
     fn state_with_one_danmaku() -> DanmakuState {
         let mut state = DanmakuState {
             area: Some((640., 360.)),
-            scale: 1.,
             ..DanmakuState::default()
         };
         state.apply_metrics();
@@ -727,7 +695,7 @@ mod tests {
         assert!(state.pin_at(x + 2., y + 2., 0.0, false));
 
         for step in 1..=10 {
-            state.update(f64::from(step) * 0.5, 640., 360., 1.0);
+            state.update(f64::from(step) * 0.5, 640., 360.);
         }
         assert_eq!(state.active[0].position.0, x);
         assert!(state.pinned().is_some(), "a pinned danmaku must not expire");
@@ -797,7 +765,7 @@ mod tests {
         let (x, y) = state.active[0].position;
         assert!(state.pin_at(x + 2., y + 2., 0.0, false));
 
-        state.update(0.0, 1280., 720., 1.0);
+        state.update(0.0, 1280., 720.);
         assert!(state.pinned().is_none());
     }
 }

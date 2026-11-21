@@ -1,7 +1,7 @@
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use raw_window_handle::{HasDisplayHandle, RawDisplayHandle, RawWindowHandle};
-use rigili_player::{PlaybackPhase, VideoSize};
+use rigili_player::PlaybackPhase;
 
 use super::PlayerView;
 use crate::native::WaylandOutput;
@@ -180,19 +180,4 @@ pub(super) fn create_native_surface(window: &mut Window) -> Option<NativeSurface
         output,
         visible: false,
     })
-}
-
-pub(super) fn contain_rect(area: Bounds<Pixels>, source: VideoSize) -> Bounds<Pixels> {
-    let area_width = f32::from(area.size.width);
-    let area_height = f32::from(area.size.height);
-    let scale = (area_width / source.width as f32).min(area_height / source.height as f32);
-    let width = source.width as f32 * scale;
-    let height = source.height as f32 * scale;
-    Bounds::new(
-        point(
-            area.origin.x + px((area_width - width) / 2.0),
-            area.origin.y + px((area_height - height) / 2.0),
-        ),
-        size(px(width), px(height)),
-    )
 }

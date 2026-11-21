@@ -8,7 +8,6 @@ use image::RgbaImage;
 use rigili_core::cursor;
 use rigili_player::{BufferedRange, PlaybackPhase, PlayerStatus, VideoFrame};
 
-use super::native::contain_rect;
 use super::{IDLE_POLL_INTERVAL, PAUSED_POLL_INTERVAL, POLL_INTERVAL, PlayerView};
 
 impl PlayerView {
@@ -102,11 +101,8 @@ impl PlayerView {
         let time = self.playback_time();
         let width = f32::from(area.size.width);
         let height = f32::from(area.size.height);
-        let scale = self.status.video_size.map_or(1.0, |video| {
-            f32::from(contain_rect(area, video).size.width) / video.width as f32
-        });
         let started = Instant::now();
-        self.update_danmaku(time, width, height, scale, window.scale_factor());
+        self.update_danmaku(time, width, height, window.scale_factor());
         let elapsed = started.elapsed();
         if elapsed > Duration::from_millis(2) {
             rigili_monitor::monitor!(
