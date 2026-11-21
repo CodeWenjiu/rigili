@@ -1088,7 +1088,6 @@ impl Render for PlayerWindow {
         let tabs = TabBar::new("player-tabs")
             .selected_index(self.active)
             .max_width(px(200.))
-            .menu(true)
             .children(self.tabs.iter().enumerate().map(|(index, tab)| {
                 TabButton::new().label(tab.title.clone()).suffix(
                     Button::new(("player-tab-close", tab.id))
