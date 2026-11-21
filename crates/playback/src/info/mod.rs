@@ -10,7 +10,7 @@ rigili_macro::mod_prv!(
     triple
 );
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use gpui_kit::base::{TextSelection, TextSelectionHandle};
@@ -20,7 +20,7 @@ use gpui_kit::*;
 use rigili_bilibili::{ArchiveRelation, Comment, RecommendVideo, VideoInfo, VideoPage};
 use rigili_core::{format_count, format_datetime};
 
-use comments::{EmoteTarget, ReplyTarget, ReplyThread};
+use comments::CommentThread;
 use details::LikePress;
 use interaction::{CoinState, FlagState, ToggleState};
 
@@ -32,7 +32,6 @@ const RELATED_THUMB_WIDTH: Pixels = px(120.);
 const RELATED_THUMB_HEIGHT: Pixels = px(68.);
 const COMMENT_AVATAR: Pixels = px(28.);
 const NESTED_COMMENT_AVATAR: Pixels = px(20.);
-const NESTED_COMMENT_LIMIT: usize = 2;
 const COMMENT_MAX_LEN: usize = 1000;
 const COMMENT_LIST_OVERDRAW: Pixels = px(480.);
 
@@ -135,8 +134,9 @@ pub(super) struct InfoPanel {
     tab: InfoTab,
     comment_count: u64,
     comments: Vec<Comment>,
-    comment_rows: Vec<comments::CommentRow>,
     comments_list: ListState,
+    thread: Option<CommentThread>,
+    thread_list: ListState,
     comments_loading: bool,
     comments_loaded: bool,
     comments_more: bool,
@@ -151,15 +151,10 @@ pub(super) struct InfoPanel {
     comments_earlier_error: Option<String>,
     draft: Option<Entity<TextareaState>>,
     _draft_sub: Option<Subscription>,
-    comment_sending: bool,
-    comment_error: Option<String>,
-    reply_threads: HashMap<u64, ReplyThread>,
-    reply_target: Option<ReplyTarget>,
-    reply_draft: Option<Entity<TextareaState>>,
-    _reply_draft_sub: Option<Subscription>,
-    reply_sending: bool,
-    reply_error: Option<String>,
-    emote_target: Option<EmoteTarget>,
+    composer_sending: bool,
+    composer_error: Option<String>,
+    reply_target: Option<u64>,
+    emote_open: bool,
     emote_package: usize,
     watch_later: FlagState,
     refresh_busy: bool,
@@ -257,8 +252,9 @@ impl InfoPanel {
             tab: InfoTab::Info,
             comment_count: 0,
             comments: Vec::new(),
-            comment_rows: Vec::new(),
             comments_list: ListState::new(1, ListAlignment::Top, COMMENT_LIST_OVERDRAW),
+            thread: None,
+            thread_list: ListState::new(1, ListAlignment::Top, COMMENT_LIST_OVERDRAW),
             comments_loading: false,
             comments_loaded: false,
             comments_more: false,
@@ -273,15 +269,10 @@ impl InfoPanel {
             comments_earlier_error: None,
             draft: None,
             _draft_sub: None,
-            comment_sending: false,
-            comment_error: None,
-            reply_threads: HashMap::new(),
+            composer_sending: false,
+            composer_error: None,
             reply_target: None,
-            reply_draft: None,
-            _reply_draft_sub: None,
-            reply_sending: false,
-            reply_error: None,
-            emote_target: None,
+            emote_open: false,
             emote_package: 0,
             watch_later: FlagState::default(),
             refresh_busy: false,

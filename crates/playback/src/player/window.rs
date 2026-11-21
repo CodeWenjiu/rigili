@@ -19,9 +19,9 @@ use crate::request::{
     PlaybackRequest, PlaybackSource, Resolved, Streams, resolve, resolve_streams,
 };
 use crate::shortcuts::{
-    CloseTab, HistoryBack, HistoryForward, NextPage, NextTab, PreviousPage, PreviousTab, Reload,
-    SeekBack, SpeedDown, SpeedUp, SwitchToMain, ToggleComments, ToggleDanmaku, ToggleFullscreen,
-    ToggleInfo, ToggleMute, TogglePlayback,
+    CloseCommentThread, CloseTab, HistoryBack, HistoryForward, NextPage, NextTab, PreviousPage,
+    PreviousTab, Reload, SeekBack, SpeedDown, SpeedUp, SwitchToMain, ToggleComments, ToggleDanmaku,
+    ToggleFullscreen, ToggleInfo, ToggleMute, TogglePlayback,
 };
 use rigili_bilibili::{Chapter, Client, VideoPage};
 use rigili_core::client;
@@ -571,6 +571,18 @@ impl PlayerWindow {
                 .update(cx, |info, cx| info.show_tab(tab, cx));
         }
         cx.notify();
+    }
+
+    fn close_comment_thread(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let visible = self.show_info
+            && !self.tab().is_live
+            && (window.is_fullscreen() || window.viewport_size().width >= INFO_MIN_WINDOW);
+        if !visible {
+            return false;
+        }
+        let info = self.tab().info.clone();
+        info.read(cx).tab() == InfoTab::Comments
+            && info.update(cx, |info, cx| info.back_in_comments(window, cx))
     }
 
     fn start_active(&mut self, request: PlaybackRequest, cx: &mut Context<Self>) {
@@ -1202,8 +1214,14 @@ impl Render for PlayerWindow {
             .on_action(cx.listener(|this, _: &SeekBack, _, cx| {
                 this.player.update(cx, |player, cx| player.seek_by(-5., cx));
             }))
-            .on_action(cx.listener(|this, _: &HistoryBack, _, cx| {
+            .on_action(cx.listener(|this, _: &HistoryBack, window, cx| {
+                if this.close_comment_thread(window, cx) {
+                    return;
+                }
                 this.go_back(cx);
+            }))
+            .on_action(cx.listener(|this, _: &CloseCommentThread, window, cx| {
+                this.close_comment_thread(window, cx);
             }))
             .on_action(cx.listener(|this, _: &HistoryForward, _, cx| {
                 this.go_forward(cx);

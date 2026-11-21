@@ -43,6 +43,8 @@ actions!(
         NextTab,
         /// 上一个标签页
         PreviousTab,
+        /// 返回评论列表
+        CloseCommentThread,
     ]
 );
 
@@ -149,6 +151,11 @@ const COMMANDS: &[Command] = &[
         keys: "?",
         context: PLAYER,
         action: || Box::new(rigili_core::ShowShortcuts),
+    },
+    Command {
+        keys: "e",
+        context: PLAYER,
+        action: || Box::new(CloseCommentThread),
     },
 ];
 
