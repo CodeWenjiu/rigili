@@ -114,8 +114,6 @@ impl Render for ShortcutHelp {
             }))
             .w_full()
             .gap_1()
-            .max_h(px(560.))
-            .overflow_y_scroll()
             .children(self.rows.iter().map(|(keys, label)| {
                 h_flex()
                     .w_full()
