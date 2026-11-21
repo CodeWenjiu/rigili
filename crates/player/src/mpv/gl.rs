@@ -7,7 +7,10 @@ use std::{
     fs::File,
     os::fd::AsRawFd,
     ptr::{NonNull, null_mut},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use glow::HasContext;
@@ -31,13 +34,17 @@ use super::{
     render::{FrameInfo, RenderWake},
 };
 
+/// A DMA-BUF export's identity. It has to outlive the player that made it:
+/// the compositor's buffer cache does, and a number repeated by another
+/// player would bring back a buffer whose memory that player has freed.
+static DMABUF_GENERATION: AtomicU64 = AtomicU64::new(0);
+
 pub(crate) struct GlRender {
     egl: EglContext,
     render: NonNull<MpvRenderContext>,
     _render_fd: Option<File>,
     slots: [GlSlot; NATIVE_SLOTS],
     size: (u32, u32),
-    generation: u64,
 }
 
 struct GlSlot {
@@ -104,7 +111,6 @@ impl GlRender {
             _render_fd: render_fd,
             slots,
             size: (0, 0),
-            generation: 0,
         };
         unsafe {
             mpv_render_context_set_update_callback(
@@ -233,8 +239,8 @@ impl GlRender {
         if self.slots[slot].dmabuf.is_some() {
             return Ok(());
         }
-        self.generation = self.generation.wrapping_add(1);
-        let (image, dmabuf) = export_texture(&self.egl, self.slots[slot].texture, self.generation)?;
+        let generation = DMABUF_GENERATION.fetch_add(1, Ordering::Relaxed);
+        let (image, dmabuf) = export_texture(&self.egl, self.slots[slot].texture, generation)?;
         self.slots[slot].egl_image = Some(image);
         self.slots[slot].dmabuf = Some(dmabuf);
         Ok(())
