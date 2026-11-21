@@ -6,6 +6,7 @@ use std::{
 
 use futures::AsyncReadExt;
 use gpui_kit::component::button::*;
+use gpui_kit::component::dialog::DialogEntrance;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::*;
 use gpui_kit::http_client::{AsyncBody, HttpClient, http};
@@ -125,7 +126,10 @@ fn show(pictures: Vec<CommentPicture>, index: usize, window: &mut Window, cx: &m
     let viewer = cx.new(|cx| PictureViewer::new(pictures, index, cx));
     window.open_dialog(cx, move |dialog, window, cx| {
         let width = viewer.read(cx).stage(window.viewport_size()).0;
-        dialog.w(px(width + 32.)).child(viewer.clone())
+        dialog
+            .entrance(DialogEntrance::None)
+            .w(px(width + 32.))
+            .child(viewer.clone())
     });
 }
 
