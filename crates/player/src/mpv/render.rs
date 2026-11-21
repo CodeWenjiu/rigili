@@ -92,6 +92,13 @@ impl Renderer {
             )),
         }
     }
+
+    /// Frees the output textures of a player that is no longer drawn.
+    pub(crate) fn release_textures(&mut self) {
+        if let Self::Gl(render) = self {
+            render.release_textures();
+        }
+    }
 }
 
 pub(crate) struct RenderContext {

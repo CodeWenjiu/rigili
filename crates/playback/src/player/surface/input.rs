@@ -234,7 +234,6 @@ impl PlayerView {
     fn set_volume(&mut self, volume: f64, window: &mut Window, cx: &mut Context<Self>) {
         self.status.volume = volume;
         self.player.set_volume(volume);
-        crate::settings::update(cx, |settings| settings.volume = Some(volume));
         self.volume
             .update(cx, |slider, cx| slider.set_value(volume as f32, window, cx));
         cx.notify();

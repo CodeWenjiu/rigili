@@ -10,7 +10,7 @@ use gpui_kit::component::tab::{Tab as TabButton, TabBar};
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_player::{PlaybackPhase, Player};
+use rigili_player::{PlaybackPhase, Player, PlayerStatus};
 
 use super::history::History;
 use super::surface::{PlayerEvent, PlayerView};
@@ -72,6 +72,9 @@ struct Tab {
     _info_sub: Subscription,
     resume: Option<f64>,
     paused: bool,
+    volume: f64,
+    muted: bool,
+    background_playing: bool,
     pages: Vec<VideoPage>,
     chapters: Vec<Chapter>,
     streams: Option<CachedStreams>,
@@ -188,6 +191,9 @@ impl PlayerWindow {
             _info_sub: info_sub,
             resume: None,
             paused: false,
+            volume: crate::settings::DEFAULT_VOLUME,
+            muted: false,
+            background_playing: false,
             pages: Vec::new(),
             chapters: Vec::new(),
             streams: None,
@@ -282,9 +288,14 @@ impl PlayerWindow {
         }
         let previous = self.active;
         self.stash_session(cx);
-        let outgoing = self
-            .player
-            .update(cx, |view, cx| view.swap_player(Self::new_player(), cx));
+        let outgoing = self.player.update(cx, |view, cx| {
+            view.swap_player(
+                Self::new_player(),
+                crate::settings::DEFAULT_VOLUME,
+                false,
+                cx,
+            )
+        });
         self.keep_warm(previous, outgoing);
         let tab = self.make_tab(window, cx, request.clone());
         let index = (previous + 1).min(self.tabs.len());
@@ -328,22 +339,26 @@ impl PlayerWindow {
     }
 
     fn activate(&mut self, index: usize, previous: Option<usize>, cx: &mut Context<Self>) {
-        let warm = self.tabs[index].is_warm();
+        let background = self.tabs[index].background_playing;
+        let warm = background || self.tabs[index].is_warm();
+        let (volume, muted) = (self.tabs[index].volume, self.tabs[index].muted);
         let incoming = self.tabs[index]
             .player
             .take()
             .unwrap_or_else(Self::new_player);
-        let outgoing = self
-            .player
-            .update(cx, |view, cx| view.swap_player(incoming, cx));
+        let outgoing = self.player.update(cx, |view, cx| {
+            view.swap_player(incoming, volume, muted, cx)
+        });
         if let Some(previous) = previous {
             self.keep_warm(previous, outgoing);
         }
         self.active = index;
         self.tabs[index].last_used = Instant::now();
         self.tabs[index].warm_since = None;
-        if warm {
-            self.resume_warm(cx);
+        if background {
+            self.resume_warm(true, cx);
+        } else if warm {
+            self.resume_warm(false, cx);
         } else {
             self.restore_active(cx);
         }
@@ -361,8 +376,14 @@ impl PlayerWindow {
         tab.last_used = Instant::now();
     }
 
-    fn resume_warm(&mut self, cx: &mut Context<Self>) {
+    fn resume_warm(&mut self, background: bool, cx: &mut Context<Self>) {
         let status = self.player.read(cx).status();
+        if background {
+            let tab = self.tab_mut();
+            tab.background_playing = false;
+            tab.resume = Some(status.time_pos);
+            tab.paused = status.paused;
+        }
         if status.error.is_some()
             || matches!(status.phase, PlaybackPhase::Idle | PlaybackPhase::Ended)
         {
@@ -408,6 +429,10 @@ impl PlayerWindow {
             player.clear_danmaku_source(cx);
             player.clear_danmaku(cx);
             player.set_paused(paused, cx);
+            if background {
+                player.set_video_enabled(true);
+                player.set_rendering(true);
+            }
         });
         self.load_media_for(tab_id, generation, bvid, cid, cx);
     }
@@ -418,7 +443,9 @@ impl PlayerWindow {
                 .tabs
                 .iter()
                 .enumerate()
-                .filter(|(index, tab)| *index != self.active && tab.player.is_some())
+                .filter(|(index, tab)| {
+                    *index != self.active && tab.player.is_some() && !tab.background_playing
+                })
                 .min_by_key(|(_, tab)| tab.last_used)
                 .map(|(index, _)| index)
             else {
@@ -438,6 +465,16 @@ impl PlayerWindow {
         let status = self.player.read(cx).status().clone();
         let session = self.session;
         let active = self.active;
+        let background = session == Some(self.tabs[active].id)
+            && keeps_background_audio(self.tabs[active].is_live, &status);
+        rigili_monitor::monitor!(
+            "player",
+            "tab {}: stash (background={background}, phase={:?}, paused={}, session={})",
+            self.tabs[active].id,
+            status.phase,
+            status.paused,
+            session == Some(self.tabs[active].id)
+        );
         if session == Some(self.tabs[active].id) {
             let player = self.player.clone();
             let view = player.read(cx);
@@ -447,9 +484,12 @@ impl PlayerWindow {
         }
         let interrupted = {
             let tab = &mut self.tabs[active];
+            tab.background_playing = background;
             if session == Some(tab.id) {
                 tab.resume = stash_resume(status.phase, status.time_pos, tab.resume);
                 tab.paused = status.paused;
+                tab.volume = status.volume;
+                tab.muted = status.muted;
                 // A stream that is currently flowing was valid a moment ago, so
                 // the tab can reuse it when it comes back instead of resolving.
                 if !status.paused
@@ -474,7 +514,13 @@ impl PlayerWindow {
             let info = self.tabs[active].info.clone();
             info.update(cx, |info, cx| info.set_busy(false, cx));
         }
-        if !status.paused {
+        if background {
+            self.player.update(cx, |player, cx| {
+                player.set_video_enabled(false);
+                player.set_rendering(false);
+                player.clear_danmaku(cx);
+            });
+        } else if !status.paused {
             self.player.update(cx, |player, cx| player.toggle_pause(cx));
         }
         self.session = None;
@@ -1062,6 +1108,7 @@ impl Render for PlayerWindow {
         let background = cx.theme().background;
         let foreground = cx.theme().foreground;
         let muted = cx.theme().muted_foreground;
+        let primary = cx.theme().primary;
         let danger = cx.theme().danger;
         let fullscreen = window.is_fullscreen();
         let client_decorated = matches!(window.window_decorations(), Decorations::Client { .. });
@@ -1089,16 +1136,29 @@ impl Render for PlayerWindow {
             .selected_index(self.active)
             .max_width(px(200.))
             .children(self.tabs.iter().enumerate().map(|(index, tab)| {
+                let audio = tab.background_playing;
                 TabButton::new().label(tab.title.clone()).suffix(
-                    Button::new(("player-tab-close", tab.id))
-                        .ghost()
-                        .small()
-                        .icon(IconName::Close)
-                        .accessibility_label("关闭标签页")
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            cx.stop_propagation();
-                            this.close_tab(index, window, cx);
-                        })),
+                    h_flex()
+                        .items_center()
+                        .gap_1()
+                        .when(audio, |this| {
+                            this.child(
+                                Icon::new(IconName::AudioLines)
+                                    .size(px(14.))
+                                    .text_color(primary),
+                            )
+                        })
+                        .child(
+                            Button::new(("player-tab-close", tab.id))
+                                .ghost()
+                                .small()
+                                .icon(IconName::Close)
+                                .accessibility_label("关闭标签页")
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.close_tab(index, window, cx);
+                                })),
+                        ),
                 )
             }))
             .on_click(cx.listener(|this, index: &usize, _, cx| this.select_tab(*index, cx)));
@@ -1385,13 +1445,22 @@ pub fn open(
     })
 }
 
+fn keeps_background_audio(is_live: bool, status: &PlayerStatus) -> bool {
+    !is_live
+        && !status.paused
+        && matches!(
+            status.phase,
+            PlaybackPhase::Playing | PlaybackPhase::Buffering
+        )
+}
+
 #[cfg(test)]
 mod tests {
-    use rigili_player::PlaybackPhase;
+    use rigili_player::{PlaybackPhase, PlayerStatus};
 
     use super::{
-        InfoTab, PlaybackSource, apply_preferred_quality, panel_visibility, same_source,
-        stash_resume,
+        InfoTab, PlaybackSource, apply_preferred_quality, keeps_background_audio, panel_visibility,
+        same_source, stash_resume,
     };
     use crate::request::{Streams, VideoQuality};
 
@@ -1460,6 +1529,40 @@ mod tests {
             true,
             InfoTab::Comments,
             InfoTab::Comments
+        ));
+    }
+
+    #[test]
+    fn background_audio_only_follows_a_playing_vod() {
+        let status = |phase, paused| PlayerStatus {
+            phase,
+            paused,
+            ..PlayerStatus::default()
+        };
+
+        assert!(keeps_background_audio(
+            false,
+            &status(PlaybackPhase::Playing, false)
+        ));
+        assert!(keeps_background_audio(
+            false,
+            &status(PlaybackPhase::Buffering, false)
+        ));
+        assert!(!keeps_background_audio(
+            true,
+            &status(PlaybackPhase::Playing, false)
+        ));
+        assert!(!keeps_background_audio(
+            false,
+            &status(PlaybackPhase::Playing, true)
+        ));
+        assert!(!keeps_background_audio(
+            false,
+            &status(PlaybackPhase::Loading, false)
+        ));
+        assert!(!keeps_background_audio(
+            false,
+            &status(PlaybackPhase::Ended, false)
         ));
     }
 }

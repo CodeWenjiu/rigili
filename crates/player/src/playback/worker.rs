@@ -94,6 +94,7 @@ pub(super) fn run_worker(
 
     let mut state = State::default();
     let mut last_status = Instant::now();
+    let mut last_render_disabled = false;
 
     loop {
         loop {
@@ -105,6 +106,13 @@ pub(super) fn run_worker(
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => return,
+            }
+        }
+
+        if state.render_disabled != last_render_disabled {
+            last_render_disabled = state.render_disabled;
+            if state.render_disabled {
+                render.release_textures();
             }
         }
 
@@ -258,7 +266,10 @@ pub(super) fn run_worker(
             info.present,
             info.redraw,
         );
-        if (state.needs_redraw || update & MPV_RENDER_UPDATE_FRAME != 0) && ready {
+        if !state.render_disabled
+            && (state.needs_redraw || update & MPV_RENDER_UPDATE_FRAME != 0)
+            && ready
+        {
             let render_started = Instant::now();
             if native.enabled() {
                 if let Some(size) = state.output_size(&mpv, None, true) {
@@ -320,6 +331,7 @@ struct State {
     first_frame_at: Option<Instant>,
     first_frame_logged: bool,
     native_frame: bool,
+    render_disabled: bool,
 }
 
 impl State {
@@ -459,6 +471,19 @@ impl State {
                     });
                 } else {
                     mutate_status(status, |status| status.speed = speed);
+                }
+            }
+            Command::SetVideoEnabled(enabled) => {
+                let value = if enabled { "auto" } else { "no" };
+                if let Err(error) = mpv.command(&["set", "vid", value]) {
+                    rigili_monitor::monitor!("mpv", "cannot set vid={value}: {error}");
+                }
+            }
+            Command::SetRendering(enabled) => {
+                self.render_disabled = !enabled;
+                self.needs_redraw = true;
+                if !enabled {
+                    lock(frame_slot).take();
                 }
             }
             Command::SetViewport(size) => {

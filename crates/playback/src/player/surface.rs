@@ -15,6 +15,7 @@ use rigili_player::{OsdOverlay, PlaybackPhase, Player, PlayerStatus};
 use super::controls::VolumePopup;
 use super::danmaku;
 use crate::request::{Streams, VideoQuality};
+use crate::settings::DEFAULT_VOLUME;
 use native::{NativeSurface, create_native_surface};
 
 const PREVIEW_WIDTH: f32 = 200.;
@@ -88,6 +89,7 @@ pub(super) struct PlayerView {
     page_popover_open: bool,
     seeking: Option<f64>,
     volume_dragging: bool,
+    volume_dirty: bool,
     progress_max: f64,
     live: bool,
     controls_visible: bool,
@@ -130,16 +132,24 @@ impl PlayerView {
     pub(super) fn set_danmaku_overlay(&mut self, overlay: Option<OsdOverlay>) {
         self.player.set_osd(overlay);
     }
+
+    pub(super) fn set_video_enabled(&mut self, enabled: bool) {
+        self.player.set_video_enabled(enabled);
+    }
+
+    pub(super) fn set_rendering(&mut self, enabled: bool) {
+        self.player.set_rendering(enabled);
+    }
+
     pub(super) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let persisted = crate::settings::current(cx);
-        let initial_volume = persisted.volume.unwrap_or(100.);
         let progress = cx.new(|_| SliderState::new().min(0.0).max(1.0).step(0.1));
         let volume = cx.new(|_| {
             SliderState::new()
                 .min(0.0)
                 .max(100.0)
                 .step(1.0)
-                .default_value(initial_volume as f32)
+                .default_value(DEFAULT_VOLUME as f32)
         });
 
         let mut subscriptions = vec![cx.subscribe_in(
@@ -197,21 +207,9 @@ impl PlayerView {
             .find(|value| (value - persisted.speed).abs() < 1e-3)
             .unwrap_or(1.0);
         player.set_speed(speed);
-        if let Some(volume) = persisted.volume {
-            player.set_volume(volume);
-        }
-        if let Some(muted) = persisted.mute {
-            player.set_muted(muted);
-        }
         let status_source = player.status();
         let mut status = (*status_source).clone();
         status.speed = speed;
-        if let Some(volume) = persisted.volume {
-            status.volume = volume;
-        }
-        if let Some(muted) = persisted.mute {
-            status.muted = muted;
-        }
         let native = create_native_surface(window);
 
         Self {
@@ -238,6 +236,7 @@ impl PlayerView {
             page_popover_open: false,
             seeking: None,
             volume_dragging: false,
+            volume_dirty: false,
             progress_max: 0.0,
             live: false,
             controls_visible: false,
@@ -502,7 +501,13 @@ impl PlayerView {
 
     /// Moves the playback handle into another tab's player, returning the
     /// previous one so the caller can keep it warm for that tab.
-    pub(super) fn swap_player(&mut self, incoming: Player, cx: &mut Context<Self>) -> Player {
+    pub(super) fn swap_player(
+        &mut self,
+        incoming: Player,
+        volume: f64,
+        muted: bool,
+        cx: &mut Context<Self>,
+    ) -> Player {
         if self.native_requested {
             self.player.set_native_output(false);
         }
@@ -510,17 +515,14 @@ impl PlayerView {
         if let Some(hold) = self.speed_hold.take() {
             self.status.speed = hold.previous;
         }
-        let volume = self.status.volume;
-        let muted = self.status.muted;
-        let speed = self.status.speed;
         self.player.set_volume(volume);
         self.player.set_muted(muted);
-        self.player.set_speed(speed);
+        self.player.set_speed(self.status.speed);
         self.status_source = self.player.status();
         self.status = (*self.status_source).clone();
         self.status.volume = volume;
         self.status.muted = muted;
-        self.status.speed = speed;
+        self.volume_dirty = true;
         if let Some(frame) = self.frame.take() {
             self.retired_frames.push(frame);
         }
@@ -697,7 +699,6 @@ impl PlayerView {
         let muted = !self.status.muted;
         self.status.muted = muted;
         self.player.set_muted(muted);
-        crate::settings::update(cx, |settings| settings.mute = Some(muted));
         self.last_activity = Instant::now();
         cx.notify();
     }

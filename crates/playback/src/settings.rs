@@ -12,6 +12,7 @@ const FILE_NAME: &str = "playback.json";
 const TMP_FILE_NAME: &str = "playback.json.tmp";
 const DEFAULT_SCROLL_SECONDS: f64 = 8.0;
 const DEFAULT_AREA_RATIO: f32 = 0.72;
+pub(crate) const DEFAULT_VOLUME: f64 = 100.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -53,10 +54,6 @@ pub(crate) struct PlaybackSettings {
     pub(crate) danmaku: DanmakuSettings,
     pub(crate) speed: f64,
     pub(crate) preferred_quality: Option<u32>,
-    /// `None` until the user changes it, so a fresh profile keeps mpv's own default.
-    pub(crate) volume: Option<f64>,
-    /// `None` until the user toggles it; `Some(false)` is a deliberate unmute.
-    pub(crate) mute: Option<bool>,
     #[serde(skip)]
     dirty: bool,
 }
@@ -67,8 +64,6 @@ impl Default for PlaybackSettings {
             danmaku: DanmakuSettings::default(),
             speed: 1.0,
             preferred_quality: None,
-            volume: None,
-            mute: None,
             dirty: false,
         }
     }
@@ -122,10 +117,6 @@ impl PlaybackSettings {
         } else {
             self.speed = 1.0;
         }
-        self.volume = self
-            .volume
-            .filter(|volume| volume.is_finite())
-            .map(|volume| volume.clamp(0.0, 100.0));
     }
 
     fn load_from(dir: &Path) -> Self {
@@ -203,8 +194,6 @@ mod tests {
             },
             speed: 2.0,
             preferred_quality: Some(80),
-            volume: Some(42.0),
-            mute: Some(true),
             dirty: false,
         };
         settings.save_to(&dir).expect("save");
@@ -226,7 +215,6 @@ mod tests {
         assert_eq!(loaded.danmaku.opacity, 1.0);
         assert_eq!(loaded.danmaku.font_scale, 0.5);
         assert_eq!(loaded.speed, 4.0);
-        assert_eq!(loaded.volume, Some(100.0));
 
         let mut danmaku = DanmakuSettings {
             scroll_seconds: f64::NAN,
@@ -234,6 +222,16 @@ mod tests {
         };
         danmaku.sanitize();
         assert_eq!(danmaku.scroll_seconds, 8.0);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ignores_the_volume_and_mute_of_older_files() {
+        let dir = temp_dir("legacy-volume");
+        fs::write(dir.join(super::FILE_NAME), r#"{"volume":42.0,"mute":true}"#).expect("write");
+
+        let loaded = PlaybackSettings::load_from(&dir);
+        assert_eq!(loaded, PlaybackSettings::default());
         fs::remove_dir_all(&dir).ok();
     }
 

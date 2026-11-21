@@ -54,6 +54,8 @@ pub(super) enum Command {
     SetVolume(f64),
     SetMute(bool),
     SetSpeed(f64),
+    SetVideoEnabled(bool),
+    SetRendering(bool),
     SetViewport(VideoSize),
     SetOsd(Option<OsdOverlay>),
     Redraw,
@@ -157,6 +159,16 @@ impl Player {
 
     pub fn set_muted(&self, muted: bool) {
         self.send(Command::SetMute(muted));
+    }
+
+    /// Disables the video track so a background tab only decodes audio.
+    pub fn set_video_enabled(&self, enabled: bool) {
+        self.send(Command::SetVideoEnabled(enabled));
+    }
+
+    /// Stops rendering frames for a player that is heard but not seen.
+    pub fn set_rendering(&self, enabled: bool) {
+        self.send(Command::SetRendering(enabled));
     }
 
     pub fn set_speed(&self, speed: f64) {
@@ -428,5 +440,42 @@ mod tests {
             thread::sleep(Duration::from_millis(20));
         }
         panic!("timed out waiting for player state: {:?}", player.status());
+    }
+
+    #[test]
+    #[ignore = "requires RIGILI_TEST_VIDEO, RIGILI_TEST_AUDIO and a working libmpv"]
+    fn background_audio_keeps_playing_and_resumes_video() {
+        let video = std::env::var("RIGILI_TEST_VIDEO").expect("RIGILI_TEST_VIDEO");
+        let audio = std::env::var("RIGILI_TEST_AUDIO").expect("RIGILI_TEST_AUDIO");
+        let player = Player::new(None);
+        player.set_viewport(VideoSize::new(1280, 720));
+        player.load(&video, Some(&audio), None);
+        wait_until(&player, Duration::from_secs(10), |status| {
+            status.duration > 0.0 && status.time_pos > 0.0
+        });
+
+        player.set_video_enabled(false);
+        player.set_rendering(false);
+        let before = player.status().time_pos;
+        thread::sleep(Duration::from_millis(800));
+        let status = player.status();
+        assert!(status.error.is_none(), "{:?}", status.error);
+        assert!(
+            status.time_pos > before,
+            "audio did not advance: {before} -> {}",
+            status.time_pos
+        );
+
+        player.set_video_enabled(true);
+        player.set_rendering(true);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if let Some(frame) = player.take_frame() {
+                assert!(frame.width > 0 && frame.height > 0);
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!("no frame after resuming video");
     }
 }

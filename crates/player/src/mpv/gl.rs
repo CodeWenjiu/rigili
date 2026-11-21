@@ -227,6 +227,32 @@ impl GlRender {
         self.ensure_dmabuf(slot)
     }
 
+    /// Gives the output textures back to the driver, leaving tiny ones that
+    /// [`Self::resize`] replaces when a frame is drawn again.
+    pub(crate) fn release_textures(&mut self) {
+        self.clear_dmabufs();
+        for slot in &self.slots {
+            unsafe {
+                self.egl
+                    .gl
+                    .bind_texture(glow::TEXTURE_2D, Some(slot.texture));
+                self.egl.gl.tex_image_2d(
+                    glow::TEXTURE_2D,
+                    0,
+                    glow::RGBA8 as i32,
+                    1,
+                    1,
+                    0,
+                    glow::RGBA,
+                    glow::UNSIGNED_BYTE,
+                    glow::PixelUnpackData::Slice(None),
+                );
+                self.egl.gl.bind_texture(glow::TEXTURE_2D, None);
+            }
+        }
+        self.size = (0, 0);
+    }
+
     pub(crate) fn dmabuf(&mut self, slot: usize) -> Result<&Dmabuf, MpvError> {
         self.ensure_dmabuf(slot)?;
         Ok(self.slots[slot]

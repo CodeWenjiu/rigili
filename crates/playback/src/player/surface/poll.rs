@@ -50,7 +50,14 @@ impl PlayerView {
         }
 
         let status = self.player.status();
-        if !Arc::ptr_eq(&status, &self.status_source) {
+        let status_changed = !Arc::ptr_eq(&status, &self.status_source);
+        if self.volume_dirty {
+            self.volume_dirty = false;
+            let volume = self.status.volume;
+            self.volume
+                .update(cx, |state, cx| state.set_value(volume as f32, window, cx));
+        }
+        if status_changed {
             let next = (*status).clone();
             if next.duration > 0.0 && (next.duration - self.progress_max).abs() > 0.5 {
                 self.rebuild_progress(next.duration, next.time_pos, window, cx);
