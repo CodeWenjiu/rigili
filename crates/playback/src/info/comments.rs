@@ -311,7 +311,7 @@ impl InfoPanel {
                         let previous = this.comment_rows.len();
                         let rows = this.rebuild_comment_rows();
                         this.comments_list
-                            .splice(previous - 1..previous - 1, rows - (previous - 1));
+                            .splice(previous - 1..previous - 1, rows - previous);
                         if count > 0 {
                             this.comments_pages.push_back(count);
                             this.trim_front_pages();
@@ -1866,7 +1866,9 @@ mod tests {
     };
     use crate::info::{InfoPanel, InfoSelections};
     use gpui_kit::prelude::*;
-    use gpui_kit::{Bounds, TestAppContext, WindowBounds, WindowOptions, px, size};
+    use gpui_kit::{
+        Bounds, ListAlignment, ListState, TestAppContext, WindowBounds, WindowOptions, px, size,
+    };
     use rigili_bilibili::Comment;
     use std::collections::{HashMap, VecDeque};
 
@@ -1947,6 +1949,22 @@ mod tests {
         assert_eq!(thread_splice(4, (2, false), (2, true)), (7, 0, 1));
         // Repainting the control keeps the count, so it is remeasured.
         assert_eq!(thread_splice(4, (2, true), (2, true)), (7, 1, 1));
+    }
+
+    #[test]
+    fn appending_a_page_keeps_one_tail_row() {
+        let first = vec![plain(1), plain(2)];
+        let threads = HashMap::new();
+        let previous = build_comment_rows(&first, &threads).len();
+        let list = ListState::new(previous, ListAlignment::Top, px(100.));
+
+        let mut comments = first;
+        comments.extend([plain(3), plain(4)]);
+        let rows = build_comment_rows(&comments, &threads);
+        list.splice(previous - 1..previous - 1, rows.len() - previous);
+
+        assert_eq!(list.item_count(), rows.len());
+        assert_eq!(rows.last(), Some(&CommentRow::Tail));
     }
 
     #[test]
