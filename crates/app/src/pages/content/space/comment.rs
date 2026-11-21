@@ -12,7 +12,7 @@ use gpui_kit::*;
 use rigili_bilibili::api::comment::CommentSort;
 use rigili_bilibili::{Client, Comment, CommentPage, DynamicItem, avatar};
 use rigili_core::client;
-use rigili_core::{format_count, format_date, message_markdown};
+use rigili_core::{format_comment_time, format_count, message_markdown};
 
 use crate::shared::browse::paging::{Page, Paged, spawn_first, spawn_more};
 
@@ -228,11 +228,7 @@ impl CommentsView {
         let muted = cx.theme().muted_foreground;
         let member = &comment.member;
         let level = member.level_info.current_level;
-        let time = if comment.reply_control.time_desc.is_empty() {
-            format_date(comment.ctime)
-        } else {
-            comment.reply_control.time_desc.clone()
-        };
+        let time = format_comment_time(comment.ctime, &comment.reply_control.time_desc);
         let nested = comment.replies();
         let nested_views = nested
             .iter()

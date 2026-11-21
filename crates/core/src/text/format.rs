@@ -40,6 +40,23 @@ pub fn format_date(unix: i64) -> String {
     format!("{month}-{day}")
 }
 
+const COMMENT_RELATIVE_SPAN: i64 = 3 * 86_400;
+
+pub fn format_comment_time(ctime: i64, time_desc: &str) -> String {
+    format_comment_time_at(ctime, time_desc, unix_now())
+}
+
+fn format_comment_time_at(ctime: i64, time_desc: &str, now: i64) -> String {
+    if ctime <= 0 {
+        return time_desc.to_owned();
+    }
+    if now.saturating_sub(ctime) <= COMMENT_RELATIVE_SPAN && !time_desc.is_empty() {
+        time_desc.to_owned()
+    } else {
+        format_ymd(ctime)
+    }
+}
+
 pub fn format_ymd(unix: i64) -> String {
     let (year, month, day) = civil_from_days(beijing_day(unix));
     format!("{year}-{month:02}-{day:02}")
@@ -56,11 +73,14 @@ pub fn format_datetime(unix: i64) -> String {
 }
 
 pub fn format_message_time(unix: i64) -> String {
-    let now = SystemTime::now()
+    format_message_time_at(unix, unix_now())
+}
+
+fn unix_now() -> i64 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
-        .unwrap_or(0);
-    format_message_time_at(unix, now)
+        .unwrap_or(0)
 }
 
 fn format_message_time_at(unix: i64, now: i64) -> String {
@@ -126,8 +146,8 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        api_error_message, format_clock, format_count, format_date, format_datetime,
-        format_duration, format_message_time_at, format_ymd,
+        api_error_message, format_clock, format_comment_time_at, format_count, format_date,
+        format_datetime, format_duration, format_message_time_at, format_ymd,
     };
     use rigili_bilibili::ApiError;
 
@@ -195,6 +215,28 @@ mod tests {
             format_datetime(1_762_646_400 + 13 * 3600 + 16 * 60),
             "2025-11-09 21:16"
         );
+    }
+
+    #[test]
+    fn formats_comment_times() {
+        let now = 1_762_646_400;
+        assert_eq!(
+            format_comment_time_at(now - 600, "10分钟前发布", now),
+            "10分钟前发布"
+        );
+        assert_eq!(
+            format_comment_time_at(now - 3 * 86_400, "3天前发布", now),
+            "3天前发布"
+        );
+        assert_eq!(
+            format_comment_time_at(now - 4 * 86_400, "4天前发布", now),
+            "2025-11-05"
+        );
+        assert_eq!(
+            format_comment_time_at(now - 4 * 86_400, "", now),
+            "2025-11-05"
+        );
+        assert_eq!(format_comment_time_at(0, "", now), "");
     }
 
     #[test]

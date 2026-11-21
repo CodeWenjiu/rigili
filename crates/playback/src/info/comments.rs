@@ -19,7 +19,7 @@ use rigili_core::emotes;
 use rigili_core::runtime::spawn_api;
 use rigili_core::toast;
 use rigili_core::{
-    api_error_message, api_task_error_message, format_count, format_date, message_markdown,
+    api_error_message, api_task_error_message, format_comment_time, format_count, message_markdown,
 };
 
 use super::{
@@ -1537,11 +1537,7 @@ impl InfoPanel {
         let mid = member.mid;
         let uname: SharedString = member.uname.clone().into();
         let level = member.level_info.current_level;
-        let time = if comment.reply_control.time_desc.is_empty() {
-            format_date(comment.ctime)
-        } else {
-            comment.reply_control.time_desc.clone()
-        };
+        let time = format_comment_time(comment.ctime, &comment.reply_control.time_desc);
         let avatar_size = if depth == 0 {
             COMMENT_AVATAR
         } else {
