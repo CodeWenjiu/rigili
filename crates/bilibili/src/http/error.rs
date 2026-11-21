@@ -13,6 +13,8 @@ pub enum ApiError {
     Status(StatusCode),
     #[error("响应格式异常：{0}")]
     InvalidResponse(String),
+    #[error("实时连接失败：{0}")]
+    Live(String),
 }
 
 impl ApiError {

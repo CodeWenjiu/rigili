@@ -779,6 +779,7 @@ impl PlayerWindow {
                         this.player.update(cx, |player, cx| {
                             player.load_streams_at(Streams::single(url), true, None, paused, cx)
                         });
+                        this.load_live_danmaku_for(tab_id, generation, room_id, cx);
                     }
                     Err(error) => this.fail_active(tab_id, generation, error, cx),
                 }

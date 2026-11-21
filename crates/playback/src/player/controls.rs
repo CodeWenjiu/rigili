@@ -375,28 +375,25 @@ impl Transport<'_> {
                                 .child("直播中"),
                         )
                     })
-                    .when(self.live, |this| this.child(div().flex_1()))
-                    .when(!self.live, |this| {
-                        this.child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .px_4()
-                                .flex()
-                                .justify_center()
-                                .child(
-                                    DanmakuBar {
-                                        settings: self.danmaku,
-                                        input: self.danmaku_input,
-                                        sending: self.danmaku_sending,
-                                        settings_open: self.danmaku_settings_open,
-                                        can_send: self.can_send_danmaku,
-                                        player: weak.clone(),
-                                    }
-                                    .render(cx),
-                                ),
-                        )
-                    })
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .px_4()
+                            .flex()
+                            .justify_center()
+                            .child(
+                                DanmakuBar {
+                                    settings: self.danmaku,
+                                    input: self.danmaku_input,
+                                    sending: self.danmaku_sending,
+                                    settings_open: self.danmaku_settings_open,
+                                    can_send: self.can_send_danmaku,
+                                    player: weak.clone(),
+                                }
+                                .render(cx),
+                            ),
+                    )
                     .child(
                         HoverCard::new("player-volume")
                             .anchor(Anchor::TopCenter)
@@ -514,46 +511,48 @@ impl Transport<'_> {
                                 ),
                         )
                     })
-                    .child(
-                        Popover::new("speed-popover")
-                            .anchor(Anchor::BottomRight)
-                            .offset(px(6.))
-                            .open(self.speed_open)
-                            .trigger(
-                                Button::new("speed")
-                                    .ghost()
-                                    .small()
-                                    .label(speed_label(speed))
-                                    .tooltip("切换倍速"),
-                            )
-                            .on_open_change({
-                                let weak = weak.clone();
-                                move |open, _, cx| {
-                                    let _ = weak.update(cx, |this, cx| {
-                                        this.set_speed_popover_open(*open, cx);
-                                    });
-                                }
-                            })
-                            .child(v_flex().min_w(px(96.)).gap_1().children(
-                                self.speeds.iter().enumerate().rev().map(|(index, value)| {
-                                    let selected = (speed - *value).abs() < 1e-3;
-                                    ListItem::new(("speed", index as u32))
-                                        .check_icon(IconName::Check)
-                                        .confirmed(selected)
-                                        .selected(selected)
-                                        .on_click({
-                                            let weak = weak.clone();
-                                            let value = *value;
-                                            move |_, _, cx| {
-                                                let _ = weak.update(cx, |this, cx| {
-                                                    this.select_speed(value, cx);
-                                                });
-                                            }
-                                        })
-                                        .child(speed_label(*value))
-                                }),
-                            )),
-                    )
+                    .when(!self.live, |this| {
+                        this.child(
+                            Popover::new("speed-popover")
+                                .anchor(Anchor::BottomRight)
+                                .offset(px(6.))
+                                .open(self.speed_open)
+                                .trigger(
+                                    Button::new("speed")
+                                        .ghost()
+                                        .small()
+                                        .label(speed_label(speed))
+                                        .tooltip("切换倍速"),
+                                )
+                                .on_open_change({
+                                    let weak = weak.clone();
+                                    move |open, _, cx| {
+                                        let _ = weak.update(cx, |this, cx| {
+                                            this.set_speed_popover_open(*open, cx);
+                                        });
+                                    }
+                                })
+                                .child(v_flex().min_w(px(96.)).gap_1().children(
+                                    self.speeds.iter().enumerate().rev().map(|(index, value)| {
+                                        let selected = (speed - *value).abs() < 1e-3;
+                                        ListItem::new(("speed", index as u32))
+                                            .check_icon(IconName::Check)
+                                            .confirmed(selected)
+                                            .selected(selected)
+                                            .on_click({
+                                                let weak = weak.clone();
+                                                let value = *value;
+                                                move |_, _, cx| {
+                                                    let _ = weak.update(cx, |this, cx| {
+                                                        this.select_speed(value, cx);
+                                                    });
+                                                }
+                                            })
+                                            .child(speed_label(*value))
+                                    }),
+                                )),
+                        )
+                    })
                     .child(
                         Button::new("fullscreen")
                             .ghost()

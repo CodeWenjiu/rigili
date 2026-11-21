@@ -4,7 +4,7 @@ use gpui_kit::prelude::*;
 use rigili_bilibili::Danmaku;
 use rigili_core::runtime::{spawn_api, spawn_api_task};
 
-use crate::player::danmaku::feed;
+use crate::player::danmaku::{feed, live};
 
 use super::PlayerWindow;
 
@@ -40,7 +40,47 @@ impl PlayerWindow {
 
         self.tab_mut().danmaku_task = None;
 
-        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<Arc<Vec<Danmaku>>>();
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        self.forward_danmaku(tab_id, generation, receiver, cx);
+        self.tab_mut().danmaku_task = Some(spawn_api_task(
+            cx,
+            feed::Feed::new(client, aid, cid, duration, demand).run(sender),
+            move |_, _, _| {},
+        ));
+    }
+
+    pub(super) fn load_live_danmaku_for(
+        &mut self,
+        tab_id: u64,
+        generation: u64,
+        room_id: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.is_active(tab_id, generation) {
+            return;
+        }
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        let demand = self.player.read(cx).danmaku_demand();
+        self.tab_mut().danmaku_task = None;
+
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        self.forward_danmaku(tab_id, generation, receiver, cx);
+        self.tab_mut().danmaku_task = Some(spawn_api_task(
+            cx,
+            live::Feed::new(client, room_id, demand).run(sender),
+            move |_, _, _| {},
+        ));
+    }
+
+    fn forward_danmaku(
+        &mut self,
+        tab_id: u64,
+        generation: u64,
+        mut receiver: tokio::sync::mpsc::UnboundedReceiver<Arc<Vec<Danmaku>>>,
+        cx: &mut Context<Self>,
+    ) {
         cx.spawn(async move |weak, cx| {
             while let Some(items) = receiver.recv().await {
                 let Ok(keep) = weak.update(cx, |this, cx| {
@@ -59,12 +99,6 @@ impl PlayerWindow {
             }
         })
         .detach();
-
-        self.tab_mut().danmaku_task = Some(spawn_api_task(
-            cx,
-            feed::Feed::new(client, aid, cid, duration, demand).run(sender),
-            move |_, _, _| {},
-        ));
     }
 
     pub(super) fn load_previews_for(

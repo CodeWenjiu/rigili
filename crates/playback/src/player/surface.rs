@@ -595,6 +595,9 @@ impl PlayerView {
     }
 
     pub(super) fn select_speed(&mut self, speed: f64, cx: &mut Context<Self>) {
+        if self.live {
+            return;
+        }
         self.speed_popover_open = false;
         if (self.status.speed - speed).abs() < 1e-3 {
             cx.notify();
@@ -632,6 +635,9 @@ impl PlayerView {
     }
 
     fn apply_speed(&mut self, speed: f64, remember: bool, cx: &mut Context<Self>) {
+        if self.live {
+            return;
+        }
         self.anchor_clock();
         self.status.speed = speed;
         self.player.set_speed(speed);
@@ -658,6 +664,9 @@ impl PlayerView {
     }
 
     pub(super) fn adjust_speed(&mut self, faster: bool, cx: &mut Context<Self>) {
+        if self.live {
+            return;
+        }
         let current = self.status.speed;
         let index = SPEEDS
             .iter()

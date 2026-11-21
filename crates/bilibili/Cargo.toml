@@ -13,8 +13,12 @@ thiserror.workspace = true
 hex = "0.4"
 md-5 = "0.10"
 percent-encoding = "2"
+brotli = "9"
+flate2 = "1"
+futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["brotli", "cookies", "gzip", "rustls-tls"] }
-tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

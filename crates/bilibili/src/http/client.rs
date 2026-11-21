@@ -17,7 +17,7 @@ use super::error::ApiError;
 use super::session::{self, Session, SessionError};
 use super::wbi::WbiSigner;
 
-const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+pub(crate) const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const API_REFERER: &str = "https://www.bilibili.com/";
 const FINGERPRINT_URL: &str = "https://api.bilibili.com/x/frontend/finger/spi";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);

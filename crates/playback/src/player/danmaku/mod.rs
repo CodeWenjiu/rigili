@@ -1,5 +1,5 @@
 rigili_macro::mod_prv!(state);
-rigili_macro::mod_pub!(super, bar, feed);
+rigili_macro::mod_pub!(super, bar, feed, live);
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

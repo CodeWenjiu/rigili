@@ -1,5 +1,15 @@
 use serde::Deserialize;
 
+use crate::DanmakuMode;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiveDanmaku {
+    pub text: String,
+    pub mode: DanmakuMode,
+    pub font_size: u8,
+    pub color: u32,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct LiveRoom {
     #[serde(default)]

@@ -38,6 +38,7 @@ impl DanmakuBar<'_> {
             .max_w(px(480.))
             .items_center()
             .gap_3()
+            .when(!self.can_send, |bar| bar.justify_center())
             .child(
                 Button::new("danmaku-toggle")
                     .ghost()
@@ -95,38 +96,40 @@ impl DanmakuBar<'_> {
                     })
                     .when_some(settings_panel, |popover, panel| popover.child(panel)),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .key_context(rigili_core::TEXT_INPUT_CONTEXT)
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(
-                        Input::new(self.input)
-                            .small()
-                            .cleanable(true)
-                            .disabled(!self.can_send)
-                            .suffix(
-                                Button::new("danmaku-send")
-                                    .primary()
-                                    .xsmall()
-                                    .disabled(self.sending || empty || !self.can_send)
-                                    .label(if self.sending {
-                                        "发送中…"
-                                    } else {
-                                        "发送"
-                                    })
-                                    .on_click({
-                                        let weak = self.player.clone();
-                                        move |_, window, cx| {
-                                            let _ = weak.update(cx, |this, cx| {
-                                                this.submit_danmaku(window, cx)
-                                            });
-                                        }
-                                    }),
-                            ),
-                    ),
-            )
+            .when(self.can_send, |bar| {
+                bar.child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .key_context(rigili_core::TEXT_INPUT_CONTEXT)
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(
+                            Input::new(self.input)
+                                .small()
+                                .cleanable(true)
+                                .disabled(!self.can_send)
+                                .suffix(
+                                    Button::new("danmaku-send")
+                                        .primary()
+                                        .xsmall()
+                                        .disabled(self.sending || empty || !self.can_send)
+                                        .label(if self.sending {
+                                            "发送中…"
+                                        } else {
+                                            "发送"
+                                        })
+                                        .on_click({
+                                            let weak = self.player.clone();
+                                            move |_, window, cx| {
+                                                let _ = weak.update(cx, |this, cx| {
+                                                    this.submit_danmaku(window, cx)
+                                                });
+                                            }
+                                        }),
+                                ),
+                        ),
+                )
+            })
     }
 }
 
