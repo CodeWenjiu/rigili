@@ -17,13 +17,13 @@ use crate::shared::browse::filter;
 use crate::shared::browse::grid::VideoCard;
 use crate::shared::browse::paging::Paged;
 use crate::shared::ui::scroll;
-use crate::shared::ui::tabs::TabStrip;
+use crate::shared::ui::tabs::{TabNav, TabStrip};
 
 #[derive(Clone, Copy)]
 pub(crate) struct CloseSpace;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum SpaceTab {
+pub(crate) enum SpaceTab {
     Dynamics,
     #[default]
     Videos,
@@ -212,14 +212,7 @@ impl SpaceView {
                 TabStrip::new("space-tab")
                     .gap(px(16.))
                     .padding_x(px(8.))
-                    .render(
-                        cx,
-                        &SpaceTab::ALL,
-                        self.tab,
-                        SpaceTab::label,
-                        |_| None,
-                        |this, tab, cx| this.show_tab(tab, cx),
-                    ),
+                    .render_nav(self, cx, SpaceTab::label, |_| None),
             )
             .child(div().flex_1())
             .child(self.search.field())
@@ -270,6 +263,20 @@ impl CollectionsState {
         self.loaded = false;
         self.error = None;
         self.generation
+    }
+}
+
+impl TabNav for SpaceView {
+    type Tab = SpaceTab;
+
+    const TABS: &'static [SpaceTab] = &SpaceTab::ALL;
+
+    fn active_tab(&self) -> SpaceTab {
+        self.tab
+    }
+
+    fn select_tab(&mut self, tab: SpaceTab, cx: &mut Context<Self>) {
+        self.show_tab(tab, cx);
     }
 }
 

@@ -19,7 +19,6 @@ pub(super) struct SearchBox {
     input: Entity<InputState>,
     _input_sub: Subscription,
     open: bool,
-    suppress_focus_open: bool,
     suppress_change: bool,
     history_expanded: bool,
     hot: Vec<HotWord>,
@@ -33,14 +32,13 @@ pub(super) struct SearchBox {
 impl SearchBox {
     pub(super) fn new(window: &mut Window, cx: &mut Context<MainView>) -> Self {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索视频、番剧、用户"));
-        let input_sub = cx.subscribe_in(&input, window, |this, _, event, _, cx| {
-            this.handle_search_input(event, cx);
+        let input_sub = cx.subscribe_in(&input, window, |this, _, event, window, cx| {
+            this.handle_search_input(event, window, cx);
         });
         Self {
             input,
             _input_sub: input_sub,
             open: false,
-            suppress_focus_open: false,
             suppress_change: false,
             history_expanded: false,
             hot: Vec::new(),
@@ -77,28 +75,21 @@ impl SearchBox {
         self.open = false;
         self.active_suggestion = None;
     }
-
-    pub(super) fn suppress_next_focus_open(&mut self) {
-        self.suppress_focus_open = true;
-    }
 }
 
 impl MainView {
-    pub(super) fn handle_search_input(&mut self, event: &InputEvent, cx: &mut Context<Self>) {
+    pub(super) fn handle_search_input(
+        &mut self,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match event {
-            InputEvent::PressEnter { .. } => self.submit_search(cx),
-            InputEvent::Focus => self.search_focused(cx),
+            InputEvent::PressEnter { .. } => self.submit_search(window, cx),
+            InputEvent::Focus => self.open_search_box(cx),
             InputEvent::Blur => {}
             InputEvent::Change => self.search_changed(cx),
         }
-    }
-
-    fn search_focused(&mut self, cx: &mut Context<Self>) {
-        if self.search_box.suppress_focus_open {
-            self.search_box.suppress_focus_open = false;
-            return;
-        }
-        self.open_search_box(cx);
     }
 
     pub(super) fn open_search_box(&mut self, cx: &mut Context<Self>) {
@@ -248,8 +239,7 @@ impl MainView {
         self.search_box.set_value(keyword, window, cx);
         self.search_box.suppress_change = false;
         self.search_box.open = false;
-        self.submit_search(cx);
-        self.focus_search(window, cx);
+        self.submit_search(window, cx);
         cx.notify();
     }
 }

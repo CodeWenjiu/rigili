@@ -8,7 +8,7 @@ pub(crate) const MAIN: &str = "Main";
 actions!(
     shell,
     [
-        /// 刷新当前页
+        /// 刷新
         ReloadPage,
         /// 搜索
         FocusSearch,
@@ -16,6 +16,22 @@ actions!(
         FocusPlayer,
         /// 返回上一级
         Back,
+        /// 首页
+        ShowHome,
+        /// 我的
+        ShowMine,
+        /// 个人空间
+        ToggleMySpace,
+        /// 消息
+        ToggleMessages,
+        /// 上一个标签
+        PreviousContentTab,
+        /// 下一个标签
+        NextContentTab,
+        /// 上一个子标签
+        PreviousSubTab,
+        /// 下一个子标签
+        NextSubTab,
     ]
 );
 
@@ -30,6 +46,49 @@ const COMMANDS: &[Command] = &[
         keys: "/",
         context: MAIN,
         action: || Box::new(FocusSearch),
+    },
+    Command {
+        keys: "1",
+        context: MAIN,
+        action: || Box::new(ShowHome),
+    },
+    Command {
+        keys: "2",
+        context: MAIN,
+        action: || Box::new(ShowMine),
+    },
+    Command {
+        // Shift+1/2 arrive as the symbols themselves: the platform folds the
+        // shift into the keysym and drops the modifier.
+        keys: "!",
+        context: MAIN,
+        action: || Box::new(ToggleMySpace),
+    },
+    Command {
+        keys: "@",
+        context: MAIN,
+        action: || Box::new(ToggleMessages),
+    },
+    Command {
+        keys: "[",
+        context: MAIN,
+        action: || Box::new(PreviousContentTab),
+    },
+    Command {
+        keys: "]",
+        context: MAIN,
+        action: || Box::new(NextContentTab),
+    },
+    Command {
+        // Shift+[ / Shift+] arrive as the symbols themselves.
+        keys: "{",
+        context: MAIN,
+        action: || Box::new(PreviousSubTab),
+    },
+    Command {
+        keys: "}",
+        context: MAIN,
+        action: || Box::new(NextSubTab),
     },
     Command {
         keys: "e",
@@ -133,7 +192,12 @@ mod tests {
             .iter()
             .map(|command| command.keys)
             .collect::<BTreeSet<_>>();
-        assert_eq!(keys, BTreeSet::from(["r", "s", "e", "?", "/"]));
+        assert_eq!(
+            keys,
+            BTreeSet::from([
+                "1", "2", "r", "s", "e", "!", "@", "[", "]", "{", "}", "?", "/"
+            ])
+        );
     }
 
     #[test]
@@ -149,6 +213,35 @@ mod tests {
         };
 
         assert!(binding.match_keystrokes(&[typed]).is_some());
+    }
+
+    #[gpui_kit::test]
+    fn shifted_symbols_match_what_the_platform_reports(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(gpui_kit::init);
+        let shifted = COMMANDS
+            .iter()
+            .filter(|command| matches!(command.keys, "!" | "@" | "{" | "}"))
+            .collect::<Vec<_>>();
+        assert_eq!(shifted.len(), 4);
+
+        for command in shifted {
+            let typed = Keystroke {
+                key: command.keys.to_owned(),
+                key_char: Some(command.keys.to_owned()),
+                modifiers: Modifiers::none(),
+            };
+            let binding = cx
+                .update(|cx| {
+                    KeyBinding::load(command.keys, (command.action)(), None, false, None, cx)
+                })
+                .expect("static keystroke");
+            assert_eq!(
+                binding.match_keystrokes(&[typed]),
+                Some(false),
+                "{} does not match the keystroke the platform reports",
+                command.keys
+            );
+        }
     }
 
     #[gpui_kit::test]

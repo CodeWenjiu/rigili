@@ -9,6 +9,7 @@ use super::{
     sort_folders::SortFoldersDialog,
 };
 use crate::shared::browse::paging::Paged;
+use crate::shared::ui::tabs::SubTabNav;
 
 impl MineView {
     fn current_folder(&self) -> Option<&FavFolder> {
@@ -128,7 +129,7 @@ impl MineView {
                             .px_2()
                             .accessibility_label(label.clone())
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.show_favorite_view(view, cx);
+                                this.select_sub_tab(view, cx);
                             }))
                             .child(
                                 div()
@@ -293,5 +294,19 @@ impl MineView {
             })
             .child(content)
             .into_any_element()
+    }
+}
+
+impl SubTabNav for MineView {
+    type SubTab = FavoriteView;
+
+    const SUB_TABS: &'static [FavoriteView] = &FavoriteView::ALL;
+
+    fn active_sub_tab(&self) -> Option<FavoriteView> {
+        (self.tab == MineTab::Favorites).then_some(self.favorites_view)
+    }
+
+    fn select_sub_tab(&mut self, view: FavoriteView, cx: &mut Context<Self>) {
+        self.show_favorite_view(view, cx);
     }
 }

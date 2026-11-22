@@ -50,14 +50,7 @@ impl MessagesView {
             .gap(px(20.))
             .padding_x(px(8.))
             .underline_width(px(32.))
-            .render(
-                cx,
-                &MessageTab::ALL,
-                self.tab,
-                MessageTab::label,
-                |_| None,
-                |this, tab, cx| this.show_tab(tab, cx),
-            )
+            .render_nav(self, cx, MessageTab::label, |_| None)
     }
 
     fn render_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {

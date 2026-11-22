@@ -5,13 +5,23 @@ use gpui_kit::*;
 use rigili_bilibili::SpaceVideos;
 use rigili_bilibili::api::space::SpaceVideoOrder;
 
-use super::{SpaceView, VideoMeta};
+use super::{SpaceTab, SpaceView, VideoMeta};
 use crate::shared::browse::grid::{
     CardFrame, CardGrid, CardStyle, VideoCards, card_text_height, video_card_row,
 };
 use crate::shared::browse::list::{LIST_FOOTER_HEIGHT, Rows, paged_footer, virtual_rows_tracked};
 use crate::shared::browse::paging::{Page, spawn_first, spawn_more};
 use crate::shared::ui::state_view::{Layout, centered_spinner, empty_state, error_state};
+use crate::shared::ui::tabs::SubTabNav;
+
+const ORDERS: [SpaceVideoOrder; 2] = [SpaceVideoOrder::Latest, SpaceVideoOrder::Plays];
+
+fn order_label(order: SpaceVideoOrder) -> &'static str {
+    match order {
+        SpaceVideoOrder::Latest => "最新发布",
+        SpaceVideoOrder::Plays => "最多播放",
+    }
+}
 
 impl SpaceView {
     pub(super) fn load_space_videos(&mut self, cx: &mut Context<Self>) {
@@ -92,13 +102,10 @@ impl SpaceView {
             .gap_2()
             .child(
                 h_flex().items_center().gap_2().children(
-                    [
-                        (SpaceVideoOrder::Latest, "最新发布", 0usize),
-                        (SpaceVideoOrder::Plays, "最多播放", 1usize),
-                    ]
-                    .map(|(order, label, index)| {
+                    ORDERS.into_iter().enumerate().map(|(index, order)| {
                         let active = self.space_order == order;
                         let group = SharedString::from(format!("space-order-{index}"));
+                        let label = order_label(order);
                         v_flex()
                             .group(group.clone())
                             .items_center()
@@ -111,7 +118,7 @@ impl SpaceView {
                                     .px_2()
                                     .accessibility_label(label)
                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.set_space_order(order, cx);
+                                        this.select_sub_tab(order, cx);
                                     }))
                                     .child(
                                         div()
@@ -229,6 +236,20 @@ impl SpaceView {
         paged_footer(&self.space_videos, "space-videos-more", cx, |this, cx| {
             this.retry_more_space_videos(cx)
         })
+    }
+}
+
+impl SubTabNav for SpaceView {
+    type SubTab = SpaceVideoOrder;
+
+    const SUB_TABS: &'static [SpaceVideoOrder] = &ORDERS;
+
+    fn active_sub_tab(&self) -> Option<SpaceVideoOrder> {
+        (self.tab == SpaceTab::Videos).then_some(self.space_order)
+    }
+
+    fn select_sub_tab(&mut self, order: SpaceVideoOrder, cx: &mut Context<Self>) {
+        self.set_space_order(order, cx);
     }
 }
 

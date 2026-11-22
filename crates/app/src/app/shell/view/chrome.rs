@@ -9,21 +9,41 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use rigili_core::OpenSpace;
-
 use super::{MainView, Page, SIDEBAR_WIDTH, TOP_BAR_HEIGHT};
 use crate::pages::account::login;
-use crate::pages::content::home::HomeTab;
-use crate::shared::media::preview;
-use crate::shared::ui::tabs::TabStrip;
+use crate::pages::content::home::{HomeTab, HomeView};
+use crate::shared::ui::tabs::{TabNav, TabStrip};
 
 type NavHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NavState {
+    Idle,
+    Active,
+    Return,
+}
+
+fn home_state(page: Page, space_open: bool) -> NavState {
+    match page {
+        Page::Home if !space_open => NavState::Active,
+        Page::Home | Page::Search => NavState::Return,
+        Page::Mine => NavState::Idle,
+    }
+}
+
+fn mine_state(page: Page, space_open: bool) -> NavState {
+    match page {
+        Page::Mine if space_open => NavState::Return,
+        Page::Mine => NavState::Active,
+        Page::Home | Page::Search => NavState::Idle,
+    }
+}
 
 #[derive(Clone)]
 struct NavItem {
     label: SharedString,
     icon: IconName,
-    active: bool,
+    state: NavState,
     on_click: NavHandler,
 }
 
@@ -32,13 +52,13 @@ impl NavItem {
         Self {
             label: label.into(),
             icon,
-            active: false,
+            state: NavState::Idle,
             on_click: Rc::new(|_: &ClickEvent, _: &mut Window, _: &mut App| {}),
         }
     }
 
-    fn active(mut self, active: bool) -> Self {
-        self.active = active;
+    fn state(mut self, state: NavState) -> Self {
+        self.state = state;
         self
     }
 
@@ -48,30 +68,49 @@ impl NavItem {
     }
 
     fn render(self, id: impl Into<ElementId>, cx: &mut App) -> impl IntoElement {
-        let active = self.active;
+        let state = self.state;
         let icon = self.icon;
         let label = self.label;
         let on_click = self.on_click;
+        let active = state == NavState::Active;
+        let returning = state == NavState::Return;
         let color = if active {
             cx.theme().sidebar_accent_foreground
         } else {
             cx.theme().sidebar_foreground
         };
+        let dot = cx.theme().sidebar_accent_foreground;
 
         Button::new(id)
             .ghost()
             .w_full()
             .h(px(60.))
             .px_0()
+            .py_0()
             .accessibility_label(label.clone())
+            .when(returning, |this| this.tooltip("返回上一级"))
             .on_click(move |event, window, cx| on_click(event, window, cx))
             .child(
                 v_flex()
+                    .size_full()
                     .items_center()
+                    .justify_center()
                     .gap_1()
                     .text_color(color)
                     .child(Icon::new(icon).with_size(px(22.)))
-                    .child(div().whitespace_nowrap().text_sm().child(label)),
+                    .child(
+                        div()
+                            .whitespace_nowrap()
+                            .text_sm()
+                            .when(active, |this| this.font_medium())
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .size(px(4.))
+                            .rounded_full()
+                            .when(returning, |this| this.bg(dot)),
+                    ),
             )
     }
 }
@@ -88,24 +127,13 @@ fn messages_panel_width(window: &Window) -> Pixels {
 impl MainView {
     fn account(&self, cx: &mut Context<Self>) -> AnyElement {
         if let Some(user) = rigili_core::login::user(cx) {
-            let mid = user.mid;
-            let name = user.uname.clone();
             return Button::new("account-space")
                 .ghost()
                 .p_1()
                 .rounded_full()
-                .accessibility_label("我的空间")
-                .tooltip("我的空间")
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.open_space(
-                        OpenSpace {
-                            mid,
-                            name: name.clone(),
-                        },
-                        window,
-                        cx,
-                    );
-                }))
+                .accessibility_label("个人空间")
+                .tooltip("个人空间")
+                .on_click(cx.listener(|this, _, window, cx| this.toggle_my_space(window, cx)))
                 .child(Avatar::new().src(user.face).name(user.uname).size(px(32.)))
                 .into_any_element();
         }
@@ -161,6 +189,7 @@ impl MainView {
     pub(super) fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let border = cx.theme().border;
         let weak = cx.entity().downgrade();
+        let space_open = !self.spaces.is_empty();
 
         v_flex()
             .w(SIDEBAR_WIDTH)
@@ -178,39 +207,22 @@ impl MainView {
                     .gap_y_3()
                     .child(
                         NavItem::new("首页", IconName::House)
-                            .active(matches!(self.page, Page::Home | Page::Search))
+                            .state(home_state(self.page, space_open))
                             .on_click({
                                 let weak = weak.clone();
                                 move |_, _, cx| {
-                                    let _ = weak.update(cx, |this, cx| {
-                                        preview::stop_all(cx);
-                                        this.messages_open = false;
-                                        if this.page != Page::Home || !this.spaces.is_empty() {
-                                            this.page = Page::Home;
-                                            this.spaces.clear();
-                                            cx.notify();
-                                        }
-                                    });
+                                    let _ = weak.update(cx, |this, cx| this.show_home(cx));
                                 }
                             })
                             .render("nav-home", cx),
                     )
                     .child(
                         NavItem::new("我的", IconName::CircleUser)
-                            .active(self.page == Page::Mine)
+                            .state(mine_state(self.page, space_open))
                             .on_click({
                                 let weak = weak.clone();
                                 move |_, _, cx| {
-                                    let _ = weak.update(cx, |this, cx| {
-                                        preview::stop_all(cx);
-                                        this.messages_open = false;
-                                        if this.page == Page::Mine && this.spaces.is_empty() {
-                                            return;
-                                        }
-                                        this.page = Page::Mine;
-                                        this.spaces.clear();
-                                        cx.notify();
-                                    });
+                                    let _ = weak.update(cx, |this, cx| this.show_mine(cx));
                                 }
                             })
                             .render("nav-mine", cx),
@@ -226,14 +238,15 @@ impl MainView {
                     .child(self.account(cx))
                     .child(
                         NavItem::new("消息", IconName::Mail)
-                            .active(self.messages_open)
+                            .state(if self.messages_open {
+                                NavState::Active
+                            } else {
+                                NavState::Idle
+                            })
                             .on_click({
                                 let weak = weak.clone();
                                 move |_, _, cx| {
-                                    let _ = weak.update(cx, |this, cx| {
-                                        this.messages_open = !this.messages_open;
-                                        cx.notify();
-                                    });
+                                    let _ = weak.update(cx, |this, cx| this.toggle_messages(cx));
                                 }
                             })
                             .render("nav-messages", cx),
@@ -251,7 +264,7 @@ impl MainView {
             .items_end(false)
             .render(
                 cx,
-                &HomeTab::ALL,
+                HomeView::TABS,
                 selected,
                 HomeTab::label,
                 |_| None,
@@ -259,7 +272,7 @@ impl MainView {
                     this.messages_open = false;
                     this.page = Page::Home;
                     this.spaces.clear();
-                    this.home.update(cx, |home, cx| home.show_tab(tab, cx));
+                    this.home.update(cx, |home, cx| home.select_tab(tab, cx));
                     cx.notify();
                 },
             )
@@ -270,7 +283,7 @@ impl MainView {
         let border = cx.theme().border;
         let search_width = search_width(window);
         let foreground = cx.theme().foreground;
-        let home_tab = self.home.read(cx).current_tab();
+        let home_tab = self.home.read(cx).active_tab();
 
         h_flex()
             .h(TOP_BAR_HEIGHT)
@@ -336,8 +349,7 @@ impl MainView {
                                         .accessibility_label("搜索")
                                         .tooltip("搜索")
                                         .on_click(cx.listener(|this, _, window, cx| {
-                                            this.submit_search(cx);
-                                            this.focus_search(window, cx);
+                                            this.submit_search(window, cx);
                                         })),
                                 ),
                         )
@@ -385,5 +397,30 @@ impl MainView {
                     .on_click(|_, window, _| window.remove_window()),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NavState, Page, home_state, mine_state};
+
+    #[test]
+    fn home_is_active_only_at_its_root() {
+        assert_eq!(home_state(Page::Home, false), NavState::Active);
+        assert_eq!(home_state(Page::Search, false), NavState::Return);
+        assert_eq!(home_state(Page::Mine, false), NavState::Idle);
+        assert_eq!(home_state(Page::Home, true), NavState::Return);
+        assert_eq!(home_state(Page::Search, true), NavState::Return);
+        assert_eq!(home_state(Page::Mine, true), NavState::Idle);
+    }
+
+    #[test]
+    fn mine_returns_only_from_its_own_spaces() {
+        assert_eq!(mine_state(Page::Mine, false), NavState::Active);
+        assert_eq!(mine_state(Page::Mine, true), NavState::Return);
+        assert_eq!(mine_state(Page::Home, false), NavState::Idle);
+        assert_eq!(mine_state(Page::Home, true), NavState::Idle);
+        assert_eq!(mine_state(Page::Search, false), NavState::Idle);
+        assert_eq!(mine_state(Page::Search, true), NavState::Idle);
     }
 }

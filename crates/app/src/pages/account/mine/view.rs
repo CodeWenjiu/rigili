@@ -24,7 +24,7 @@ use crate::shared::browse::filter;
 use crate::shared::browse::grid::{CardFrame, VideoCard};
 use crate::shared::browse::list::ListScroll;
 use crate::shared::browse::paging::Paged;
-use crate::shared::ui::tabs::TabStrip;
+use crate::shared::ui::tabs::{TabNav, TabStrip};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -88,7 +88,7 @@ pub(crate) struct ListMeta {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum FavoriteView {
+pub(crate) enum FavoriteView {
     #[default]
     Folder,
     Folders,
@@ -280,7 +280,7 @@ impl MineView {
         }
     }
 
-    pub(crate) fn show_tab(&mut self, tab: MineTab, cx: &mut Context<Self>) {
+    fn show_tab(&mut self, tab: MineTab, cx: &mut Context<Self>) {
         if self.tab == tab {
             return;
         }
@@ -332,18 +332,25 @@ impl MineView {
                 TabStrip::new("mine-tab")
                     .gap(px(16.))
                     .padding_x(px(8.))
-                    .render(
-                        cx,
-                        &MineTab::ALL,
-                        self.tab,
-                        MineTab::label,
-                        |_| None,
-                        |this, tab, cx| this.show_tab(tab, cx),
-                    ),
+                    .render_nav(self, cx, MineTab::label, |_| None),
             )
             .child(div().flex_1())
             .child(self.search.field())
             .into_any_element()
+    }
+}
+
+impl TabNav for MineView {
+    type Tab = MineTab;
+
+    const TABS: &'static [MineTab] = &MineTab::ALL;
+
+    fn active_tab(&self) -> MineTab {
+        self.tab
+    }
+
+    fn select_tab(&mut self, tab: MineTab, cx: &mut Context<Self>) {
+        self.show_tab(tab, cx);
     }
 }
 

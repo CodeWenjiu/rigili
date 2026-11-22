@@ -9,11 +9,12 @@ use rigili_core::login as login_state;
 use rigili_core::{OpenSpace, Refresh, api_error_message};
 
 use crate::shared::browse::paging::{Page, Paged, spawn_first, spawn_more};
+use crate::shared::ui::tabs::TabNav;
 
 use rows::{feed_page, session_rows};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum MessageTab {
+pub(crate) enum MessageTab {
     #[default]
     Chat,
     Reply,
@@ -233,6 +234,20 @@ impl MessagesView {
         if rows > 0 && last_visible + 1 >= rows {
             self.load_more(tab, cx);
         }
+    }
+}
+
+impl TabNav for MessagesView {
+    type Tab = MessageTab;
+
+    const TABS: &'static [MessageTab] = &MessageTab::ALL;
+
+    fn active_tab(&self) -> MessageTab {
+        self.tab
+    }
+
+    fn select_tab(&mut self, tab: MessageTab, cx: &mut Context<Self>) {
+        self.show_tab(tab, cx);
     }
 }
 

@@ -11,6 +11,7 @@ use gpui_kit::*;
 use rigili_bilibili::{Client, LiveRoom, PgcItem};
 
 use crate::shared::browse::grid::{LiveCard, PgcCard, VideoCard};
+use crate::shared::ui::tabs::TabNav;
 use rigili_core::client;
 use rigili_core::{OpenLive, OpenSpace, OpenVideo, Refresh, api_error_message};
 
@@ -195,11 +196,7 @@ impl HomeView {
         &mut self.tabs[tab.index()]
     }
 
-    pub(crate) fn current_tab(&self) -> HomeTab {
-        self.tab
-    }
-
-    pub(crate) fn show_tab(&mut self, tab: HomeTab, cx: &mut Context<Self>) {
+    fn show_tab(&mut self, tab: HomeTab, cx: &mut Context<Self>) {
         if self.tab == tab {
             return;
         }
@@ -220,6 +217,20 @@ impl HomeView {
     pub(crate) fn reload_current(&mut self, cx: &mut Context<Self>) {
         let tab = self.tab;
         self.load_tab(tab, cx);
+    }
+}
+
+impl TabNav for HomeView {
+    type Tab = HomeTab;
+
+    const TABS: &'static [HomeTab] = &HomeTab::ALL;
+
+    fn active_tab(&self) -> HomeTab {
+        self.tab
+    }
+
+    fn select_tab(&mut self, tab: HomeTab, cx: &mut Context<Self>) {
+        self.show_tab(tab, cx);
     }
 }
 

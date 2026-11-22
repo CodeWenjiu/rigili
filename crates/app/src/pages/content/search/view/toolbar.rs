@@ -14,17 +14,15 @@ impl SearchView {
         TabStrip::new("search-tab")
             .gap(px(16.))
             .padding_x(px(8.))
-            .render(
+            .render_nav(
+                self,
                 cx,
-                &SearchTab::ALL,
-                self.tab,
                 SearchTab::label,
                 |tab| {
                     self.count(tab)
                         .filter(|count| *count > 0)
                         .map(tab_count_label)
                 },
-                |this, tab, cx| this.show_tab(tab, cx),
             )
     }
 

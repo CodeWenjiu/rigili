@@ -64,6 +64,8 @@ fn label(part: &str) -> String {
         "pagedown" => "PageDown".into(),
         "{" => "Shift+[".into(),
         "}" => "Shift+]".into(),
+        "!" => "Shift+1".into(),
+        "@" => "Shift+2".into(),
         other => other.to_uppercase(),
     }
 }
@@ -168,6 +170,8 @@ mod tests {
         assert_eq!(display_keys("ctrl-1"), "Ctrl+1");
         assert_eq!(display_keys("ctrl-shift-tab"), "Ctrl+Shift+Tab");
         assert_eq!(display_keys("shift-["), "Shift+[");
+        assert_eq!(display_keys("!"), "Shift+1");
+        assert_eq!(display_keys("@"), "Shift+2");
         assert_eq!(display_keys("shift-left"), "Shift+←");
         assert_eq!(display_keys("space"), "Space");
     }

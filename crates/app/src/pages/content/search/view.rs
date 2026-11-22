@@ -23,6 +23,7 @@ use rigili_core::{
 
 use crate::pages::account::login;
 use crate::shared::browse::paging::Paged;
+use crate::shared::ui::tabs::TabNav;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum SearchTab {
@@ -268,7 +269,7 @@ impl SearchView {
         self.load_tab(tab, cx);
     }
 
-    pub(crate) fn show_tab(&mut self, tab: SearchTab, cx: &mut Context<Self>) {
+    fn show_tab(&mut self, tab: SearchTab, cx: &mut Context<Self>) {
         if self.tab == tab {
             return;
         }
@@ -411,6 +412,20 @@ impl SearchView {
                 }
             },
         );
+    }
+}
+
+impl TabNav for SearchView {
+    type Tab = SearchTab;
+
+    const TABS: &'static [SearchTab] = &SearchTab::ALL;
+
+    fn active_tab(&self) -> SearchTab {
+        self.tab
+    }
+
+    fn select_tab(&mut self, tab: SearchTab, cx: &mut Context<Self>) {
+        self.show_tab(tab, cx);
     }
 }
 

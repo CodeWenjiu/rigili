@@ -10,7 +10,10 @@ use rigili_core::{OpenLive, OpenSpace, OpenVideo, Refresh};
 
 use super::playback::Playback;
 use crate::app::preferences;
-use crate::app::shortcuts::{Back, FocusPlayer, FocusSearch, MAIN, ReloadPage, open_help};
+use crate::app::shortcuts::{
+    Back, FocusPlayer, FocusSearch, MAIN, NextContentTab, NextSubTab, PreviousContentTab, PreviousSubTab,
+    ReloadPage, ShowHome, ShowMine, ToggleMessages, ToggleMySpace, open_help,
+};
 use crate::pages::account::login;
 use crate::pages::account::message::MessagesView;
 use crate::pages::account::mine::MineView;
@@ -18,6 +21,7 @@ use crate::pages::content::home::HomeView;
 use crate::pages::content::search::SearchView;
 use crate::pages::content::space::{CloseSpace, SpaceView};
 use crate::shared::media::preview;
+use crate::shared::ui::tabs::{SubTabNav, TabNav};
 use rigili_core::ShowShortcuts;
 use rigili_core::image_cache;
 use rigili_playback::PlaybackRequest;
@@ -50,6 +54,10 @@ enum Page {
 struct SpaceRoute {
     mid: u64,
     name: String,
+}
+
+fn my_space_is_on_top(spaces: &[SpaceRoute], mid: u64) -> bool {
+    spaces.last().is_some_and(|route| route.mid == mid)
 }
 
 const SIDEBAR_WIDTH: Pixels = px(55.);
@@ -184,11 +192,12 @@ impl MainView {
         .detach();
     }
 
-    fn submit_search(&mut self, cx: &mut Context<Self>) {
+    fn submit_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         preview::stop_all(cx);
         self.messages_open = false;
         let keyword = self.search_box.value(cx).trim().to_owned();
-        self.search_box.close();
+        self.dismiss_search_box(window, cx);
+        self.focus.focus(window, cx);
         self.spaces.clear();
         if keyword.is_empty() {
             self.page = Page::Home;
@@ -229,6 +238,24 @@ impl MainView {
         cx.notify();
     }
 
+    pub(super) fn toggle_my_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(user) = rigili_core::login::user(cx) else {
+            return;
+        };
+        if my_space_is_on_top(&self.spaces, user.mid) {
+            self.close_space(window, cx);
+            return;
+        }
+        self.open_space(
+            OpenSpace {
+                mid: user.mid,
+                name: user.uname,
+            },
+            window,
+            cx,
+        );
+    }
+
     fn close_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         preview::stop_all(cx);
         if self.spaces.pop().is_none() {
@@ -242,19 +269,80 @@ impl MainView {
         cx.notify();
     }
 
-    fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.search_box.focus_handle(cx).is_focused(window) {
-            return;
-        }
-
-        self.search_box.suppress_next_focus_open();
-        self.search_box.focus(window, cx);
-    }
-
     fn focus_search_shortcut(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        preview::stop_all(cx);
+        self.messages_open = false;
         self.open_search_box(cx);
         self.search_box.focus(window, cx);
         cx.notify();
+    }
+
+    fn show_home(&mut self, cx: &mut Context<Self>) {
+        preview::stop_all(cx);
+        let messages = self.messages_open;
+        self.messages_open = false;
+        if messages || self.page != Page::Home || !self.spaces.is_empty() {
+            self.page = Page::Home;
+            self.spaces.clear();
+            cx.notify();
+        }
+    }
+
+    fn show_mine(&mut self, cx: &mut Context<Self>) {
+        preview::stop_all(cx);
+        let messages = self.messages_open;
+        self.messages_open = false;
+        if !messages && self.page == Page::Mine && self.spaces.is_empty() {
+            return;
+        }
+        self.page = Page::Mine;
+        self.spaces.clear();
+        cx.notify();
+    }
+
+    fn toggle_messages(&mut self, cx: &mut Context<Self>) {
+        if !self.messages_open {
+            preview::stop_all(cx);
+        }
+        self.messages_open = !self.messages_open;
+        cx.notify();
+    }
+
+    fn step_content_tab(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let changed = if self.messages_open {
+            self.messages
+                .update(cx, |messages, cx| messages.step_tab(delta, cx))
+        } else if !self.spaces.is_empty() {
+            self.space.update(cx, |space, cx| space.step_tab(delta, cx))
+        } else {
+            match self.page {
+                Page::Home => self.home.update(cx, |home, cx| home.step_tab(delta, cx)),
+                Page::Search => self
+                    .search
+                    .update(cx, |search, cx| search.step_tab(delta, cx)),
+                Page::Mine => self.mine.update(cx, |mine, cx| mine.step_tab(delta, cx)),
+            }
+        };
+        if changed {
+            preview::stop_all(cx);
+        }
+    }
+
+    fn step_sub_tab(&mut self, delta: isize, cx: &mut Context<Self>) {
+        if self.messages_open {
+            return;
+        }
+        let changed = if !self.spaces.is_empty() {
+            self.space
+                .update(cx, |space, cx| space.step_sub_tab(delta, cx))
+        } else if self.page == Page::Mine {
+            self.mine.update(cx, |mine, cx| mine.step_sub_tab(delta, cx))
+        } else {
+            false
+        };
+        if changed {
+            preview::stop_all(cx);
+        }
     }
 
     fn focus_player(&mut self, cx: &mut Context<Self>) {
@@ -268,9 +356,14 @@ impl MainView {
             self.dismiss_search_box(window, cx);
         } else if self.messages_open {
             self.messages_open = false;
+            self.focus.focus(window, cx);
             cx.notify();
         } else if !self.spaces.is_empty() {
             self.close_space(window, cx);
+            self.focus.focus(window, cx);
+        } else if matches!(self.page, Page::Search | Page::Mine) {
+            self.show_home(cx);
+            self.focus.focus(window, cx);
         }
     }
 
@@ -285,7 +378,18 @@ impl MainView {
         }
     }
 
+    fn refresh_target_can_refresh(&self, cx: &App) -> bool {
+        if self.messages_open {
+            return self.messages.read(cx).can_refresh();
+        }
+        self.page_can_refresh(cx)
+    }
+
     fn refresh_page(&mut self, cx: &mut Context<Self>) {
+        if self.messages_open {
+            self.messages.update(cx, |messages, cx| messages.refresh(cx));
+            return;
+        }
         if !self.spaces.is_empty() {
             self.space.update(cx, |space, cx| space.refresh(cx));
             return;
@@ -342,7 +446,7 @@ impl Render for MainView {
             .key_context(MAIN)
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &ReloadPage, _, cx| {
-                if this.page_can_refresh(cx) {
+                if this.refresh_target_can_refresh(cx) {
                     this.refresh_page(cx);
                 }
             }))
@@ -351,6 +455,34 @@ impl Render for MainView {
             }))
             .on_action(cx.listener(|this, _: &FocusPlayer, _, cx| {
                 this.focus_player(cx);
+            }))
+            .on_action(cx.listener(|this, _: &ShowHome, window, cx| {
+                this.show_home(cx);
+                this.focus.focus(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ShowMine, window, cx| {
+                this.show_mine(cx);
+                this.focus.focus(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ToggleMySpace, window, cx| {
+                this.toggle_my_space(window, cx);
+                this.focus.focus(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ToggleMessages, window, cx| {
+                this.toggle_messages(cx);
+                this.focus.focus(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &PreviousContentTab, _, cx| {
+                this.step_content_tab(-1, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NextContentTab, _, cx| {
+                this.step_content_tab(1, cx);
+            }))
+            .on_action(cx.listener(|this, _: &PreviousSubTab, _, cx| {
+                this.step_sub_tab(-1, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NextSubTab, _, cx| {
+                this.step_sub_tab(1, cx);
             }))
             .on_action(cx.listener(|this, _: &Back, window, cx| {
                 this.back(window, cx);
@@ -416,5 +548,25 @@ impl Render for MainView {
             .when(self.messages_open, |this| {
                 this.child(self.render_messages_panel(window, cx))
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SpaceRoute, my_space_is_on_top};
+
+    fn route(mid: u64) -> SpaceRoute {
+        SpaceRoute {
+            mid,
+            name: String::new(),
+        }
+    }
+
+    #[test]
+    fn toggles_only_when_my_space_is_on_top() {
+        assert!(!my_space_is_on_top(&[], 1));
+        assert!(my_space_is_on_top(&[route(1)], 1));
+        assert!(!my_space_is_on_top(&[route(1), route(2)], 1));
+        assert!(my_space_is_on_top(&[route(2), route(1)], 1));
     }
 }

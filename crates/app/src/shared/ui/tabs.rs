@@ -3,6 +3,50 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
+pub(crate) fn stepped<T: Copy + PartialEq>(tabs: &[T], current: T, delta: isize) -> Option<T> {
+    let index = tabs.iter().position(|tab| *tab == current)?;
+    tabs.get(index.checked_add_signed(delta)?).copied()
+}
+
+/// The primary tab strip of a view. Implementing this wires `[` / `]`.
+pub(crate) trait TabNav: Sized + 'static {
+    type Tab: Copy + PartialEq + 'static;
+
+    const TABS: &'static [Self::Tab];
+
+    fn active_tab(&self) -> Self::Tab;
+    fn select_tab(&mut self, tab: Self::Tab, cx: &mut Context<Self>);
+
+    fn step_tab(&mut self, delta: isize, cx: &mut Context<Self>) -> bool {
+        let Some(tab) = stepped(Self::TABS, self.active_tab(), delta) else {
+            return false;
+        };
+        self.select_tab(tab, cx);
+        true
+    }
+}
+
+/// The secondary tab strip of a view. Implementing this wires `{` / `}`.
+pub(crate) trait SubTabNav: Sized + 'static {
+    type SubTab: Copy + PartialEq + 'static;
+
+    const SUB_TABS: &'static [Self::SubTab];
+
+    fn active_sub_tab(&self) -> Option<Self::SubTab>;
+    fn select_sub_tab(&mut self, tab: Self::SubTab, cx: &mut Context<Self>);
+
+    fn step_sub_tab(&mut self, delta: isize, cx: &mut Context<Self>) -> bool {
+        let Some(current) = self.active_sub_tab() else {
+            return false;
+        };
+        let Some(tab) = stepped(Self::SUB_TABS, current, delta) else {
+            return false;
+        };
+        self.select_sub_tab(tab, cx);
+        true
+    }
+}
+
 #[derive(Clone, Copy)]
 enum TabTextSize {
     Small,
@@ -145,5 +189,42 @@ impl TabStrip {
                     ))
             }))
             .into_any_element()
+    }
+
+    pub(crate) fn render_nav<V>(
+        self,
+        view: &V,
+        cx: &Context<V>,
+        label: impl Fn(V::Tab) -> &'static str,
+        badge: impl Fn(V::Tab) -> Option<String>,
+    ) -> AnyElement
+    where
+        V: TabNav,
+    {
+        self.render(
+            cx,
+            V::TABS,
+            view.active_tab(),
+            label,
+            badge,
+            |this, tab, cx| this.select_tab(tab, cx),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stepped;
+
+    #[test]
+    fn steps_through_tabs_and_stops_at_the_edges() {
+        let tabs = [0, 1, 2];
+
+        assert_eq!(stepped(&tabs, 0, 1), Some(1));
+        assert_eq!(stepped(&tabs, 1, 1), Some(2));
+        assert_eq!(stepped(&tabs, 2, 1), None);
+        assert_eq!(stepped(&tabs, 2, -1), Some(1));
+        assert_eq!(stepped(&tabs, 0, -1), None);
+        assert_eq!(stepped(&tabs, 9, 1), None);
     }
 }
