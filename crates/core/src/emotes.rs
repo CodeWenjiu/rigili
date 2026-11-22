@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 const FILE_NAME: &str = "emotes.json";
 const TMP_FILE_NAME: &str = "emotes.json.tmp";
 const MAX_AGE: u64 = 24 * 60 * 60;
+const CACHE_VERSION: u32 = 2;
 
 /// The signed-in user's reply emote packages.
 ///
@@ -32,6 +33,8 @@ impl Global for Emotes {}
 
 #[derive(Deserialize, Serialize)]
 struct Cache {
+    #[serde(default)]
+    version: u32,
     fetched_at: u64,
     packages: Vec<EmotePackage>,
 }
@@ -84,11 +87,10 @@ pub fn succeed(cx: &mut App, panel: EmotePanel) {
         .unwrap_or_default()
         .into_iter()
         .filter(|package| {
-            package.emote.as_ref().is_some_and(|emotes| {
-                emotes
-                    .iter()
-                    .any(|emote| !emote.text.is_empty() && !emote.url.is_empty())
-            })
+            package
+                .emote
+                .as_ref()
+                .is_some_and(|emotes| emotes.iter().any(|emote| !emote.text.is_empty()))
         })
         .collect();
     let emotes = state(cx);
@@ -121,7 +123,7 @@ fn fresh(fetched_at: u64) -> bool {
 }
 
 fn restore(dir: &Path) -> (Vec<EmotePackage>, bool) {
-    let cache = read(&dir.join(FILE_NAME));
+    let cache = read(&dir.join(FILE_NAME)).filter(|cache| cache.version == CACHE_VERSION);
     let loaded = cache.as_ref().is_some_and(|cache| fresh(cache.fetched_at));
     let packages = cache.map(|cache| cache.packages).unwrap_or_default();
     (packages, loaded)
@@ -141,6 +143,7 @@ fn read(path: &Path) -> Option<Cache> {
 fn write(dir: &Path, packages: &[EmotePackage]) -> io::Result<()> {
     fs::create_dir_all(dir)?;
     let bytes = serde_json::to_vec(&Cache {
+        version: CACHE_VERSION,
         fetched_at: now(),
         packages: packages.to_vec(),
     })
@@ -155,7 +158,8 @@ mod tests {
     use std::{fs, path::PathBuf};
 
     use super::{
-        Cache, FILE_NAME, fail, fresh, loading, packages, read, restore, start, succeed, write,
+        CACHE_VERSION, Cache, FILE_NAME, fail, fresh, loading, packages, read, restore, start,
+        succeed, write,
     };
     use gpui_kit::TestAppContext;
     use rigili_bilibili::{EmoteItem, EmotePackage, EmotePanel};
@@ -179,7 +183,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn fetches_once_and_drops_unusable_packages(cx: &mut TestAppContext) {
+    fn fetches_once_and_drops_empty_packages(cx: &mut TestAppContext) {
         cx.update(|cx| {
             assert!(start(cx));
             assert!(loading(cx));
@@ -191,6 +195,7 @@ mod tests {
                     packages: Some(vec![
                         package("[doge]", "//i0.hdslb.com/bfs/emote/doge.png"),
                         package("[gone]", ""),
+                        package("", "//i0.hdslb.com/bfs/emote/blank.png"),
                         EmotePackage {
                             text: "empty".into(),
                             url: String::new(),
@@ -201,8 +206,9 @@ mod tests {
             );
 
             assert!(!loading(cx));
-            assert_eq!(packages(cx).len(), 1);
+            assert_eq!(packages(cx).len(), 2);
             assert_eq!(packages(cx)[0].text, "[doge]");
+            assert_eq!(packages(cx)[1].text, "[gone]");
             assert!(!start(cx), "a loaded list must not be fetched again");
         });
     }
@@ -242,6 +248,7 @@ mod tests {
         assert_eq!(restore(&dir), (packages.clone(), true));
 
         let stale = Cache {
+            version: CACHE_VERSION,
             fetched_at: 0,
             packages,
         };
@@ -251,6 +258,18 @@ mod tests {
         )
         .expect("write stale cache");
         assert_eq!(restore(&dir), (stale.packages, false));
+
+        let old = Cache {
+            version: CACHE_VERSION - 1,
+            fetched_at: u64::MAX,
+            packages: vec![package("[doge]", "//i0.hdslb.com/bfs/emote/doge.png")],
+        };
+        fs::write(
+            dir.join(FILE_NAME),
+            serde_json::to_vec(&old).expect("encode"),
+        )
+        .expect("write old cache");
+        assert_eq!(restore(&dir), (Vec::new(), false));
 
         fs::remove_dir_all(&dir).ok();
     }

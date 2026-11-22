@@ -13,7 +13,7 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::api::comment::{CommentReply, CommentSort};
-use rigili_bilibili::{Comment, CommentPage, avatar, normalize_url};
+use rigili_bilibili::{Comment, CommentPage, avatar, is_emote_image, normalize_url};
 use rigili_core::client;
 use rigili_core::emotes;
 use rigili_core::runtime::spawn_api;
@@ -755,6 +755,7 @@ impl InfoPanel {
     fn render_emote_picker(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
+        let foreground = theme.foreground;
         let danger = theme.danger;
         let accent = theme.accent;
         let packages = emotes::packages(cx);
@@ -780,17 +781,34 @@ impl InfoPanel {
                         .max_h(px(176.))
                         .overflow_y_scroll()
                         .children(emotes.iter().enumerate().filter_map(|(index, emote)| {
-                            if emote.text.is_empty() || emote.url.is_empty() {
+                            if emote.text.is_empty() {
                                 return None;
                             }
                             let text = emote.text.clone();
+                            let icon = if is_emote_image(&emote.url) {
+                                img(normalize_url(&emote.url))
+                                    .image_cache(&images)
+                                    .size(px(26.))
+                                    .object_fit(ObjectFit::Contain)
+                                    .into_any_element()
+                            } else {
+                                div()
+                                    .px_1()
+                                    .text_xs()
+                                    .text_color(foreground)
+                                    .child(emote.text.clone())
+                                    .into_any_element()
+                            };
                             Some(
                                 div()
                                     .id((
                                         "comment-emote-item",
                                         (selected as u64) * 1000 + index as u64,
                                     ))
-                                    .size(px(32.))
+                                    .test_support()
+                                    .min_h(px(32.))
+                                    .min_w(px(32.))
+                                    .flex_shrink_0()
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -800,12 +818,7 @@ impl InfoPanel {
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.insert_emote(text.clone(), window, cx);
                                     }))
-                                    .child(
-                                        img(normalize_url(&emote.url))
-                                            .image_cache(&images)
-                                            .size(px(26.))
-                                            .object_fit(ObjectFit::Contain),
-                                    ),
+                                    .child(icon),
                             )
                         })),
                 )
@@ -815,10 +828,14 @@ impl InfoPanel {
                         .gap_1()
                         .overflow_x_scroll()
                         .children(packages.iter().enumerate().map(|(index, package)| {
-                            let icon = normalize_url(&package.url);
+                            let icon = is_emote_image(&package.url)
+                                .then(|| normalize_url(&package.url));
                             div()
                                 .id(("comment-emote-package", index as u64))
-                                .size(px(28.))
+                                .h(px(28.))
+                                .min_w(px(28.))
+                                .px_1()
+                                .flex_shrink_0()
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -829,17 +846,17 @@ impl InfoPanel {
                                     this.emote_package = index;
                                     cx.notify();
                                 }))
-                                .child(if icon.is_empty() {
-                                    div()
-                                        .text_xs()
-                                        .text_color(muted)
-                                        .child(package.text.clone())
-                                        .into_any_element()
-                                } else {
+                                .child(if let Some(icon) = icon {
                                     img(icon)
                                         .image_cache(&images)
                                         .size(px(24.))
                                         .object_fit(ObjectFit::Contain)
+                                        .into_any_element()
+                                } else {
+                                    div()
+                                        .text_xs()
+                                        .text_color(muted)
+                                        .child(package.text.clone())
                                         .into_any_element()
                                 })
                         })),
@@ -1699,10 +1716,14 @@ mod tests {
         has_hidden_replies,
     };
     use crate::info::{InfoPanel, InfoSelections};
+    use gpui_kit::base::v_flex;
+    use gpui_kit::TestSupportExt as _;
     use gpui_kit::prelude::*;
     use gpui_kit::test::TestWindowExt;
-    use gpui_kit::{Bounds, TestAppContext, WindowBounds, WindowOptions, px, size};
-    use rigili_bilibili::Comment;
+    use gpui_kit::{
+        Bounds, Entity, TestAppContext, Window, WindowBounds, WindowOptions, div, px, size,
+    };
+    use rigili_bilibili::{Comment, EmoteItem, EmotePackage, EmotePanel};
     use std::collections::VecDeque;
 
     fn comment(rpid: u64, rcount: u64) -> Comment {
@@ -1884,6 +1905,74 @@ mod tests {
             });
         })
         .expect("close thread");
+    }
+
+    struct EmotePickerHarness {
+        panel: Entity<InfoPanel>,
+    }
+
+    impl Render for EmotePickerHarness {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            v_flex()
+                .child(
+                    div()
+                        .id("emote-picker-probe")
+                        .test_support()
+                        .size(px(10.)),
+                )
+                .child(self.panel.update(cx, |panel, cx| panel.render_emote_picker(cx)))
+        }
+    }
+
+    #[gpui_kit::test]
+    fn renders_text_emotes_in_the_picker(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(rigili_core::image_cache::init);
+        cx.update(|cx| {
+            assert!(rigili_core::emotes::start(cx));
+            rigili_core::emotes::succeed(
+                cx,
+                EmotePanel {
+                    packages: Some(vec![EmotePackage {
+                        text: "颜文字".into(),
+                        url: String::new(),
+                        emote: Some(vec![EmoteItem {
+                            text: "(╯°□°）╯︵ ┻━┻".into(),
+                            url: "(╯°□°）╯︵ ┻━┻".into(),
+                        }]),
+                    }]),
+                },
+            );
+            assert_eq!(rigili_core::emotes::packages(cx).len(), 1);
+        });
+        let (window, _) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Default::default(),
+                        size(px(400.), px(300.)),
+                    ))),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| {
+                    let selections = InfoSelections::new(window, cx);
+                    let panel = cx.new(|_| InfoPanel::new(selections));
+                    cx.new(|_| EmotePickerHarness { panel })
+                },
+            )
+            .expect("open emote picker window")
+        });
+
+        let bounds = cx
+            .update_window(window, |_, window, cx| {
+                window.render_frame(cx);
+                window.render_frame(cx);
+                window.find("emote-picker-probe").bounds();
+                window.find(("comment-emote-item", 0u64)).bounds()
+            })
+            .expect("emote item bounds");
+        assert!(bounds.size.width >= px(32.));
     }
 
     #[gpui_kit::test]

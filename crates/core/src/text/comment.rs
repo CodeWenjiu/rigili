@@ -1,4 +1,4 @@
-use rigili_bilibili::{CommentContent, CommentEmote};
+use rigili_bilibili::{CommentContent, CommentEmote, is_emote_image};
 
 pub fn message_markdown(content: &CommentContent) -> String {
     let mut markdown = String::with_capacity(content.message.len() + 40);
@@ -11,7 +11,7 @@ pub fn message_markdown(content: &CommentContent) -> String {
     while !rest.is_empty() {
         let mut next: Option<(usize, &str, &CommentEmote)> = None;
         for (token, emote) in emotes {
-            if token.is_empty() || emote.url.is_empty() {
+            if token.is_empty() || !is_emote_image(&emote.url) {
                 continue;
             }
             let Some(index) = rest.find(token) else {
@@ -79,6 +79,25 @@ mod tests {
     use rigili_bilibili::{CommentContent, CommentEmote};
 
     use super::message_markdown;
+
+    #[test]
+    fn keeps_text_emotes_as_text() {
+        let content = CommentContent {
+            message: "(╯°□°）╯︵ ┻━┻".into(),
+            emote: Some(HashMap::from([(
+                "(╯°□°）╯︵ ┻━┻".into(),
+                CommentEmote {
+                    text: "(╯°□°）╯︵ ┻━┻".into(),
+                    url: "(╯°□°）╯︵ ┻━┻".into(),
+                },
+            )])),
+            pictures: Vec::new(),
+        };
+
+        let markdown = message_markdown(&content);
+        assert!(!markdown.contains("<img"));
+        assert!(markdown.contains("╯°□°"));
+    }
 
     #[test]
     fn renders_emotes_and_escapes_message() {

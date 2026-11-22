@@ -140,6 +140,12 @@ pub struct CommentPicture {
     pub img_height: u32,
 }
 
+/// A text emote repeats its kaomoji in `url` instead of pointing at an
+/// image, so callers must not treat every non-empty `url` as a picture.
+pub fn is_emote_image(url: &str) -> bool {
+    url.starts_with("//") || url.starts_with("http://") || url.starts_with("https://")
+}
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct CommentEmote {
     #[serde(default)]
