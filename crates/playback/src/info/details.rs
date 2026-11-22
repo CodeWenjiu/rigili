@@ -331,7 +331,7 @@ impl InfoPanel {
         let pages = (details.pages.len() > 1).then(|| self.render_pages(details, cx));
 
         let related_selection = self.related_selection;
-        let related_active = self.related_focus.is_focused(window);
+        let related_active = self.related_focus.focused(window);
         let related = (!self.related.is_empty()).then(|| {
             let layout = self.related_layout.clone();
             let scroll = self.scroll.clone();
@@ -349,7 +349,7 @@ impl InfoPanel {
                         window.request_animation_frame();
                     }
                 })
-                .track_focus(&self.related_focus)
+                .track_focus(self.related_focus.handle())
                 .when(related_active, |this| this.key_context(crate::shortcuts::RELATED))
                 .children(self.related.iter().enumerate().map(|(index, video)| {
                     let bvid = video.bvid.clone();

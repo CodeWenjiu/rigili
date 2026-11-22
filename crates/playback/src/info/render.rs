@@ -8,28 +8,10 @@ use super::{INFO_WIDTH, InfoPanel, InfoTab};
 
 impl Render for InfoPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.related_focus_subs.is_none() {
-            let focus = self.related_focus.clone();
-            let on_focus = cx.on_focus(&focus, window, |_, _, cx| cx.notify());
-            let on_blur = cx.on_blur(&focus, window, |_, _, cx| cx.notify());
-            self.related_focus_subs = Some((on_focus, on_blur));
-        }
-        if self.related_focus_pending {
-            self.related_focus_pending = false;
-            let focus = self.related_focus.clone();
-            window.defer(cx, move |window, cx| focus.focus(window, cx));
-        }
-        if self.comments_focus_subs.is_none() {
-            let focus = self.comments_focus.clone();
-            let on_focus = cx.on_focus(&focus, window, |_, _, cx| cx.notify());
-            let on_blur = cx.on_blur(&focus, window, |_, _, cx| cx.notify());
-            self.comments_focus_subs = Some((on_focus, on_blur));
-        }
-        if self.comments_focus_pending {
-            self.comments_focus_pending = false;
-            let focus = self.comments_focus.clone();
-            window.defer(cx, move |window, cx| focus.focus(window, cx));
-        }
+        self.related_focus.observe(window, cx);
+        self.related_focus.apply_pending(window, cx);
+        self.comments_focus.observe(window, cx);
+        self.comments_focus.apply_pending(window, cx);
 
         let theme = cx.theme();
         let background = theme.background;

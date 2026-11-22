@@ -6,6 +6,7 @@ rigili_macro::mod_prv!(
     favorite,
     header,
     interaction,
+    nav,
     render,
     triple
 );
@@ -25,6 +26,7 @@ use rigili_core::{format_count, format_datetime};
 use comments::CommentThread;
 use details::LikePress;
 use interaction::{CoinState, FlagState, ToggleState};
+use nav::{FocusNav, clamp_selection, stepped_selection};
 
 pub(crate) use details::short_label;
 
@@ -120,9 +122,7 @@ pub(super) struct InfoPanel {
     scroll: ScrollHandle,
     related: Vec<RecommendVideo>,
     related_selection: Option<usize>,
-    related_focus: FocusHandle,
-    related_focus_subs: Option<(Subscription, Subscription)>,
-    related_focus_pending: bool,
+    related_focus: FocusNav,
     related_layout: Rc<RefCell<RelatedLayout>>,
     description_expanded: bool,
     follow: FlagState,
@@ -142,9 +142,7 @@ pub(super) struct InfoPanel {
     comment_count: u64,
     comments: Vec<Comment>,
     comments_selection: Option<usize>,
-    comments_focus: FocusHandle,
-    comments_focus_subs: Option<(Subscription, Subscription)>,
-    comments_focus_pending: bool,
+    comments_focus: FocusNav,
     comments_list: ListState,
     thread: Option<CommentThread>,
     thread_selection: Option<usize>,
@@ -255,9 +253,7 @@ impl InfoPanel {
             scroll: ScrollHandle::default(),
             related: Vec::new(),
             related_selection: None,
-            related_focus: cx.focus_handle(),
-            related_focus_subs: None,
-            related_focus_pending: false,
+            related_focus: FocusNav::new(cx),
             related_layout: Rc::new(RefCell::new(RelatedLayout::default())),
             description_expanded: false,
             follow: FlagState::default(),
@@ -277,9 +273,7 @@ impl InfoPanel {
             comment_count: 0,
             comments: Vec::new(),
             comments_selection: None,
-            comments_focus: cx.focus_handle(),
-            comments_focus_subs: None,
-            comments_focus_pending: false,
+            comments_focus: FocusNav::new(cx),
             comments_list: ListState::new(1, ListAlignment::Top, COMMENT_LIST_OVERDRAW),
             thread: None,
             thread_selection: None,
@@ -434,7 +428,7 @@ impl InfoPanel {
     }
 
     pub(super) fn related_focused(&self, window: &Window) -> bool {
-        self.tab == InfoTab::Info && self.related_focus.is_focused(window)
+        self.tab == InfoTab::Info && self.related_focus.focused(window)
     }
 
     pub(super) fn focus_related(&mut self, cx: &mut Context<Self>) {
@@ -444,7 +438,7 @@ impl InfoPanel {
         let index = self.related_selection.unwrap_or(0).min(self.related.len() - 1);
         self.related_selection = Some(index);
         self.reveal_related(index);
-        self.related_focus_pending = true;
+        self.related_focus.request_focus();
         cx.notify();
     }
 
@@ -561,20 +555,6 @@ impl InfoPanel {
     }
 }
 
-fn stepped_selection(current: Option<usize>, delta: isize, len: usize) -> Option<usize> {
-    let last = len.checked_sub(1)?;
-    let Some(current) = current else {
-        return Some(0);
-    };
-    Some((current as isize + delta).clamp(0, last as isize) as usize)
-}
-
-fn clamp_selection(selection: Option<usize>, len: usize) -> Option<usize> {
-    selection
-        .filter(|_| len > 0)
-        .map(|index| index.min(len - 1))
-}
-
 fn scroll_y_to_show(
     viewport: Bounds<Pixels>,
     row: Bounds<Pixels>,
@@ -602,28 +582,7 @@ mod tests {
     };
     use rigili_bilibili::{Owner, RecommendVideo, Stat, VideoInfo, VideoPage, VideoRights};
 
-    use super::{
-        InfoPanel, InfoSelections, VideoDetails, clamp_selection, scroll_y_to_show,
-        stepped_selection,
-    };
-
-    #[test]
-    fn steps_a_selection_within_bounds() {
-        assert_eq!(stepped_selection(None, 1, 0), None);
-        assert_eq!(stepped_selection(None, -1, 3), Some(0));
-        assert_eq!(stepped_selection(Some(1), 1, 3), Some(2));
-        assert_eq!(stepped_selection(Some(1), -1, 3), Some(0));
-        assert_eq!(stepped_selection(Some(0), -1, 3), Some(0));
-        assert_eq!(stepped_selection(Some(2), 1, 3), Some(2));
-    }
-
-    #[test]
-    fn clamps_a_selection_to_the_list() {
-        assert_eq!(clamp_selection(None, 0), None);
-        assert_eq!(clamp_selection(Some(2), 0), None);
-        assert_eq!(clamp_selection(Some(2), 3), Some(2));
-        assert_eq!(clamp_selection(Some(7), 3), Some(2));
-    }
+    use super::{InfoPanel, InfoSelections, VideoDetails, scroll_y_to_show};
 
     #[test]
     fn scrolls_only_far_enough_to_reveal_a_related_row() {
