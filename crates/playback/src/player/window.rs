@@ -19,9 +19,11 @@ use crate::request::{
     PlaybackRequest, PlaybackSource, Resolved, Streams, resolve, resolve_streams,
 };
 use crate::shortcuts::{
-    CloseCommentThread, CloseTab, HistoryBack, HistoryForward, NextPage, NextTab, PreviousPage,
-    PreviousTab, Reload, SeekBack, SpeedDown, SpeedUp, SwitchToMain, ToggleComments, ToggleDanmaku,
-    ToggleFullscreen, ToggleInfo, ToggleMute, TogglePlayback, WriteComment,
+    BackComments, CloseCommentThread, CloseTab, ExpandReplies, HistoryBack, HistoryForward,
+    NextComment, NextPage, NextRelated, NextTab, PlayRelated, PlayRelatedInNewTab, PreviousComment,
+    PreviousPage, PreviousRelated, PreviousTab, Reload, SeekBack, SpeedDown, SpeedUp, SwitchToMain,
+    ToggleComments, ToggleDanmaku, ToggleFullscreen, ToggleInfo, ToggleMute, TogglePanelNavigation,
+    TogglePlayback, WriteComment,
 };
 use rigili_bilibili::{Chapter, Client, VideoPage};
 use rigili_core::client;
@@ -163,7 +165,7 @@ impl PlayerWindow {
         let id = self.next_tab_id;
         self.next_tab_id = self.next_tab_id.wrapping_add(1);
         let selections = InfoSelections::new(window, cx);
-        let info = cx.new(|_| InfoPanel::new(selections));
+        let info = cx.new(|cx| InfoPanel::new(selections, cx));
         let info_sub = cx.subscribe_in(
             &info,
             window,
@@ -583,6 +585,66 @@ impl PlayerWindow {
         let info = self.tab().info.clone();
         info.read(cx).tab() == InfoTab::Comments
             && info.update(cx, |info, cx| info.back_in_comments(window, cx))
+    }
+
+    fn toggle_panel_navigation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let info = self.tab().info.clone();
+        if info.read(cx).related_focused(window) || info.read(cx).comments_focused(window) {
+            self.player
+                .update(cx, |player, cx| player.focus_player(window, cx));
+            return;
+        }
+        let roomy = window.is_fullscreen() || window.viewport_size().width >= INFO_MIN_WINDOW;
+        if !can_focus_panel(self.show_info, self.tab().is_live, roomy) {
+            return;
+        }
+        match info.read(cx).tab() {
+            InfoTab::Info => {
+                if info.read(cx).has_related() {
+                    info.update(cx, |info, cx| info.focus_related(cx));
+                }
+            }
+            InfoTab::Comments => {
+                info.update(cx, |info, cx| info.focus_comments(cx));
+            }
+        }
+    }
+
+    fn step_comment(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let info = self.tab().info.clone();
+        info.update(cx, |info, cx| info.step_comment_selection(delta, cx));
+    }
+
+    fn expand_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let info = self.tab().info.clone();
+        info.update(cx, |info, cx| info.open_selected_thread(window, cx));
+    }
+
+    fn back_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let info = self.tab().info.clone();
+        if !info.update(cx, |info, cx| info.back_in_comments(window, cx)) {
+            self.player
+                .update(cx, |player, cx| player.focus_player(window, cx));
+        }
+    }
+
+    fn step_related(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let info = self.tab().info.clone();
+        info.update(cx, |info, cx| info.step_related(delta, cx));
+    }
+
+    fn play_related(&mut self, new_tab: bool, cx: &mut Context<Self>) {
+        let info = self.tab().info.clone();
+        info.update(cx, |info, cx| info.play_related(new_tab, cx));
+    }
+
+    fn exit_related(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.tab().info.read(cx).related_focused(window) {
+            return false;
+        }
+        self.player
+            .update(cx, |player, cx| player.focus_player(window, cx));
+        true
     }
 
     fn start_active(&mut self, request: PlaybackRequest, cx: &mut Context<Self>) {
@@ -1221,6 +1283,9 @@ impl Render for PlayerWindow {
                 this.go_back(cx);
             }))
             .on_action(cx.listener(|this, _: &CloseCommentThread, window, cx| {
+                if this.exit_related(window, cx) {
+                    return;
+                }
                 this.close_comment_thread(window, cx);
             }))
             .on_action(cx.listener(|this, _: &HistoryForward, _, cx| {
@@ -1249,6 +1314,33 @@ impl Render for PlayerWindow {
             }))
             .on_action(cx.listener(|this, _: &ToggleInfo, _, cx| {
                 this.toggle_panel(InfoTab::Info, cx);
+            }))
+            .on_action(cx.listener(|this, _: &TogglePanelNavigation, window, cx| {
+                this.toggle_panel_navigation(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &PreviousRelated, _, cx| {
+                this.step_related(-1, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NextRelated, _, cx| {
+                this.step_related(1, cx);
+            }))
+            .on_action(cx.listener(|this, _: &PlayRelated, _, cx| {
+                this.play_related(false, cx);
+            }))
+            .on_action(cx.listener(|this, _: &PlayRelatedInNewTab, _, cx| {
+                this.play_related(true, cx);
+            }))
+            .on_action(cx.listener(|this, _: &PreviousComment, _, cx| {
+                this.step_comment(-1, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NextComment, _, cx| {
+                this.step_comment(1, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ExpandReplies, window, cx| {
+                this.expand_comment(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &BackComments, window, cx| {
+                this.back_comment(window, cx);
             }))
             .on_action(cx.listener(|this, _: &ToggleComments, _, cx| {
                 this.toggle_panel(InfoTab::Comments, cx);
@@ -1421,6 +1513,10 @@ fn panel_visibility(visible: bool, current: InfoTab, target: InfoTab) -> bool {
     !(visible && current == target)
 }
 
+fn can_focus_panel(show_info: bool, is_live: bool, roomy: bool) -> bool {
+    show_info && !is_live && roomy
+}
+
 fn same_source(a: &PlaybackSource, b: &PlaybackSource) -> bool {
     match (a, b) {
         (PlaybackSource::Video { bvid: a, .. }, PlaybackSource::Video { bvid: b, .. }) => a == b,
@@ -1489,10 +1585,18 @@ mod tests {
     use rigili_player::{PlaybackPhase, PlayerStatus};
 
     use super::{
-        InfoTab, PlaybackSource, apply_preferred_quality, keeps_background_audio, panel_visibility,
-        same_source, stash_resume,
+        InfoTab, PlaybackSource, apply_preferred_quality, can_focus_panel, keeps_background_audio,
+        panel_visibility, same_source, stash_resume,
     };
     use crate::request::{Streams, VideoQuality};
+
+    #[test]
+    fn panel_navigation_requires_the_open_panel() {
+        assert!(can_focus_panel(true, false, true));
+        assert!(!can_focus_panel(false, false, true));
+        assert!(!can_focus_panel(true, true, true));
+        assert!(!can_focus_panel(true, false, false));
+    }
 
     #[test]
     fn identifies_tabs_by_video_or_room() {

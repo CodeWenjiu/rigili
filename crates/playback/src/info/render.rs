@@ -8,13 +8,36 @@ use super::{INFO_WIDTH, InfoPanel, InfoTab};
 
 impl Render for InfoPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.related_focus_subs.is_none() {
+            let focus = self.related_focus.clone();
+            let on_focus = cx.on_focus(&focus, window, |_, _, cx| cx.notify());
+            let on_blur = cx.on_blur(&focus, window, |_, _, cx| cx.notify());
+            self.related_focus_subs = Some((on_focus, on_blur));
+        }
+        if self.related_focus_pending {
+            self.related_focus_pending = false;
+            let focus = self.related_focus.clone();
+            window.defer(cx, move |window, cx| focus.focus(window, cx));
+        }
+        if self.comments_focus_subs.is_none() {
+            let focus = self.comments_focus.clone();
+            let on_focus = cx.on_focus(&focus, window, |_, _, cx| cx.notify());
+            let on_blur = cx.on_blur(&focus, window, |_, _, cx| cx.notify());
+            self.comments_focus_subs = Some((on_focus, on_blur));
+        }
+        if self.comments_focus_pending {
+            self.comments_focus_pending = false;
+            let focus = self.comments_focus.clone();
+            window.defer(cx, move |window, cx| focus.focus(window, cx));
+        }
+
         let theme = cx.theme();
         let background = theme.background;
         let foreground = theme.foreground;
         let details = self.details.clone();
 
         let content = match (details.as_ref(), self.tab) {
-            (Some(details), InfoTab::Info) => self.render_info_tab(details, cx),
+            (Some(details), InfoTab::Info) => self.render_info_tab(details, window, cx),
             (Some(_), InfoTab::Comments) => self.render_comments_tab(window, cx),
             (None, _) => self.render_placeholder(cx),
         };
@@ -94,7 +117,7 @@ mod tests {
                 cx,
                 |window, cx| {
                     let selections = InfoSelections::new(window, cx);
-                    cx.new(|_| InfoPanel::new(selections))
+                    cx.new(|cx| InfoPanel::new(selections, cx))
                 },
             )
             .expect("open info panel window")
@@ -125,7 +148,7 @@ mod tests {
                 cx,
                 |window, cx| {
                     let selections = InfoSelections::new(window, cx);
-                    cx.new(|_| InfoPanel::new(selections))
+                    cx.new(|cx| InfoPanel::new(selections, cx))
                 },
             )
             .expect("open info panel window")

@@ -10,7 +10,9 @@ rigili_macro::mod_prv!(
     triple
 );
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui_kit::base::{TextSelection, TextSelectionHandle};
@@ -117,6 +119,11 @@ pub(super) struct InfoPanel {
     busy: bool,
     scroll: ScrollHandle,
     related: Vec<RecommendVideo>,
+    related_selection: Option<usize>,
+    related_focus: FocusHandle,
+    related_focus_subs: Option<(Subscription, Subscription)>,
+    related_focus_pending: bool,
+    related_layout: Rc<RefCell<RelatedLayout>>,
     description_expanded: bool,
     follow: FlagState,
     followers: Option<u64>,
@@ -134,8 +141,13 @@ pub(super) struct InfoPanel {
     tab: InfoTab,
     comment_count: u64,
     comments: Vec<Comment>,
+    comments_selection: Option<usize>,
+    comments_focus: FocusHandle,
+    comments_focus_subs: Option<(Subscription, Subscription)>,
+    comments_focus_pending: bool,
     comments_list: ListState,
     thread: Option<CommentThread>,
+    thread_selection: Option<usize>,
     thread_list: ListState,
     comments_loading: bool,
     comments_loaded: bool,
@@ -224,10 +236,17 @@ impl InfoSelections {
     }
 }
 
+#[derive(Default)]
+struct RelatedLayout {
+    bounds: Vec<Bounds<Pixels>>,
+    offset: Pixels,
+    pending: Option<usize>,
+}
+
 impl EventEmitter<InfoEvent> for InfoPanel {}
 
 impl InfoPanel {
-    pub(super) fn new(selections: InfoSelections) -> Self {
+    pub(super) fn new(selections: InfoSelections, cx: &mut Context<Self>) -> Self {
         Self {
             selections,
             details: None,
@@ -235,6 +254,11 @@ impl InfoPanel {
             busy: false,
             scroll: ScrollHandle::default(),
             related: Vec::new(),
+            related_selection: None,
+            related_focus: cx.focus_handle(),
+            related_focus_subs: None,
+            related_focus_pending: false,
+            related_layout: Rc::new(RefCell::new(RelatedLayout::default())),
             description_expanded: false,
             follow: FlagState::default(),
             followers: None,
@@ -252,8 +276,13 @@ impl InfoPanel {
             tab: InfoTab::Info,
             comment_count: 0,
             comments: Vec::new(),
+            comments_selection: None,
+            comments_focus: cx.focus_handle(),
+            comments_focus_subs: None,
+            comments_focus_pending: false,
             comments_list: ListState::new(1, ListAlignment::Top, COMMENT_LIST_OVERDRAW),
             thread: None,
+            thread_selection: None,
             thread_list: ListState::new(1, ListAlignment::Top, COMMENT_LIST_OVERDRAW),
             comments_loading: false,
             comments_loaded: false,
@@ -282,7 +311,7 @@ impl InfoPanel {
 
     pub(super) fn clear(&mut self, cx: &mut Context<Self>) {
         let tab = self.tab;
-        *self = Self::new(self.selections.clone());
+        *self = Self::new(self.selections.clone(), cx);
         self.tab = tab;
         cx.notify();
     }
@@ -306,6 +335,8 @@ impl InfoPanel {
         self.selected_cid = Some(cid);
         self.busy = false;
         self.related.clear();
+        self.related_selection = None;
+        self.reset_related_layout();
         self.description_expanded = false;
         self.follow = FlagState::default();
         self.followers = None;
@@ -393,7 +424,86 @@ impl InfoPanel {
             .filter(|video| !video.bvid.is_empty() && video.cid > 0)
             .take(RELATED_LIMIT)
             .collect();
+        self.related_selection = clamp_selection(self.related_selection, self.related.len());
+        self.reset_related_layout();
         cx.notify();
+    }
+
+    pub(super) fn has_related(&self) -> bool {
+        !self.related.is_empty()
+    }
+
+    pub(super) fn related_focused(&self, window: &Window) -> bool {
+        self.tab == InfoTab::Info && self.related_focus.is_focused(window)
+    }
+
+    pub(super) fn focus_related(&mut self, cx: &mut Context<Self>) {
+        if self.tab != InfoTab::Info || self.related.is_empty() {
+            return;
+        }
+        let index = self.related_selection.unwrap_or(0).min(self.related.len() - 1);
+        self.related_selection = Some(index);
+        self.reveal_related(index);
+        self.related_focus_pending = true;
+        cx.notify();
+    }
+
+    pub(super) fn step_related(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let next = stepped_selection(self.related_selection, delta, self.related.len());
+        if next == self.related_selection {
+            return;
+        }
+        self.related_selection = next;
+        if let Some(index) = next {
+            self.reveal_related(index);
+        }
+        cx.notify();
+    }
+
+    pub(super) fn play_related(&mut self, new_tab: bool, cx: &mut Context<Self>) {
+        let Some(video) = self
+            .related_selection
+            .and_then(|index| self.related.get(index))
+        else {
+            return;
+        };
+        cx.emit(InfoEvent::PlayRelated {
+            bvid: video.bvid.clone(),
+            cid: video.cid,
+            title: video.title.clone(),
+            new_tab,
+        });
+    }
+
+    fn reset_related_layout(&mut self) {
+        let mut layout = self.related_layout.borrow_mut();
+        layout.bounds.clear();
+        layout.pending = None;
+    }
+
+    fn reveal_related(&mut self, index: usize) {
+        let mut layout = self.related_layout.borrow_mut();
+        let Some(row) = layout.bounds.get(index).copied() else {
+            layout.pending = Some(index);
+            return;
+        };
+        let offset = layout.offset;
+        drop(layout);
+
+        // The bounds were captured under the offset they were painted with, so
+        // shift them by however far the panel has scrolled since.
+        let current = self.scroll.offset();
+        let shift = current.y - offset;
+        let row = Bounds::new(row.origin + point(px(0.), shift), row.size);
+        let y = scroll_y_to_show(
+            self.scroll.bounds(),
+            row,
+            current.y,
+            self.scroll.max_offset().y,
+        );
+        if y != current.y {
+            self.scroll.set_offset(point(current.x, y));
+        }
     }
 
     pub(super) fn clear_spanning_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -448,5 +558,181 @@ impl InfoPanel {
         self.refresh_busy = false;
         self.refresh_error = Some(error);
         cx.notify();
+    }
+}
+
+fn stepped_selection(current: Option<usize>, delta: isize, len: usize) -> Option<usize> {
+    let last = len.checked_sub(1)?;
+    let Some(current) = current else {
+        return Some(0);
+    };
+    Some((current as isize + delta).clamp(0, last as isize) as usize)
+}
+
+fn clamp_selection(selection: Option<usize>, len: usize) -> Option<usize> {
+    selection
+        .filter(|_| len > 0)
+        .map(|index| index.min(len - 1))
+}
+
+fn scroll_y_to_show(
+    viewport: Bounds<Pixels>,
+    row: Bounds<Pixels>,
+    current: Pixels,
+    max: Pixels,
+) -> Pixels {
+    // Prepaint bounds already carry the scroll offset, so move the current
+    // offset by the visible delta instead of recomputing from layout space.
+    let y = if row.top() < viewport.top() {
+        current + viewport.top() - row.top()
+    } else if row.bottom() > viewport.bottom() {
+        current + viewport.bottom() - row.bottom()
+    } else {
+        current
+    };
+    y.clamp(-max, px(0.))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use gpui_kit::{
+        AppContext, Bounds, TestAppContext, WindowBounds, WindowOptions, point, px, size,
+    };
+    use rigili_bilibili::{Owner, RecommendVideo, Stat, VideoInfo, VideoPage, VideoRights};
+
+    use super::{
+        InfoPanel, InfoSelections, VideoDetails, clamp_selection, scroll_y_to_show,
+        stepped_selection,
+    };
+
+    #[test]
+    fn steps_a_selection_within_bounds() {
+        assert_eq!(stepped_selection(None, 1, 0), None);
+        assert_eq!(stepped_selection(None, -1, 3), Some(0));
+        assert_eq!(stepped_selection(Some(1), 1, 3), Some(2));
+        assert_eq!(stepped_selection(Some(1), -1, 3), Some(0));
+        assert_eq!(stepped_selection(Some(0), -1, 3), Some(0));
+        assert_eq!(stepped_selection(Some(2), 1, 3), Some(2));
+    }
+
+    #[test]
+    fn clamps_a_selection_to_the_list() {
+        assert_eq!(clamp_selection(None, 0), None);
+        assert_eq!(clamp_selection(Some(2), 0), None);
+        assert_eq!(clamp_selection(Some(2), 3), Some(2));
+        assert_eq!(clamp_selection(Some(7), 3), Some(2));
+    }
+
+    #[test]
+    fn scrolls_only_far_enough_to_reveal_a_related_row() {
+        let viewport = Bounds::new(point(px(0.), px(100.)), size(px(400.), px(800.)));
+
+        let below = Bounds::new(point(px(0.), px(2000.)), size(px(400.), px(100.)));
+        assert_eq!(
+            scroll_y_to_show(viewport, below, px(0.), px(2000.)),
+            px(-1200.)
+        );
+
+        let clipped = Bounds::new(point(px(0.), px(850.)), size(px(400.), px(100.)));
+        assert_eq!(
+            scroll_y_to_show(viewport, clipped, px(-1150.), px(2000.)),
+            px(-1200.)
+        );
+
+        let visible = Bounds::new(point(px(0.), px(800.)), size(px(400.), px(100.)));
+        assert_eq!(
+            scroll_y_to_show(viewport, visible, px(-1200.), px(2000.)),
+            px(-1200.)
+        );
+
+        let inside = Bounds::new(point(px(0.), px(200.)), size(px(400.), px(100.)));
+        assert_eq!(scroll_y_to_show(viewport, inside, px(0.), px(2000.)), px(0.));
+
+        let above = Bounds::new(point(px(0.), px(-500.)), size(px(400.), px(100.)));
+        assert_eq!(scroll_y_to_show(viewport, above, px(-500.), px(2000.)), px(0.));
+    }
+
+    #[gpui_kit::test]
+    fn keeps_the_selected_related_row_visible(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(rigili_core::image_cache::init);
+        let info = VideoInfo {
+            bvid: "BV1".into(),
+            aid: 1,
+            cid: 1,
+            pic: String::new(),
+            title: "title".into(),
+            desc: "description".into(),
+            duration: 60,
+            pubdate: 0,
+            owner: Owner::default(),
+            stat: Stat::default(),
+            rights: VideoRights::default(),
+            pages: vec![VideoPage {
+                cid: 1,
+                page: 1,
+                part: String::new(),
+                duration: 60,
+            }],
+        };
+        let (window, panel) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Default::default(),
+                        size(px(500.), px(500.)),
+                    ))),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| {
+                    let selections = InfoSelections::new(window, cx);
+                    cx.new(|cx| {
+                        let mut panel = InfoPanel::new(selections, cx);
+                        panel.details = Some(Arc::new(VideoDetails::new(info)));
+                        panel.related = (0..20)
+                            .map(|index| RecommendVideo {
+                                bvid: format!("BV{index}"),
+                                cid: index + 1,
+                                title: format!("related {index}"),
+                                ..Default::default()
+                            })
+                            .collect();
+                        panel.related_selection = Some(0);
+                        panel
+                    })
+                },
+            )
+            .expect("open info panel window")
+        });
+
+        draw(cx, window);
+        for _ in 0..12 {
+            panel.update(cx, |panel, cx| panel.step_related(1, cx));
+            draw(cx, window);
+        }
+
+        panel.read_with(cx, |panel, _| {
+            let selection = panel.related_selection.expect("related selection");
+            let layout = panel.related_layout.borrow();
+            let row = layout
+                .bounds
+                .get(selection)
+                .copied()
+                .expect("related row bounds");
+            let viewport = panel.scroll.bounds();
+            assert!(row.top() >= viewport.top(), "row starts above the panel");
+            assert!(row.bottom() <= viewport.bottom(), "row ends below the panel");
+        });
+    }
+
+    fn draw(cx: &mut TestAppContext, window: gpui_kit::AnyWindowHandle) {
+        cx.update_window(window, |_, window, cx| {
+            window.draw(cx).clear(cx);
+        })
+        .expect("draw info panel");
+        cx.run_until_parked();
     }
 }

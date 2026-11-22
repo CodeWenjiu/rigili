@@ -3,6 +3,8 @@ use std::rc::Rc;
 use gpui_kit::*;
 
 pub(crate) const PLAYER: &str = "Player";
+pub(crate) const RELATED: &str = "RelatedVideos";
+pub(crate) const COMMENTS: &str = "CommentList";
 
 actions!(
     player,
@@ -39,13 +41,31 @@ actions!(
         Reload,
         /// 回到主窗口
         SwitchToMain,
+        /// 键盘浏览信息栏
+        TogglePanelNavigation,
+        /// 上一个相关推荐
+        PreviousRelated,
+        /// 下一个相关推荐
+        NextRelated,
+        /// 播放相关推荐
+        PlayRelated,
+        /// 在新标签页播放相关推荐
+        PlayRelatedInNewTab,
+        /// 上一条评论
+        PreviousComment,
+        /// 下一条评论
+        NextComment,
+        /// 展开回复
+        ExpandReplies,
+        /// 返回评论列表
+        BackComments,
         /// 关闭当前标签页
         CloseTab,
         /// 下一个标签页
         NextTab,
         /// 上一个标签页
         PreviousTab,
-        /// 返回评论列表
+        /// 返回上一级
         CloseCommentThread,
     ]
 );
@@ -140,6 +160,51 @@ const COMMANDS: &[Command] = &[
         action: || Box::new(SwitchToMain),
     },
     Command {
+        keys: "i",
+        context: PLAYER,
+        action: || Box::new(TogglePanelNavigation),
+    },
+    Command {
+        keys: "k",
+        context: RELATED,
+        action: || Box::new(PreviousRelated),
+    },
+    Command {
+        keys: "j",
+        context: RELATED,
+        action: || Box::new(NextRelated),
+    },
+    Command {
+        keys: "enter",
+        context: RELATED,
+        action: || Box::new(PlayRelated),
+    },
+    Command {
+        keys: "ctrl-enter",
+        context: RELATED,
+        action: || Box::new(PlayRelatedInNewTab),
+    },
+    Command {
+        keys: "k",
+        context: COMMENTS,
+        action: || Box::new(PreviousComment),
+    },
+    Command {
+        keys: "j",
+        context: COMMENTS,
+        action: || Box::new(NextComment),
+    },
+    Command {
+        keys: "l",
+        context: COMMENTS,
+        action: || Box::new(ExpandReplies),
+    },
+    Command {
+        keys: "h",
+        context: COMMENTS,
+        action: || Box::new(BackComments),
+    },
+    Command {
         keys: "ctrl-w",
         context: PLAYER,
         action: || Box::new(CloseTab),
@@ -210,7 +275,7 @@ mod tests {
 
     use gpui_kit::{KeyBinding, KeyBindingContextPredicate, KeyContext, Keystroke, Modifiers};
 
-    use super::{COMMANDS, PLAYER, binding_predicate};
+    use super::{COMMANDS, COMMENTS, PLAYER, RELATED, binding_predicate};
 
     #[test]
     fn commands_parse_and_do_not_conflict() {
@@ -235,7 +300,71 @@ mod tests {
             );
         }
 
-        assert!(COMMANDS.iter().all(|command| command.context == PLAYER));
+        assert!(COMMANDS.iter().all(|command| {
+            command.context == PLAYER
+                || command.context == RELATED
+                || command.context == COMMENTS
+        }));
+    }
+
+    #[test]
+    fn comment_commands_only_apply_while_the_comment_list_is_focused() {
+        let player = KeyContext::parse(PLAYER).expect("player context");
+        let comments = KeyContext::parse(COMMENTS).expect("comments context");
+        let comment_commands = COMMANDS
+            .iter()
+            .filter(|command| command.context == COMMENTS)
+            .collect::<Vec<_>>();
+        assert_eq!(comment_commands.len(), 4);
+
+        for command in comment_commands {
+            let predicate = binding_predicate(command.context);
+            assert!(
+                predicate.depth_of(std::slice::from_ref(&player)).is_none(),
+                "{} must not reach the player context",
+                command.keys
+            );
+            assert!(
+                predicate
+                    .depth_of(&[player.clone(), comments.clone()])
+                    .is_some(),
+                "{} must reach the comments context",
+                command.keys
+            );
+        }
+    }
+
+    #[test]
+    fn related_commands_only_apply_while_the_related_list_is_focused() {
+        let player = KeyContext::parse(PLAYER).expect("player context");
+        let related = KeyContext::parse(RELATED).expect("related context");
+        let related_commands = COMMANDS
+            .iter()
+            .filter(|command| command.context == RELATED)
+            .collect::<Vec<_>>();
+        assert_eq!(related_commands.len(), 4);
+
+        for command in related_commands {
+            let predicate = binding_predicate(command.context);
+            assert!(
+                predicate.depth_of(std::slice::from_ref(&player)).is_none(),
+                "{} must not reach the player context",
+                command.keys
+            );
+            assert!(
+                predicate
+                    .depth_of(&[player.clone(), related.clone()])
+                    .is_some(),
+                "{} must reach the related context",
+                command.keys
+            );
+        }
+
+        let enter = COMMANDS
+            .iter()
+            .find(|command| command.keys == "enter")
+            .expect("enter binding");
+        assert_eq!(enter.context, RELATED);
     }
 
     #[gpui_kit::test]

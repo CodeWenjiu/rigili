@@ -22,7 +22,10 @@ use rigili_core::{
     api_error_message, api_task_error_message, format_comment_time, format_count, message_markdown,
 };
 
-use super::{COMMENT_AVATAR, COMMENT_MAX_LEN, InfoEvent, InfoPanel, NESTED_COMMENT_AVATAR};
+use super::{
+    COMMENT_AVATAR, COMMENT_MAX_LEN, InfoEvent, InfoPanel, InfoTab, NESTED_COMMENT_AVATAR,
+    clamp_selection, stepped_selection,
+};
 
 const COMMENT_RETAIN_PAGES: usize = 12;
 const PREVIEW_REPLIES: usize = 2;
@@ -79,6 +82,7 @@ enum CommentAction {
 impl InfoPanel {
     pub(super) fn reset_comments(&mut self) {
         self.comments.clear();
+        self.comments_selection = None;
         self.comments_loading = false;
         self.comments_loaded = false;
         self.comments_more = false;
@@ -92,6 +96,7 @@ impl InfoPanel {
         self.comments_earlier_loading = false;
         self.comments_earlier_error = None;
         self.thread = None;
+        self.thread_selection = None;
         self.reply_target = None;
         self.draft = None;
         self._draft_sub = None;
@@ -172,12 +177,14 @@ impl InfoPanel {
         self.comments_error = None;
         self.comments_more_error = None;
         self.comments.clear();
+        self.comments_selection = None;
         self.comments_more = false;
         self.comments_pages.clear();
         self.comments_first_page = 1;
         self.comments_earlier_loading = false;
         self.comments_earlier_error = None;
         self.thread = None;
+        self.thread_selection = None;
         self.reply_target = None;
         self.composer_error = None;
         self.emote_open = false;
@@ -289,6 +296,10 @@ impl InfoPanel {
         }
         let top = self.comments_list.logical_scroll_top();
         self.comments.drain(0..dropped);
+        self.comments_selection = self
+            .comments_selection
+            .map(|index| index.saturating_sub(dropped));
+        self.clamp_comments_selection();
         self.comments_first_page = self.comments_first_page.saturating_add(pages_dropped);
         self.comments_list.splice(0..dropped, 0);
         self.comments_list.scroll_to(ListOffset {
@@ -305,6 +316,7 @@ impl InfoPanel {
         }
         let start = self.comments.len() - dropped;
         self.comments.truncate(start);
+        self.clamp_comments_selection();
         self.comments_list.splice(start..start + dropped, 0);
         self.comments_page = self.comments_page.saturating_sub(pages_dropped);
         self.comments_more = true;
@@ -350,6 +362,9 @@ impl InfoPanel {
                         if count > 0 {
                             let top = this.comments_list.logical_scroll_top();
                             this.comments.splice(0..0, added);
+                            this.comments_selection = this
+                                .comments_selection
+                                .map(|index| index.saturating_add(count));
                             this.comments_pages.push_front(count);
                             this.comments_first_page = requested;
                             this.comments_list.splice(0..0, count);
@@ -416,6 +431,7 @@ impl InfoPanel {
         self.composer_error = None;
         self.emote_open = false;
         self.thread = Some(CommentThread::new(root));
+        self.thread_selection = Some(0);
         self.thread_list.reset(2);
         if let Some(draft) = &self.draft {
             draft.update(cx, |state, cx| state.set_placeholder("回复评论", window, cx));
@@ -454,6 +470,7 @@ impl InfoPanel {
 
     fn close_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.thread = None;
+        self.thread_selection = None;
         self.reply_target = None;
         self.composer_error = None;
         self.close_emote_picker();
@@ -476,6 +493,80 @@ impl InfoPanel {
         }
         self.close_thread(window, cx);
         true
+    }
+
+    pub(crate) fn comments_focused(&self, window: &Window) -> bool {
+        self.tab == InfoTab::Comments && self.comments_focus.is_focused(window)
+    }
+
+    pub(crate) fn focus_comments(&mut self, cx: &mut Context<Self>) {
+        if self.tab != InfoTab::Comments || self.comments.is_empty() {
+            return;
+        }
+        let visible = self.comments_list.logical_scroll_top().item_ix;
+        self.comments_selection = clamp_selection(
+            self.comments_selection.or(Some(visible)),
+            self.comments.len(),
+        );
+        if let Some(index) = self.comments_selection {
+            self.comments_list.scroll_to_reveal_item(index);
+        }
+        self.comments_focus_pending = true;
+        cx.notify();
+    }
+
+    pub(crate) fn step_comment_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        if self.thread.is_some() {
+            self.step_thread_selection(delta, cx);
+            return;
+        }
+        let next = stepped_selection(self.comments_selection, delta, self.comments.len());
+        if next == self.comments_selection {
+            return;
+        }
+        self.comments_selection = next;
+        if let Some(index) = next {
+            self.comments_list.scroll_to_reveal_item(index);
+        }
+        cx.notify();
+    }
+
+    fn step_thread_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let Some(thread) = &self.thread else {
+            return;
+        };
+        let selectable = thread.row_count() - 1;
+        let next = stepped_selection(self.thread_selection, delta, selectable);
+        if next == self.thread_selection {
+            return;
+        }
+        self.thread_selection = next;
+        if let Some(index) = next {
+            self.thread_list.scroll_to_reveal_item(index);
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn open_selected_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.thread.is_some() {
+            return;
+        }
+        let Some(index) = self.comments_selection else {
+            return;
+        };
+        self.open_thread(index, false, None, window, cx);
+    }
+
+    fn clamp_comments_selection(&mut self) {
+        self.comments_selection = clamp_selection(self.comments_selection, self.comments.len());
+    }
+
+    fn clamp_thread_selection(&mut self) {
+        let selectable = self
+            .thread
+            .as_ref()
+            .map_or(0, |thread| thread.row_count() - 1);
+        self.thread_selection = clamp_selection(self.thread_selection, selectable);
     }
 
     fn load_thread_page(&mut self, page: u32, cx: &mut Context<Self>) {
@@ -559,6 +650,7 @@ impl InfoPanel {
                 let total = thread.total;
                 if let Some(count) = reset {
                     this.thread_list.reset(count);
+                    this.clamp_thread_selection();
                 }
                 if let Some((at, added)) = splice {
                     this.thread_list.splice(at..at, added);
@@ -910,6 +1002,7 @@ impl InfoPanel {
         }
         self.maybe_load_earlier_comments(window, cx);
         let composer = self.render_composer(window, cx);
+        let comments_active = self.comments_focus.is_focused(window);
         v_flex()
             .flex_1()
             .min_h_0()
@@ -920,6 +1013,10 @@ impl InfoPanel {
                     .flex_1()
                     .min_h_0()
                     .image_cache(rigili_core::image_cache::avatars(cx))
+                    .track_focus(&self.comments_focus)
+                    .when(comments_active, |this| {
+                        this.key_context(crate::shortcuts::COMMENTS)
+                    })
                     .child(
                         list(
                             self.comments_list.clone(),
@@ -937,6 +1034,7 @@ impl InfoPanel {
     fn render_thread_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let composer = self.render_composer(window, cx);
         let header = self.render_thread_header(cx);
+        let comments_active = self.comments_focus.is_focused(window);
         v_flex()
             .flex_1()
             .min_h_0()
@@ -948,6 +1046,10 @@ impl InfoPanel {
                     .flex_1()
                     .min_h_0()
                     .image_cache(rigili_core::image_cache::avatars(cx))
+                    .track_focus(&self.comments_focus)
+                    .when(comments_active, |this| {
+                        this.key_context(crate::shortcuts::COMMENTS)
+                    })
                     .child(
                         list(
                             self.thread_list.clone(),
@@ -1224,10 +1326,15 @@ impl InfoPanel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let border = cx.theme().border;
+        let primary = cx.theme().primary;
+        let radius = cx.theme().radius;
         let Some(comment) = self.comments.get(index) else {
             return self.render_comment_tail(window, cx);
         };
+        let selected = self.comments_selection == Some(index);
+        let active = self.comments_focus.is_focused(window);
         div()
+            .relative()
             .w_full()
             .pb_4()
             .border_b_1()
@@ -1239,6 +1346,9 @@ impl InfoPanel {
                 comment.rpid,
                 cx,
             ))
+            .when(selected, |this| {
+                this.child(selection_outline(primary, radius, active))
+            })
             .into_any_element()
     }
 
@@ -1248,12 +1358,17 @@ impl InfoPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let primary = cx.theme().primary;
+        let radius = cx.theme().radius;
+        let selected = self.thread_selection == Some(index);
+        let active = self.comments_focus.is_focused(window);
         let Some(thread) = &self.thread else {
             return div().into_any_element();
         };
         if index == 0 {
             let border = cx.theme().border;
             return div()
+                .relative()
                 .w_full()
                 .pb_4()
                 .border_b_1()
@@ -1265,10 +1380,14 @@ impl InfoPanel {
                     thread.root.rpid,
                     cx,
                 ))
+                .when(selected, |this| {
+                    this.child(selection_outline(primary, radius, active))
+                })
                 .into_any_element();
         }
         if let Some(reply) = thread.replies.get(index - 1) {
             return div()
+                .relative()
                 .w_full()
                 .pb_2()
                 .child(self.render_comment(
@@ -1278,6 +1397,9 @@ impl InfoPanel {
                     thread.root.rpid,
                     cx,
                 ))
+                .when(selected, |this| {
+                    this.child(selection_outline(primary, radius, active))
+                })
                 .into_any_element();
         }
         self.render_thread_tail(window, cx)
@@ -1683,6 +1805,23 @@ fn has_hidden_replies(comment: &Comment, shown: usize) -> bool {
     comment.rcount as usize > shown
 }
 
+fn selection_outline(primary: Hsla, radius: Pixels, active: bool) -> impl IntoElement {
+    let color = if active {
+        primary
+    } else {
+        primary.opacity(0.4)
+    };
+    div()
+        .absolute()
+        .top(px(-6.))
+        .bottom_0()
+        .left(px(-8.))
+        .right(px(-8.))
+        .rounded(radius)
+        .border_2()
+        .border_color(color)
+}
+
 fn drain_front_pages(pages: &mut VecDeque<usize>) -> (u32, usize) {
     let mut pages_dropped = 0;
     let mut items_dropped = 0;
@@ -1715,7 +1854,7 @@ mod tests {
         COMMENT_RETAIN_PAGES, CommentThread, drain_back_pages, drain_front_pages,
         has_hidden_replies,
     };
-    use crate::info::{InfoPanel, InfoSelections};
+    use crate::info::{InfoPanel, InfoSelections, InfoTab};
     use gpui_kit::base::v_flex;
     use gpui_kit::TestSupportExt as _;
     use gpui_kit::prelude::*;
@@ -1786,7 +1925,7 @@ mod tests {
                 cx,
                 |window, cx| {
                     let selections = InfoSelections::new(window, cx);
-                    cx.new(|_| InfoPanel::new(selections))
+                    cx.new(|cx| InfoPanel::new(selections, cx))
                 },
             )
             .expect("open info panel window")
@@ -1838,7 +1977,7 @@ mod tests {
                 cx,
                 |window, cx| {
                     let selections = InfoSelections::new(window, cx);
-                    cx.new(|_| InfoPanel::new(selections))
+                    cx.new(|cx| InfoPanel::new(selections, cx))
                 },
             )
             .expect("open info panel window")
@@ -1878,7 +2017,7 @@ mod tests {
                 cx,
                 |window, cx| {
                     let selections = InfoSelections::new(window, cx);
-                    cx.new(|_| InfoPanel::new(selections))
+                    cx.new(|cx| InfoPanel::new(selections, cx))
                 },
             )
             .expect("open info panel window")
@@ -1957,7 +2096,7 @@ mod tests {
                 cx,
                 |window, cx| {
                     let selections = InfoSelections::new(window, cx);
-                    let panel = cx.new(|_| InfoPanel::new(selections));
+                    let panel = cx.new(|cx| InfoPanel::new(selections, cx));
                     cx.new(|_| EmotePickerHarness { panel })
                 },
             )
@@ -1996,7 +2135,7 @@ mod tests {
                 cx,
                 |window, cx| {
                     let selections = InfoSelections::new(window, cx);
-                    cx.new(|_| InfoPanel::new(selections))
+                    cx.new(|cx| InfoPanel::new(selections, cx))
                 },
             )
             .expect("open info panel window")
@@ -2028,5 +2167,171 @@ mod tests {
         let mut pages = VecDeque::from(vec![20; COMMENT_RETAIN_PAGES + 3]);
         assert_eq!(drain_back_pages(&mut pages), (3, 60));
         assert_eq!(pages.len(), COMMENT_RETAIN_PAGES);
+    }
+
+    #[gpui_kit::test]
+    fn keyboard_navigation_steps_and_opens_comments(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(rigili_core::image_cache::init);
+        let (window, panel) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Default::default(),
+                        size(px(500.), px(300.)),
+                    ))),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| {
+                    let selections = InfoSelections::new(window, cx);
+                    cx.new(|cx| InfoPanel::new(selections, cx))
+                },
+            )
+            .expect("open info panel window")
+        });
+
+        panel.update(cx, |panel, cx| {
+            panel.tab = InfoTab::Comments;
+            panel.comments = vec![comment(10, 2), comment(20, 0), comment(30, 0)];
+            panel.comments_list.reset(4);
+
+            panel.step_comment_selection(1, cx);
+            assert_eq!(panel.comments_selection, Some(0));
+            panel.step_comment_selection(1, cx);
+            assert_eq!(panel.comments_selection, Some(1));
+            panel.step_comment_selection(1, cx);
+            assert_eq!(panel.comments_selection, Some(2));
+            panel.step_comment_selection(1, cx);
+            assert_eq!(panel.comments_selection, Some(2));
+            panel.step_comment_selection(-3, cx);
+            assert_eq!(panel.comments_selection, Some(0));
+        });
+
+        cx.update_window(window, |_, window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.open_selected_thread(window, cx);
+                assert_eq!(panel.thread.as_ref().map(|thread| thread.root.rpid), Some(10));
+                assert_eq!(panel.thread_selection, Some(0));
+
+                let count = {
+                    let thread = panel.thread.as_mut().expect("open thread");
+                    thread.replies = vec![plain(11), plain(12)];
+                    thread.total = 2;
+                    thread.row_count()
+                };
+                panel.thread_list.reset(count);
+
+                panel.step_comment_selection(1, cx);
+                assert_eq!(panel.thread_selection, Some(1));
+                assert_eq!(panel.comments_selection, Some(0));
+                panel.step_comment_selection(3, cx);
+                assert_eq!(panel.thread_selection, Some(2));
+                panel.step_comment_selection(-5, cx);
+                assert_eq!(panel.thread_selection, Some(0));
+
+                assert!(panel.back_in_comments(window, cx));
+                assert!(panel.thread.is_none());
+                assert_eq!(panel.thread_selection, None);
+                assert_eq!(panel.comments_selection, Some(0));
+            });
+        })
+        .expect("open and close the thread");
+    }
+
+    #[gpui_kit::test]
+    fn keeps_the_selected_comment_across_page_trims(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(rigili_core::image_cache::init);
+        let (_, panel) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Default::default(),
+                        size(px(500.), px(300.)),
+                    ))),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| {
+                    let selections = InfoSelections::new(window, cx);
+                    cx.new(|cx| InfoPanel::new(selections, cx))
+                },
+            )
+            .expect("open info panel window")
+        });
+
+        panel.update(cx, |panel, _| {
+            panel.comments = (1..=30u64).map(plain).collect();
+            panel.comments_list.reset(31);
+            panel.comments_selection = Some(25);
+            panel.comments_pages = VecDeque::from(vec![10; COMMENT_RETAIN_PAGES + 2]);
+
+            panel.trim_front_pages();
+            assert_eq!(panel.comments.len(), 10);
+            assert_eq!(panel.comments_selection, Some(5));
+
+            panel.comments.truncate(5);
+            panel.comments_list.reset(6);
+            panel.clamp_comments_selection();
+            assert_eq!(panel.comments_selection, Some(4));
+        });
+    }
+
+    #[gpui_kit::test]
+    fn keyboard_navigation_keeps_the_selected_comment_visible(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(rigili_core::image_cache::init);
+        cx.update(rigili_core::client::init);
+        let (window, panel) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Default::default(),
+                        size(px(500.), px(500.)),
+                    ))),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| {
+                    let selections = InfoSelections::new(window, cx);
+                    cx.new(|cx| InfoPanel::new(selections, cx))
+                },
+            )
+            .expect("open info panel window")
+        });
+
+        panel.update(cx, |panel, _| {
+            panel.details = Some(std::sync::Arc::new(crate::info::VideoDetails::new(
+                Default::default(),
+            )));
+            panel.tab = InfoTab::Comments;
+            panel.comments = (1..=20u64).map(plain).collect();
+            panel.comments_list.reset(21);
+            panel.comments_loaded = true;
+            panel.comments_selection = Some(0);
+        });
+
+        draw(cx, window);
+        for _ in 0..8 {
+            panel.update(cx, |panel, cx| panel.step_comment_selection(1, cx));
+            draw(cx, window);
+        }
+
+        panel.read_with(cx, |panel, _| {
+            assert_eq!(panel.comments_selection, Some(8));
+            assert!(
+                panel.comments_list.logical_scroll_top().item_ix > 0,
+                "the comment list did not follow the selection"
+            );
+        });
+    }
+
+    fn draw(cx: &mut TestAppContext, window: gpui_kit::AnyWindowHandle) {
+        cx.update_window(window, |_, window, cx| {
+            window.draw(cx).clear(cx);
+        })
+        .expect("draw info panel");
+        cx.run_until_parked();
     }
 }

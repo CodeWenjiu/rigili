@@ -224,6 +224,7 @@ impl InfoPanel {
     pub(super) fn render_info_tab(
         &self,
         details: &VideoDetails,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme();
@@ -329,10 +330,27 @@ impl InfoPanel {
 
         let pages = (details.pages.len() > 1).then(|| self.render_pages(details, cx));
 
+        let related_selection = self.related_selection;
+        let related_active = self.related_focus.is_focused(window);
         let related = (!self.related.is_empty()).then(|| {
+            let layout = self.related_layout.clone();
+            let scroll = self.scroll.clone();
             v_flex()
                 .image_cache(rigili_core::image_cache::related(cx))
                 .gap_1()
+                .on_children_prepainted(move |bounds, window, _| {
+                    let mut layout = layout.borrow_mut();
+                    layout.bounds = bounds;
+                    layout.offset = scroll.offset().y;
+                    if let Some(index) = layout.pending.take()
+                        && let Some(row) = layout.bounds.get(index).copied()
+                        && reveal_related_row(&scroll, row)
+                    {
+                        window.request_animation_frame();
+                    }
+                })
+                .track_focus(&self.related_focus)
+                .when(related_active, |this| this.key_context(crate::shortcuts::RELATED))
                 .children(self.related.iter().enumerate().map(|(index, video)| {
                     let bvid = video.bvid.clone();
                     let cid = video.cid;
@@ -344,6 +362,8 @@ impl InfoPanel {
                     related_row(
                         index,
                         video,
+                        related_selection == Some(index),
+                        related_active,
                         cx,
                         move |event, _, cx| {
                             let _ = play_weak.update(cx, |_, cx| {
@@ -928,6 +948,8 @@ fn action_button(
 fn related_row(
     index: usize,
     video: &RecommendVideo,
+    selected: bool,
+    active: bool,
     cx: &App,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_author_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -961,6 +983,7 @@ fn related_row(
 
     h_flex()
         .id(("related", index))
+        .relative()
         .w_full()
         .items_start()
         .gap_2()
@@ -1029,6 +1052,31 @@ fn related_row(
                         .child(plain_stat(IconName::MessageCircle, danmaku.into())),
                 ),
         )
+        .when(selected, |this| {
+            let color = if active {
+                primary
+            } else {
+                primary.opacity(0.4)
+            };
+            this.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .rounded(radius)
+                    .border_2()
+                    .border_color(color),
+            )
+        })
+}
+
+fn reveal_related_row(scroll: &ScrollHandle, row: Bounds<Pixels>) -> bool {
+    let offset = scroll.offset();
+    let y = super::scroll_y_to_show(scroll.bounds(), row, offset.y, scroll.max_offset().y);
+    if y == offset.y {
+        return false;
+    }
+    scroll.set_offset(point(offset.x, y));
+    true
 }
 
 pub(crate) fn short_label(page: &VideoPage) -> String {
