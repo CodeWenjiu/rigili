@@ -31,6 +31,8 @@ actions!(
         ToggleInfo,
         /// 评论
         ToggleComments,
+        /// 写评论
+        WriteComment,
         /// 弹幕开关
         ToggleDanmaku,
         /// 重新加载
@@ -116,6 +118,11 @@ const COMMANDS: &[Command] = &[
         keys: "c",
         context: PLAYER,
         action: || Box::new(ToggleComments),
+    },
+    Command {
+        keys: "/",
+        context: PLAYER,
+        action: || Box::new(WriteComment),
     },
     Command {
         keys: "d",

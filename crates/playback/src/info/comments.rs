@@ -408,7 +408,7 @@ impl InfoPanel {
         {
             self.reply_target = target;
             if focus {
-                self.focus_draft(window, cx);
+                self.focus_composer(window, cx);
             }
             return;
         }
@@ -421,7 +421,7 @@ impl InfoPanel {
             draft.update(cx, |state, cx| state.set_placeholder("回复评论", window, cx));
         }
         if focus {
-            self.focus_draft(window, cx);
+            self.focus_composer(window, cx);
         }
         self.load_thread_page(1, cx);
         cx.notify();
@@ -444,7 +444,7 @@ impl InfoPanel {
         }
     }
 
-    fn focus_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn focus_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let draft = self.composer_draft(window, cx);
         window.defer(cx, move |window, cx| {
             draft.update(cx, |state, cx| state.focus(window, cx));
@@ -1638,11 +1638,11 @@ impl InfoPanel {
                                                             ),
                                                         CommentAction::ReplyToRoot => {
                                                             this.reply_target = None;
-                                                            this.focus_draft(window, cx);
+                                                            this.focus_composer(window, cx);
                                                         }
                                                         CommentAction::ReplyToReply => {
                                                             this.reply_target = Some(rpid);
-                                                            this.focus_draft(window, cx);
+                                                            this.focus_composer(window, cx);
                                                         }
                                                     },
                                                 )),

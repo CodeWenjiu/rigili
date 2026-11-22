@@ -21,7 +21,7 @@ use crate::request::{
 use crate::shortcuts::{
     CloseCommentThread, CloseTab, HistoryBack, HistoryForward, NextPage, NextTab, PreviousPage,
     PreviousTab, Reload, SeekBack, SpeedDown, SpeedUp, SwitchToMain, ToggleComments, ToggleDanmaku,
-    ToggleFullscreen, ToggleInfo, ToggleMute, TogglePlayback,
+    ToggleFullscreen, ToggleInfo, ToggleMute, TogglePlayback, WriteComment,
 };
 use rigili_bilibili::{Chapter, Client, VideoPage};
 use rigili_core::client;
@@ -1252,6 +1252,18 @@ impl Render for PlayerWindow {
             }))
             .on_action(cx.listener(|this, _: &ToggleComments, _, cx| {
                 this.toggle_panel(InfoTab::Comments, cx);
+            }))
+            .on_action(cx.listener(|this, _: &WriteComment, window, cx| {
+                let visible = this.show_info
+                    && !this.tab().is_live
+                    && (window.is_fullscreen()
+                        || window.viewport_size().width >= INFO_MIN_WINDOW)
+                    && this.tab().info.read(cx).tab() == InfoTab::Comments;
+                if !visible {
+                    return;
+                }
+                let info = this.tab().info.clone();
+                info.update(cx, |info, cx| info.focus_composer(window, cx));
             }))
             .on_action(cx.listener(|this, _: &ToggleDanmaku, _, cx| {
                 this.player
