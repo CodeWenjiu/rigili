@@ -1,15 +1,13 @@
 use std::sync::Arc;
 
 use gpui_kit::*;
-use rigili_bilibili::{Client, LiveRoom, PgcIndex, Popular, Recommend};
+use rigili_bilibili::{ApiError, Client, LiveRoom, PgcIndex, Popular, Recommend};
 
-use super::{HomeItem, HomeTab, HomeView, OpenTarget};
-use rigili_core::OpenLive;
+use super::{HomeItem, HomeTab, HomeView};
 use rigili_core::client;
 
 use crate::shared::browse::grid::VideoCard;
 use crate::shared::browse::paging::{Page, spawn_first, spawn_more};
-use crate::shared::browse::season::SeasonOpener;
 
 const VIDEO_PAGE_SIZE: u32 = 30;
 const LIVE_PAGE_SIZE: u32 = 30;
@@ -35,30 +33,7 @@ impl HomeView {
             cx,
             move |this| this.state_mut(tab),
             HomeItem::key,
-            async move {
-                match tab {
-                    HomeTab::Recommend => client
-                        .recommend(1, VIDEO_PAGE_SIZE)
-                        .await
-                        .map(|page| recommend_page(page, 1)),
-                    HomeTab::Popular => client
-                        .popular(1, VIDEO_PAGE_SIZE)
-                        .await
-                        .map(|page| popular_page(page, 1)),
-                    HomeTab::Live => client
-                        .live_list(1, LIVE_PAGE_SIZE)
-                        .await
-                        .map(|page| live_page(page, 1)),
-                    HomeTab::Bangumi => client
-                        .pgc_index(1, 1, PGC_PAGE_SIZE)
-                        .await
-                        .map(|page| pgc_page(page, 1)),
-                    HomeTab::Cinema => client
-                        .pgc_index(2, 1, PGC_PAGE_SIZE)
-                        .await
-                        .map(|page| pgc_page(page, 1)),
-                }
-            },
+            async move { fetch_page(&client, tab, 1).await },
             move |this| {
                 this.cards.clear();
                 this.state_mut(tab)
@@ -80,30 +55,7 @@ impl HomeView {
             HomeItem::key,
             move |page| {
                 let page = page + 1;
-                async move {
-                    match tab {
-                        HomeTab::Recommend => client
-                            .recommend(page, VIDEO_PAGE_SIZE)
-                            .await
-                            .map(|result| recommend_page(result, page)),
-                        HomeTab::Popular => client
-                            .popular(page, VIDEO_PAGE_SIZE)
-                            .await
-                            .map(|result| popular_page(result, page)),
-                        HomeTab::Live => client
-                            .live_list(page, LIVE_PAGE_SIZE)
-                            .await
-                            .map(|result| live_page(result, page)),
-                        HomeTab::Bangumi => client
-                            .pgc_index(1, page, PGC_PAGE_SIZE)
-                            .await
-                            .map(|result| pgc_page(result, page)),
-                        HomeTab::Cinema => client
-                            .pgc_index(2, page, PGC_PAGE_SIZE)
-                            .await
-                            .map(|result| pgc_page(result, page)),
-                    }
-                }
+                async move { fetch_page(&client, tab, page).await }
             },
             |_| {},
         );
@@ -125,26 +77,6 @@ impl HomeView {
             self.load_more(tab, cx);
         }
     }
-
-    pub(super) fn open_target(
-        &mut self,
-        target: OpenTarget,
-        new_tab: bool,
-        cx: &mut Context<Self>,
-    ) {
-        match target {
-            OpenTarget::Video(mut video) => {
-                video.new_tab = new_tab;
-                cx.emit(video);
-            }
-            OpenTarget::Live { room_id, title } => cx.emit(OpenLive {
-                room_id,
-                title,
-                new_tab,
-            }),
-            OpenTarget::Season(season_id) => self.open_season(season_id, cx),
-        }
-    }
 }
 
 impl crate::shared::browse::season::SeasonOpener for HomeView {
@@ -158,6 +90,35 @@ impl crate::shared::browse::season::SeasonOpener for HomeView {
 
     fn season_client(&self) -> Option<Arc<Client>> {
         self.client.clone()
+    }
+}
+
+async fn fetch_page(
+    client: &Client,
+    tab: HomeTab,
+    page: u32,
+) -> Result<Page<HomeItem, u32>, ApiError> {
+    match tab {
+        HomeTab::Recommend => client
+            .recommend(page, VIDEO_PAGE_SIZE)
+            .await
+            .map(|result| recommend_page(result, page)),
+        HomeTab::Popular => client
+            .popular(page, VIDEO_PAGE_SIZE)
+            .await
+            .map(|result| popular_page(result, page)),
+        HomeTab::Live => client
+            .live_list(page, LIVE_PAGE_SIZE)
+            .await
+            .map(|result| live_page(result, page)),
+        HomeTab::Bangumi => client
+            .pgc_index(1, page, PGC_PAGE_SIZE)
+            .await
+            .map(|result| pgc_page(result, page)),
+        HomeTab::Cinema => client
+            .pgc_index(2, page, PGC_PAGE_SIZE)
+            .await
+            .map(|result| pgc_page(result, page)),
     }
 }
 

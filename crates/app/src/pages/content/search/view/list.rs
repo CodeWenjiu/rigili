@@ -8,7 +8,7 @@ use super::cards::{ROW_HEIGHT, article_row, user_block_height, user_row};
 use super::items::SearchItem;
 use super::{SearchLayout, SearchTab, SearchView};
 use crate::shared::browse::grid::{
-    CARD_GAP, CardFrame, CardGrid, CardMetrics, CardStyle, CoverChrome, VideoCardKind, VideoCards,
+    CARD_GAP, CardFrame, CardGrid, CardStyle, CoverChrome, VideoCardKind, VideoCards,
     card_grid_loading, card_text_height, live_card, pgc_card, video_card,
 };
 use crate::shared::browse::list::{LIST_FOOTER_HEIGHT, Rows, paged_footer, virtual_rows_tracked};
@@ -19,14 +19,6 @@ use rigili_core::{OpenLive, OpenSpace};
 impl SearchView {
     pub(super) fn columns(&self) -> usize {
         VideoCards::columns(self.list_width)
-    }
-
-    fn card_metrics(&self, window: &Window) -> CardMetrics {
-        VideoCards::metrics(
-            self.list_width,
-            card_text_height(window),
-            window.scale_factor(),
-        )
     }
 
     fn render_grid_row(
@@ -181,9 +173,7 @@ impl SearchView {
 
     fn render_list(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let tab = self.tab;
-        let style = CardStyle::new(cx);
-        let metrics = self.card_metrics(window);
-        let frame = CardFrame { style, metrics };
+        let frame = CardFrame::video(cx, window, self.list_width);
         let columns = self.columns().max(1);
         let layout = tab.layout();
         let has_header = tab == SearchTab::All && !self.state(tab).users.is_empty();
@@ -197,7 +187,7 @@ impl SearchView {
         let footer_index = header_offset + rows;
         let header_height = user_block_height(self.user_content_width());
         let row_height = match layout {
-            SearchLayout::Grid => metrics.height(),
+            SearchLayout::Grid => frame.metrics.height(),
             SearchLayout::Rows => ROW_HEIGHT,
         };
         let sizes = Rows::new(rows, row_height)

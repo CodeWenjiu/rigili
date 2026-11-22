@@ -7,7 +7,7 @@ use rigili_bilibili::api::space::SpaceVideoOrder;
 
 use super::{SpaceTab, SpaceView, VideoMeta};
 use crate::shared::browse::grid::{
-    CardFrame, CardGrid, CardRowView, CardStyle, VideoCards, card_text_height, video_card_row,
+    CardFrame, CardGrid, CardRowView, VideoCards, video_card_row,
 };
 use crate::shared::browse::list::{LIST_FOOTER_HEIGHT, Rows, paged_footer, virtual_rows_tracked};
 use crate::shared::browse::paging::{Page, spawn_first, spawn_more};
@@ -176,17 +176,11 @@ impl SpaceView {
             );
         }
 
-        let style = CardStyle::new(cx);
         let columns = VideoCards::columns(self.list_width);
-        let metrics = VideoCards::metrics(
-            self.list_width,
-            card_text_height(window),
-            window.scale_factor(),
-        );
-        let frame = CardFrame { style, metrics };
+        let frame = CardFrame::video(cx, window, self.list_width);
         let rows = self.space_videos.page_rows(columns);
         let footer = self.space_videos.footer_visible();
-        let sizes = Rows::new(rows, metrics.height()).footer_if(footer, LIST_FOOTER_HEIGHT);
+        let sizes = Rows::new(rows, frame.metrics.height()).footer_if(footer, LIST_FOOTER_HEIGHT);
 
         virtual_rows_tracked(
             cx,

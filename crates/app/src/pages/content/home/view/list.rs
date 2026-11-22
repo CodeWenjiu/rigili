@@ -4,11 +4,11 @@ use gpui_kit::*;
 
 use super::{HomeItem, HomeTab, HomeView};
 use crate::shared::browse::grid::{
-    CARD_GAP, CardFrame, CardGrid, CardStyle, CardView, CoverChrome, VideoCardKind, VideoCards,
-    card_grid_loading, card_text_height, live_card, pgc_card, thumb_bytes, video_card,
-    with_opening_overlay,
+    CARD_GAP, CardFrame, CardGrid, CardView, CoverChrome, VideoCardKind, VideoCards, card_grid_loading,
+    card_text_height, live_card, pgc_card, thumb_bytes, video_card, with_opening_overlay,
 };
 use crate::shared::browse::list::{LIST_FOOTER_HEIGHT, Rows, paged_footer, virtual_rows_tracked};
+use crate::shared::browse::open::OpenTargets;
 use crate::shared::ui::state_view::{Layout, empty_state, error_state};
 use rigili_bilibili::thumbnail;
 use rigili_core::image_cache;
@@ -93,27 +93,21 @@ impl HomeView {
 
     fn render_list(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let tab = self.tab;
-        let style = CardStyle::new(cx);
         let state = self.state(tab);
         let columns = VideoCards::columns(self.list_width);
-        let metrics = VideoCards::metrics(
-            self.list_width,
-            card_text_height(window),
-            window.scale_factor(),
-        );
-        let frame = CardFrame { style, metrics };
+        let frame = CardFrame::video(cx, window, self.list_width);
         let rows = state.page_rows(columns);
         let footer = state.footer_visible();
-        let sizes = Rows::new(rows, metrics.height()).footer_if(footer, LIST_FOOTER_HEIGHT);
+        let sizes = Rows::new(rows, frame.metrics.height()).footer_if(footer, LIST_FOOTER_HEIGHT);
 
-        let row_height = f32::from(metrics.height()).max(1.);
+        let row_height = f32::from(frame.metrics.height()).max(1.);
         let viewport_rows =
             (f32::from(window.viewport_size().height) / row_height).ceil() as usize + 1;
         image_cache::tune(
             cx,
             window,
             columns * viewport_rows,
-            thumb_bytes(metrics.thumb_width),
+            thumb_bytes(frame.metrics.thumb_width),
         );
 
         virtual_rows_tracked(

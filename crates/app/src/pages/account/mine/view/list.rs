@@ -10,9 +10,8 @@ use super::{CardRow, FavoriteView, FolderSource, MineTab, MineView};
 use crate::app::platform::theme::cover_scrim;
 use crate::shared::browse::filter;
 use crate::shared::browse::grid::{
-    CARD_GAP, CardFrame, CardGrid, CardRowView, CardStyle, FolderCards, VideoCards,
-    card_grid_loading, card_text_height, folder_card_height, skeleton_card, video_card_row,
-    video_card_row_indexed,
+    CARD_GAP, CardFrame, CardGrid, CardRowView, FolderCards, VideoCards, card_grid_loading,
+    card_text_height, folder_card_height, skeleton_card, video_card_row, video_card_row_indexed,
 };
 use crate::shared::browse::list::{LIST_FOOTER_HEIGHT, Rows, paged_footer, virtual_rows_tracked};
 use crate::shared::ui::state_view::{Layout, empty_state, error_state};
@@ -257,7 +256,6 @@ impl MineView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let style = CardStyle::new(cx);
         let needle = if tab == MineTab::Favorites {
             None
         } else {
@@ -273,15 +271,10 @@ impl MineView {
         }
         let count = filtered.as_ref().map_or(state.items.len(), Vec::len);
         let columns = VideoCards::columns(self.list_width);
-        let metrics = VideoCards::metrics(
-            self.list_width,
-            card_text_height(window),
-            window.scale_factor(),
-        );
-        let frame = CardFrame { style, metrics };
+        let frame = CardFrame::video(cx, window, self.list_width);
         let rows = count.div_ceil(columns);
         let footer = state.footer_visible();
-        let sizes = Rows::new(rows, metrics.height()).footer_if(footer, LIST_FOOTER_HEIGHT);
+        let sizes = Rows::new(rows, frame.metrics.height()).footer_if(footer, LIST_FOOTER_HEIGHT);
 
         virtual_rows_tracked(
             cx,

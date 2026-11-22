@@ -11,6 +11,7 @@ use gpui_kit::*;
 use rigili_bilibili::{Client, LiveRoom, PgcItem};
 
 use crate::shared::browse::grid::{CardGrid, LiveCard, PgcCard, VideoCard, VideoCards};
+use crate::shared::browse::open::{OpenTarget, OpenTargets};
 use crate::shared::browse::selection::{CardCursor, CardNav};
 use crate::shared::ui::tabs::TabNav;
 use rigili_core::client;
@@ -70,13 +71,6 @@ pub(crate) enum HomeItem {
     Video(VideoCard),
     Live(LiveCard),
     Pgc(PgcCard),
-}
-
-#[derive(Clone)]
-pub(crate) enum OpenTarget {
-    Video(OpenVideo),
-    Live { room_id: u64, title: String },
-    Season(u64),
 }
 
 impl HomeItem {
@@ -144,6 +138,7 @@ pub struct HomeView {
 impl EventEmitter<OpenVideo> for HomeView {}
 impl EventEmitter<OpenLive> for HomeView {}
 impl EventEmitter<OpenSpace> for HomeView {}
+impl OpenTargets for HomeView {}
 
 impl crate::shared::browse::list::ListWidth for HomeView {
     fn list_width(&self) -> Pixels {

@@ -104,6 +104,19 @@ pub(crate) struct CardFrame {
     pub(crate) metrics: CardMetrics,
 }
 
+impl CardFrame {
+    pub(crate) fn video(cx: &App, window: &Window, width: Pixels) -> Self {
+        Self {
+            style: CardStyle::new(cx),
+            metrics: VideoCards::metrics(
+                width,
+                card_text_height(window),
+                window.scale_factor(),
+            ),
+        }
+    }
+}
+
 impl CardMetrics {
     pub(crate) fn height(self) -> Pixels {
         card_height(self.width, self.text_height)

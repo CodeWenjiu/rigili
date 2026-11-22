@@ -12,7 +12,7 @@ use gpui_kit::*;
 use rigili_bilibili::api::search::{SearchOrder, SearchType};
 use rigili_bilibili::{Client, SpaceRelationStatus};
 
-use items::{SearchItem, SearchTarget};
+use items::SearchItem;
 use rigili_core::client;
 use rigili_core::login as login_state;
 use rigili_core::runtime::spawn_api;
@@ -22,8 +22,8 @@ use rigili_core::{
 };
 
 use crate::pages::account::login;
+use crate::shared::browse::open::OpenTargets;
 use crate::shared::browse::paging::Paged;
-use crate::shared::browse::season::SeasonOpener;
 use crate::shared::browse::selection::{CardCursor, CardNav};
 use crate::shared::ui::tabs::TabNav;
 
@@ -179,6 +179,7 @@ pub struct SearchView {
 impl EventEmitter<OpenVideo> for SearchView {}
 impl EventEmitter<OpenLive> for SearchView {}
 impl EventEmitter<OpenSpace> for SearchView {}
+impl OpenTargets for SearchView {}
 
 impl crate::shared::browse::list::ListWidth for SearchView {
     fn list_width(&self) -> Pixels {
@@ -480,24 +481,7 @@ impl CardNav for SearchView {
         let Some(target) = self.state(self.tab).items.get(index).map(SearchItem::target) else {
             return;
         };
-        match target {
-            SearchTarget::Video(mut open) => {
-                open.new_tab = new_tab;
-                cx.emit(open);
-            }
-            SearchTarget::Season(season_id) => self.open_season(season_id, cx),
-            SearchTarget::Live { room_id, title } => {
-                cx.emit(OpenLive {
-                    room_id,
-                    title,
-                    new_tab,
-                });
-            }
-            SearchTarget::Article(id) => {
-                cx.open_url(&format!("https://www.bilibili.com/read/cv{id}"));
-            }
-            SearchTarget::User { mid, name } => cx.emit(OpenSpace { mid, name }),
-        }
+        self.open_target(target, new_tab, cx);
     }
 }
 
