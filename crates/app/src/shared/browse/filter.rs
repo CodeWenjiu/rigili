@@ -1,26 +1,32 @@
+use std::rc::Rc;
+
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Sizable;
+use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-pub(crate) struct Search {
+pub(crate) struct Search<V: 'static> {
     input: Entity<InputState>,
     keyword: String,
+    on_submit: Submit<V>,
     _subscription: Subscription,
 }
 
-impl Search {
-    pub(crate) fn new<V>(
+type Submit<V> = Rc<dyn Fn(&mut V, &mut Context<V>)>;
+
+impl<V: 'static> Search<V> {
+    pub(crate) fn new(
         window: &mut Window,
         cx: &mut Context<V>,
         placeholder: impl Into<SharedString>,
         on_submit: impl Fn(&mut V, &mut Context<V>) + 'static,
-    ) -> Self
-    where
-        V: 'static,
-    {
+    ) -> Self {
+        let placeholder = placeholder.into();
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+        let on_submit = Rc::new(on_submit);
+        let callback = on_submit.clone();
         let subscription = cx.subscribe_in(&input, window, move |this, input, event, _, cx| {
             let submit = match event {
                 InputEvent::PressEnter { .. } => true,
@@ -28,13 +34,14 @@ impl Search {
                 _ => false,
             };
             if submit {
-                on_submit(this, cx);
+                callback(this, cx);
             }
         });
 
         Self {
             input,
             keyword: String::new(),
+            on_submit,
             _subscription: subscription,
         }
     }
@@ -66,16 +73,36 @@ impl Search {
             .update(cx, |input, cx| input.set_value("", window, cx));
     }
 
-    pub(crate) fn field(&self) -> Div {
+    pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {
+        self.input.update(cx, |input, cx| input.focus(window, cx));
+    }
+
+    pub(crate) fn field(&self, cx: &mut Context<V>) -> AnyElement {
+        let input = self.input.clone();
+        let on_submit = self.on_submit.clone();
+        let submit = Button::new("filter-submit")
+            .ghost()
+            .xsmall()
+            .icon(IconName::Search)
+            .accessibility_label("搜索")
+            .tooltip("搜索")
+            .on_click(cx.listener(move |this, _, window, cx| {
+                on_submit(this, cx);
+                input.update(cx, |input, cx| input.focus(window, cx));
+            }));
+
         div()
-            .w(px(240.))
+            .w_full()
             .key_context(rigili_core::TEXT_INPUT_CONTEXT)
             .child(
                 Input::new(&self.input)
-                    .small()
+                    .w_full()
+                    .large()
+                    .h(px(40.))
                     .cleanable(true)
-                    .prefix(IconName::Search),
+                    .suffix(submit),
             )
+            .into_any_element()
     }
 }
 

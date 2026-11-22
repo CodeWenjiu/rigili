@@ -9,7 +9,7 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use super::{MainView, Page, SIDEBAR_WIDTH, TOP_BAR_HEIGHT};
+use super::{MainView, Page, SIDEBAR_WIDTH, SearchHost, TOP_BAR_HEIGHT};
 use crate::pages::account::login;
 use crate::pages::content::home::{HomeTab, HomeView};
 use crate::shared::ui::tabs::{TabNav, TabStrip};
@@ -211,7 +211,10 @@ impl MainView {
                             .on_click({
                                 let weak = weak.clone();
                                 move |_, _, cx| {
-                                    let _ = weak.update(cx, |this, cx| this.show_home(cx));
+                                    let _ = weak.update_in(cx, |this, window, cx| {
+                                        this.show_home(cx);
+                                        this.focus.focus(window, cx);
+                                    });
                                 }
                             })
                             .render("nav-home", cx),
@@ -222,7 +225,10 @@ impl MainView {
                             .on_click({
                                 let weak = weak.clone();
                                 move |_, _, cx| {
-                                    let _ = weak.update(cx, |this, cx| this.show_mine(cx));
+                                    let _ = weak.update_in(cx, |this, window, cx| {
+                                        this.show_mine(cx);
+                                        this.focus.focus(window, cx);
+                                    });
                                 }
                             })
                             .render("nav-mine", cx),
@@ -281,7 +287,6 @@ impl MainView {
     pub(super) fn render_top_bar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let background = cx.theme().background;
         let border = cx.theme().border;
-        let search_width = search_width(window);
         let foreground = cx.theme().foreground;
         let home_tab = self.home.read(cx).active_tab();
 
@@ -311,82 +316,7 @@ impl MainView {
                     .min_w_0()
                     .flex()
                     .justify_center()
-                    .key_context(rigili_core::TEXT_INPUT_CONTEXT)
-                    .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                        let handled = match event.keystroke.key.as_str() {
-                            "escape" => {
-                                let open = this.search_box_is_open();
-                                if open {
-                                    this.dismiss_search_box(window, cx);
-                                }
-                                open
-                            }
-                            "down" => this.move_suggestion_selection(true, cx),
-                            "up" => this.move_suggestion_selection(false, cx),
-                            "enter" => this.pick_active_suggestion(window, cx),
-                            _ => false,
-                        };
-                        if handled {
-                            cx.stop_propagation();
-                        }
-                    }))
-                    .child({
-                        // The search input owns Enter and Space; Popover's trigger
-                        // would bind both to Confirm before the input sees them.
-                        let focus = self.search_box.focus_handle(cx);
-                        let mut popup = Popup::new(
-                            "search-popover",
-                            Input::new(self.search_box.input())
-                                .w_full()
-                                .large()
-                                .h(px(40.))
-                                .cleanable(true)
-                                .suffix(
-                                    Button::new("search-submit")
-                                        .ghost()
-                                        .xsmall()
-                                        .icon(IconName::Search)
-                                        .accessibility_label("搜索")
-                                        .tooltip("搜索")
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.submit_search(window, cx);
-                                        })),
-                                ),
-                        )
-                        .offset(px(6.))
-                        .w_full()
-                        .max_w(search_width)
-                        .track_focus(&focus)
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _, _, cx| {
-                                if !this.search_box_is_open() {
-                                    this.open_search_box(cx);
-                                }
-                            }),
-                        );
-                        if self.search_box_is_open() {
-                            let weak = cx.entity().downgrade();
-                            let panel = self.render_search_panel(&weak, search_width, cx);
-                            popup = popup.content(
-                                div()
-                                    .id("search-popover-content")
-                                    .role(Role::Dialog)
-                                    .tab_group()
-                                    // Tracking the field's focus handle here would
-                                    // move its focus node to this panel, which is
-                                    // a sibling of the input; key bindings resolve
-                                    // along that node's contexts, so backspace and
-                                    // the other editing keys would stop reaching
-                                    // the input.
-                                    .on_mouse_down_out(cx.listener(|this, _, window, cx| {
-                                        this.dismiss_search_box(window, cx);
-                                    }))
-                                    .child(panel),
-                            );
-                        }
-                        popup
-                    }),
+                    .child(self.render_search(window, cx)),
             )
             .child(
                 Button::new("window-close")
@@ -397,6 +327,102 @@ impl MainView {
                     .on_click(|_, window, _| window.remove_window()),
             )
             .into_any_element()
+    }
+
+    fn render_search(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let width = search_width(window);
+        let host = self.search_host();
+        let content = match host {
+            SearchHost::Global => self.render_global_search(width, cx),
+            SearchHost::Mine => self.mine.update(cx, |mine, cx| mine.search_field(cx)),
+            SearchHost::Space => self.space.update(cx, |space, cx| space.search_field(cx)),
+        };
+
+        div()
+            .w_full()
+            .max_w(width)
+            .key_context(rigili_core::TEXT_INPUT_CONTEXT)
+            .capture_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                let global = host == SearchHost::Global;
+                let handled = match event.keystroke.key.as_str() {
+                    "escape" => {
+                        if global {
+                            this.dismiss_search_box(window, cx);
+                            this.focus.focus(window, cx);
+                        } else {
+                            this.blur_search(window, cx);
+                        }
+                        true
+                    }
+                    "down" if global => this.move_suggestion_selection(true, cx),
+                    "up" if global => this.move_suggestion_selection(false, cx),
+                    "enter" if global => this.pick_active_suggestion(window, cx),
+                    _ => false,
+                };
+                if handled {
+                    cx.stop_propagation();
+                }
+            }))
+            .child(content)
+            .into_any_element()
+    }
+
+    fn render_global_search(&self, width: Pixels, cx: &mut Context<Self>) -> AnyElement {
+        // The search input owns Enter and Space; Popover's trigger
+        // would bind both to Confirm before the input sees them.
+        let focus = self.search_box.focus_handle(cx);
+        let mut popup = Popup::new(
+            "search-popover",
+            Input::new(self.search_box.input())
+                .w_full()
+                .large()
+                .h(px(40.))
+                .cleanable(true)
+                .suffix(
+                    Button::new("search-submit")
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::Search)
+                        .accessibility_label("搜索")
+                        .tooltip("搜索")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.submit_search(window, cx);
+                        })),
+                ),
+        )
+        .offset(px(6.))
+        .w_full()
+        .max_w(width)
+        .track_focus(&focus)
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                if !this.search_box_is_open() {
+                    this.open_search_box(cx);
+                }
+            }),
+        );
+        if self.search_box_is_open() {
+            let weak = cx.entity().downgrade();
+            let panel = self.render_search_panel(&weak, width, cx);
+            popup = popup.content(
+                div()
+                    .id("search-popover-content")
+                    .role(Role::Dialog)
+                    .tab_group()
+                    // Tracking the field's focus handle here would
+                    // move its focus node to this panel, which is
+                    // a sibling of the input; key bindings resolve
+                    // along that node's contexts, so backspace and
+                    // the other editing keys would stop reaching
+                    // the input.
+                    .on_mouse_down_out(cx.listener(|this, _, window, cx| {
+                        this.dismiss_search_box(window, cx);
+                    }))
+                    .child(panel),
+            );
+        }
+        popup.into_any_element()
     }
 }
 

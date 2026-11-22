@@ -64,7 +64,7 @@ pub struct SpaceView {
     dynamics_scroll: scroll::ScrollArea,
     collections_scroll: scroll::ScrollArea,
     list_width: Pixels,
-    search: filter::Search,
+    search: filter::Search<SpaceView>,
 }
 
 impl EventEmitter<OpenVideo> for SpaceView {}
@@ -83,10 +83,9 @@ impl crate::shared::browse::list::ListWidth for SpaceView {
 
 impl SpaceView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let search =
-            filter::Search::new(window, cx, "搜索动态、投稿、合集", |this, cx| {
-                this.submit_search(cx)
-            });
+        let search = filter::Search::new(window, cx, "搜索动态、投稿、合集", |this, cx| {
+            this.submit_search(cx)
+        });
         let comments_focus = cx.focus_handle();
         let comment_trigger_focus = cx.focus_handle();
         Self {
@@ -203,6 +202,14 @@ impl SpaceView {
         }
     }
 
+    pub(crate) fn search_field(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        self.search.field(cx)
+    }
+
+    pub(crate) fn focus_search(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search.focus(window, cx);
+    }
+
     fn render_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
         h_flex()
             .flex_shrink_0()
@@ -214,8 +221,6 @@ impl SpaceView {
                     .padding_x(px(8.))
                     .render_nav(self, cx, SpaceTab::label, |_| None),
             )
-            .child(div().flex_1())
-            .child(self.search.field())
             .into_any_element()
     }
 

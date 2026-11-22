@@ -186,7 +186,7 @@ pub struct MineView {
     list_width: Pixels,
     folder_scroll: ListScroll,
     favorites_keyword: String,
-    search: filter::Search,
+    search: filter::Search<MineView>,
 }
 
 impl EventEmitter<OpenVideo> for MineView {}
@@ -219,10 +219,9 @@ impl crate::shared::browse::season::SeasonOpener for MineView {
 impl MineView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let client = client::get(cx).ok();
-        let search =
-            filter::Search::new(window, cx, "搜索收藏、历史与追番", |this, cx| {
-                this.submit_search(cx)
-            });
+        let search = filter::Search::new(window, cx, "搜索收藏、历史与追番", |this, cx| {
+            this.submit_search(cx)
+        });
         Self {
             client,
             tab: preferences::mine_tab(cx),
@@ -258,6 +257,14 @@ impl MineView {
             self.load_favorite_items(cx);
         }
         cx.notify();
+    }
+
+    pub(crate) fn search_field(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        self.search.field(cx)
+    }
+
+    pub(crate) fn focus_search(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search.focus(window, cx);
     }
 
     fn bangumi_state(&self, cinema: bool) -> &Paged<BangumiFollow, u32> {
@@ -334,8 +341,6 @@ impl MineView {
                     .padding_x(px(8.))
                     .render_nav(self, cx, MineTab::label, |_| None),
             )
-            .child(div().flex_1())
-            .child(self.search.field())
             .into_any_element()
     }
 }

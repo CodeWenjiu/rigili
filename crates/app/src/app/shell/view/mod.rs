@@ -50,6 +50,23 @@ enum Page {
     Mine,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SearchHost {
+    Global,
+    Mine,
+    Space,
+}
+
+fn search_host_for(page: Page, space_open: bool) -> SearchHost {
+    if space_open {
+        SearchHost::Space
+    } else if page == Page::Mine {
+        SearchHost::Mine
+    } else {
+        SearchHost::Global
+    }
+}
+
 #[derive(Clone)]
 struct SpaceRoute {
     mid: u64,
@@ -219,6 +236,7 @@ impl MainView {
         cx: &mut Context<Self>,
     ) {
         preview::stop_all(cx);
+        self.search_box.close();
         self.messages_open = false;
         if self
             .spaces
@@ -235,6 +253,7 @@ impl MainView {
         self.space.update(cx, |space, cx| {
             space.open(mid, name, window, cx);
         });
+        self.focus.focus(window, cx);
         cx.notify();
     }
 
@@ -266,15 +285,43 @@ impl MainView {
                 space.open(previous.mid, previous.name, window, cx);
             });
         }
+        self.focus.focus(window, cx);
         cx.notify();
     }
 
     fn focus_search_shortcut(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         preview::stop_all(cx);
         self.messages_open = false;
-        self.open_search_box(cx);
-        self.search_box.focus(window, cx);
+        match self.search_host() {
+            SearchHost::Global => {
+                self.open_search_box(cx);
+                self.search_box.focus(window, cx);
+            }
+            SearchHost::Mine => {
+                self.search_box.close();
+                self.mine.update(cx, |mine, cx| mine.focus_search(window, cx));
+            }
+            SearchHost::Space => {
+                self.search_box.close();
+                self.space
+                    .update(cx, |space, cx| space.focus_search(window, cx));
+            }
+        }
         cx.notify();
+    }
+
+    fn search_host(&self) -> SearchHost {
+        search_host_for(self.page, !self.spaces.is_empty())
+    }
+
+    fn blur_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.blur(cx);
+        let focus = self.focus.clone();
+        window.defer(cx, move |window, cx| {
+            if window.focused(cx).is_none() {
+                focus.focus(window, cx);
+            }
+        });
     }
 
     fn show_home(&mut self, cx: &mut Context<Self>) {
@@ -290,6 +337,7 @@ impl MainView {
 
     fn show_mine(&mut self, cx: &mut Context<Self>) {
         preview::stop_all(cx);
+        self.search_box.close();
         let messages = self.messages_open;
         self.messages_open = false;
         if !messages && self.page == Page::Mine && self.spaces.is_empty() {
@@ -553,7 +601,7 @@ impl Render for MainView {
 
 #[cfg(test)]
 mod tests {
-    use super::{SpaceRoute, my_space_is_on_top};
+    use super::{Page, SearchHost, SpaceRoute, my_space_is_on_top, search_host_for};
 
     fn route(mid: u64) -> SpaceRoute {
         SpaceRoute {
@@ -568,5 +616,15 @@ mod tests {
         assert!(my_space_is_on_top(&[route(1)], 1));
         assert!(!my_space_is_on_top(&[route(1), route(2)], 1));
         assert!(my_space_is_on_top(&[route(2), route(1)], 1));
+    }
+
+    #[test]
+    fn routes_search_by_context() {
+        assert_eq!(search_host_for(Page::Home, false), SearchHost::Global);
+        assert_eq!(search_host_for(Page::Search, false), SearchHost::Global);
+        assert_eq!(search_host_for(Page::Mine, false), SearchHost::Mine);
+        assert_eq!(search_host_for(Page::Home, true), SearchHost::Space);
+        assert_eq!(search_host_for(Page::Search, true), SearchHost::Space);
+        assert_eq!(search_host_for(Page::Mine, true), SearchHost::Space);
     }
 }

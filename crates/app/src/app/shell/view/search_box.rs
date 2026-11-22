@@ -106,13 +106,7 @@ impl MainView {
         let focused = self.search_box.focus_handle(cx).is_focused(window);
         self.search_box.close();
         if focused {
-            window.blur(cx);
-            let focus = self.focus.clone();
-            window.defer(cx, move |window, cx| {
-                if window.focused(cx).is_none() {
-                    focus.focus(window, cx);
-                }
-            });
+            self.blur_search(window, cx);
         }
         cx.notify();
     }
