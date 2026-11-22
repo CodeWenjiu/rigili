@@ -17,7 +17,7 @@ use crate::shared::ui::state_view::{Layout, error_state};
 use rigili_core::{OpenLive, OpenSpace};
 
 impl SearchView {
-    fn columns(&self) -> usize {
+    pub(super) fn columns(&self) -> usize {
         VideoCards::columns(self.list_width)
     }
 
@@ -58,7 +58,7 @@ impl SearchView {
                         video,
                         VideoCardKind::Search,
                         CardFrame { style, metrics },
-                        CoverChrome::OnHover,
+                        self.cards.view(window, index, CoverChrome::OnHover),
                         window,
                         cx,
                         on_open,
@@ -71,9 +71,9 @@ impl SearchView {
                     });
                     pgc_card(
                         media,
-                        style,
-                        metrics,
+                        CardFrame { style, metrics },
                         Some(IconName::Tv),
+                        self.cards.view(window, index, CoverChrome::OnHover),
                         window,
                         cx,
                         on_open,
@@ -91,9 +91,9 @@ impl SearchView {
                     });
                     live_card(
                         live,
-                        style,
-                        metrics,
+                        CardFrame { style, metrics },
                         Some(IconName::Radio),
+                        self.cards.view(window, index, CoverChrome::OnHover),
                         window,
                         cx,
                         on_open,
@@ -108,6 +108,8 @@ impl SearchView {
         &self,
         item: &SearchItem,
         style: CardStyle,
+        selected: bool,
+        active: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         match item {
@@ -116,7 +118,7 @@ impl SearchView {
                 let on_open = cx.listener(move |_, _: &ClickEvent, _, cx| {
                     cx.open_url(&format!("https://www.bilibili.com/read/cv{id}"));
                 });
-                article_row(article, style, on_open)
+                article_row(article, style, selected, active, on_open)
             }
             SearchItem::User(user) => {
                 let mid = user.mid;
@@ -127,7 +129,7 @@ impl SearchView {
                         name: name.clone(),
                     });
                 });
-                user_row(user, style, on_open, cx)
+                user_row(user, style, selected, active, on_open, cx)
             }
             _ => div().into_any_element(),
         }
@@ -159,7 +161,11 @@ impl SearchView {
         }
 
         match self.state(tab).items.get(row) {
-            Some(item) => self.render_row_item(item, frame.style, cx),
+            Some(item) => {
+                let selected = self.cards.index() == Some(row);
+                let active = self.cards.active(window);
+                self.render_row_item(item, frame.style, selected, active, cx)
+            }
             None => div().into_any_element(),
         }
     }
@@ -206,6 +212,7 @@ impl SearchView {
             self.list_width,
             &self.state(tab).scroll,
             move |this, range, window, cx| {
+                this.cards.set_first_row(range.start);
                 this.maybe_load_more(tab, range.end.saturating_sub(1), rows, header_offset, cx);
                 range
                     .map(|row| {

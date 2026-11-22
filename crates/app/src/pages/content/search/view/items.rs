@@ -1,7 +1,7 @@
 use rigili_bilibili::{SearchArticle, SearchUser};
 
 use crate::shared::browse::grid::{LiveCard, PgcCard, VideoCard};
-use rigili_core::{format_count, format_date};
+use rigili_core::{OpenVideo, format_count, format_date};
 
 pub(crate) enum SearchItem {
     Video(VideoCard),
@@ -21,6 +21,30 @@ impl SearchItem {
             Self::User(user) => format!("user:{}", user.mid),
         }
     }
+
+    pub(crate) fn target(&self) -> SearchTarget {
+        match self {
+            Self::Video(video) => SearchTarget::Video(video.open()),
+            Self::Media(media) => SearchTarget::Season(media.season_id),
+            Self::Live(live) => SearchTarget::Live {
+                room_id: live.room_id,
+                title: live.title.clone(),
+            },
+            Self::Article(article) => SearchTarget::Article(article.id),
+            Self::User(user) => SearchTarget::User {
+                mid: user.mid,
+                name: user.name.clone(),
+            },
+        }
+    }
+}
+
+pub(crate) enum SearchTarget {
+    Video(OpenVideo),
+    Season(u64),
+    Live { room_id: u64, title: String },
+    Article(u64),
+    User { mid: u64, name: String },
 }
 
 pub(crate) struct ArticleItem {

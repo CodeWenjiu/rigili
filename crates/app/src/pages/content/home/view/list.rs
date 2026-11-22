@@ -4,7 +4,7 @@ use gpui_kit::*;
 
 use super::{HomeItem, HomeTab, HomeView};
 use crate::shared::browse::grid::{
-    CARD_GAP, CardFrame, CardGrid, CardStyle, CoverChrome, VideoCardKind, VideoCards,
+    CARD_GAP, CardFrame, CardGrid, CardStyle, CardView, CoverChrome, VideoCardKind, VideoCards,
     card_grid_loading, card_text_height, live_card, pgc_card, thumb_bytes, video_card,
     with_opening_overlay,
 };
@@ -27,6 +27,8 @@ impl HomeView {
         let start = row * columns;
         let end = (start + columns).min(state.items.len());
         let opening = self.opening;
+        let selection = self.cards.index();
+        let active = self.cards.active(window);
 
         h_flex()
             .h(frame.metrics.height())
@@ -34,6 +36,7 @@ impl HomeView {
             .children((start..end).map(|index| {
                 let item = &state.items[index];
                 let target = item.target();
+                let selected = selection == Some(index);
                 let is_opening = item
                     .season_id()
                     .is_some_and(|season_id| opening == Some(season_id));
@@ -51,7 +54,11 @@ impl HomeView {
                         video,
                         VideoCardKind::Default,
                         frame,
-                        chrome,
+                        CardView {
+                            chrome,
+                            selected,
+                            active,
+                        },
                         window,
                         cx,
                         on_open,
@@ -64,7 +71,12 @@ impl HomeView {
                         .child(card)
                         .into_any_element()
                 } else {
-                    home_card(item, is_opening, frame, window, cx, on_open)
+                    let view = CardView {
+                        chrome: CoverChrome::OnHover,
+                        selected,
+                        active,
+                    };
+                    home_card(item, is_opening, view, frame, window, cx, on_open)
                 }
             }))
             .into_any_element()
@@ -112,6 +124,7 @@ impl HomeView {
             self.list_width,
             &self.state(tab).scroll,
             move |this, range, window, cx| {
+                this.cards.set_first_row(range.start);
                 let first = range.start;
                 let last = range.end;
                 let count = range.len();
@@ -226,15 +239,16 @@ impl HomeView {
 fn home_card(
     item: &HomeItem,
     opening: bool,
+    view: CardView,
     frame: CardFrame,
     window: &mut Window,
     cx: &mut App,
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
-    let CardFrame { style, metrics } = frame;
+    let CardFrame { metrics, .. } = frame;
     let card = match item {
-        HomeItem::Live(card) => live_card(card, style, metrics, None, window, cx, on_open),
-        HomeItem::Pgc(card) => pgc_card(card, style, metrics, None, window, cx, on_open),
+        HomeItem::Live(card) => live_card(card, frame, None, view, window, cx, on_open),
+        HomeItem::Pgc(card) => pgc_card(card, frame, None, view, window, cx, on_open),
         HomeItem::Video(_) => return div().into_any_element(),
     };
 

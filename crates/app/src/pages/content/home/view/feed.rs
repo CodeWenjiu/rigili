@@ -60,6 +60,7 @@ impl HomeView {
                 }
             },
             move |this| {
+                this.cards.clear();
                 this.state_mut(tab)
                     .scroll
                     .scroll_to_item(0, ScrollStrategy::Top);

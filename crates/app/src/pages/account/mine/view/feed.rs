@@ -79,6 +79,7 @@ impl MineView {
     }
 
     pub(super) fn reload_tab(&mut self, tab: MineTab, cx: &mut Context<Self>) {
+        self.cards.clear();
         match tab {
             MineTab::Favorites => self.load_folders(cx),
             MineTab::History => self.load_history(cx),
@@ -142,6 +143,7 @@ impl MineView {
             FolderSource::Created => FavoriteView::Folders,
             FolderSource::Collected => FavoriteView::Subscribed,
         });
+        self.cards.clear();
         if self.folders.current != Some(id) {
             self.folders.current = Some(id);
             self.load_favorite_items(cx);

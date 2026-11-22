@@ -205,6 +205,8 @@ fn bangumi_card(
             author: None,
             video: None,
             chrome: CoverChrome::OnHover,
+            selected: false,
+            active: false,
             overlay: CardOverlay {
                 leading: score.as_deref().map(|score| (IconName::Star, score)),
                 secondary: None,

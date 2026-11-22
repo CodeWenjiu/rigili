@@ -21,6 +21,7 @@ impl SearchView {
         if self.keyword.is_empty() {
             return;
         }
+        self.cards.clear();
         let client = match self.cached_client(cx) {
             Ok(client) => client,
             Err(error) => {

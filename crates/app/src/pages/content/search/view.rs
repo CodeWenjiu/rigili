@@ -12,7 +12,7 @@ use gpui_kit::*;
 use rigili_bilibili::api::search::{SearchOrder, SearchType};
 use rigili_bilibili::{Client, SpaceRelationStatus};
 
-use items::SearchItem;
+use items::{SearchItem, SearchTarget};
 use rigili_core::client;
 use rigili_core::login as login_state;
 use rigili_core::runtime::spawn_api;
@@ -23,6 +23,8 @@ use rigili_core::{
 
 use crate::pages::account::login;
 use crate::shared::browse::paging::Paged;
+use crate::shared::browse::season::SeasonOpener;
+use crate::shared::browse::selection::{CardCursor, CardNav};
 use crate::shared::ui::tabs::TabNav;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -171,6 +173,7 @@ pub struct SearchView {
     opening: Option<u64>,
     notice: Option<String>,
     list_width: Pixels,
+    cards: CardCursor,
 }
 
 impl EventEmitter<OpenVideo> for SearchView {}
@@ -202,7 +205,9 @@ impl crate::shared::browse::season::SeasonOpener for SearchView {
 }
 
 impl SearchView {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(card_focus: FocusHandle, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let cards = CardCursor::new(card_focus);
+        cards.observe(window, cx);
         let (client, error) = match client::get(cx) {
             Ok(client) => (Some(client), None),
             Err(error) => (None, Some(api_error_message(error))),
@@ -218,6 +223,7 @@ impl SearchView {
             opening: None,
             notice: None,
             list_width: px(0.),
+            cards,
         };
         if let Some(error) = error {
             view.state_mut(SearchTab::default()).error = Some(error);
@@ -240,6 +246,7 @@ impl SearchView {
         self.follows.clear();
         self.opening = None;
         self.notice = None;
+        self.cards.clear();
         self.tabs = std::array::from_fn(|_| TabState::new());
 
         if self.keyword.is_empty() {
@@ -259,6 +266,7 @@ impl SearchView {
         self.tabs = std::array::from_fn(|_| TabState::new());
         self.follows.clear();
         self.notice = None;
+        self.cards.clear();
 
         if self.keyword.is_empty() {
             cx.notify();
@@ -276,6 +284,7 @@ impl SearchView {
 
         self.tab = tab;
         self.notice = None;
+        self.cards.clear();
         let needs_load = self.state(tab).needs_first_load();
         if needs_load {
             self.load_tab(tab, cx);
@@ -301,6 +310,10 @@ impl SearchView {
 
     fn user_content_width(&self) -> Pixels {
         px((self.list_width.as_f32() - 32.).max(0.))
+    }
+
+    fn header_offset(&self) -> usize {
+        usize::from(self.tab == SearchTab::All && !self.state(self.tab).users.is_empty())
     }
 
     fn sync_follows(&mut self, mids: Vec<u64>, cx: &mut Context<Self>) {
@@ -429,6 +442,65 @@ impl TabNav for SearchView {
     }
 }
 
+impl CardNav for SearchView {
+    fn cards(&self) -> &CardCursor {
+        &self.cards
+    }
+
+    fn cards_mut(&mut self) -> &mut CardCursor {
+        &mut self.cards
+    }
+
+    fn card_count(&self) -> usize {
+        self.state(self.tab).items.len()
+    }
+
+    fn card_columns(&self) -> usize {
+        match self.tab.layout() {
+            SearchLayout::Grid => self.columns(),
+            SearchLayout::Rows => 1,
+        }
+    }
+
+    fn card_start(&self) -> usize {
+        first_card(self.cards.first_row(), self.header_offset(), self.card_columns())
+    }
+
+    fn reveal_card(&self, index: usize) {
+        let row = card_row(index, self.header_offset(), self.card_columns());
+        self.state(self.tab)
+            .scroll
+            .scroll_to_item(row, ScrollStrategy::Nearest);
+    }
+
+    fn open_card(&mut self, new_tab: bool, cx: &mut Context<Self>) {
+        let Some(index) = self.cards.index() else {
+            return;
+        };
+        let Some(target) = self.state(self.tab).items.get(index).map(SearchItem::target) else {
+            return;
+        };
+        match target {
+            SearchTarget::Video(mut open) => {
+                open.new_tab = new_tab;
+                cx.emit(open);
+            }
+            SearchTarget::Season(season_id) => self.open_season(season_id, cx),
+            SearchTarget::Live { room_id, title } => {
+                cx.emit(OpenLive {
+                    room_id,
+                    title,
+                    new_tab,
+                });
+            }
+            SearchTarget::Article(id) => {
+                cx.open_url(&format!("https://www.bilibili.com/read/cv{id}"));
+            }
+            SearchTarget::User { mid, name } => cx.emit(OpenSpace { mid, name }),
+        }
+    }
+}
+
 impl Refresh for SearchView {
     fn refresh(&mut self, cx: &mut Context<Self>) {
         self.reload(cx);
@@ -471,9 +543,17 @@ impl Render for SearchView {
     }
 }
 
+fn first_card(first_row: usize, header: usize, columns: usize) -> usize {
+    first_row.saturating_sub(header) * columns.max(1)
+}
+
+fn card_row(index: usize, header: usize, columns: usize) -> usize {
+    index / columns.max(1) + header
+}
+
 #[cfg(test)]
 mod tests {
-    use super::SearchTab;
+    use super::{SearchTab, card_row, first_card};
 
     #[test]
     fn orders_search_tabs_like_the_reference_layout() {
@@ -489,5 +569,18 @@ mod tests {
         assert!(SearchTab::Video.supports_order());
         assert!(!SearchTab::Bangumi.supports_order());
         assert!(!SearchTab::User.supports_order());
+    }
+
+    #[test]
+    fn accounts_for_the_user_block_above_the_results() {
+        assert_eq!(first_card(0, 0, 3), 0);
+        assert_eq!(first_card(4, 0, 3), 12);
+        assert_eq!(first_card(0, 1, 3), 0);
+        assert_eq!(first_card(4, 1, 3), 9);
+
+        assert_eq!(card_row(0, 0, 3), 0);
+        assert_eq!(card_row(7, 0, 3), 2);
+        assert_eq!(card_row(0, 1, 3), 1);
+        assert_eq!(card_row(7, 1, 3), 3);
     }
 }

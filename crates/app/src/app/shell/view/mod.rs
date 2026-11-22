@@ -11,8 +11,10 @@ use rigili_core::{OpenLive, OpenSpace, OpenVideo, Refresh};
 use super::playback::Playback;
 use crate::app::preferences;
 use crate::app::shortcuts::{
-    Back, FocusPlayer, FocusSearch, MAIN, NextContentTab, NextSubTab, PreviousContentTab, PreviousSubTab,
-    ReloadPage, ShowHome, ShowMine, ToggleMessages, ToggleMySpace, open_help,
+    Back, CARD, FocusPlayer, FocusSearch, MAIN, NextContentTab, NextSubTab, OpenSelectedCard,
+    OpenSelectedCardInNewTab, PreviousContentTab, PreviousSubTab, ReloadPage, SelectCardDown,
+    SelectCardLeft, SelectCardRight, SelectCardUp, ShowHome, ShowMine, ToggleCardFocus,
+    ToggleMessages, ToggleMySpace, open_help,
 };
 use crate::pages::account::login;
 use crate::pages::account::message::MessagesView;
@@ -20,6 +22,7 @@ use crate::pages::account::mine::MineView;
 use crate::pages::content::home::HomeView;
 use crate::pages::content::search::SearchView;
 use crate::pages::content::space::{CloseSpace, SpaceView};
+use crate::shared::browse::selection::{CardMotion, CardNav};
 use crate::shared::media::preview;
 use crate::shared::ui::tabs::{SubTabNav, TabNav};
 use rigili_core::ShowShortcuts;
@@ -37,6 +40,7 @@ pub struct MainView {
     search_box: SearchBox,
     page: Page,
     focus: FocusHandle,
+    card_focus: FocusHandle,
     spaces: Vec<SpaceRoute>,
     playback: Option<Playback>,
     window_handle: AnyWindowHandle,
@@ -97,15 +101,20 @@ pub fn open_main(cx: &mut App) -> Result<()> {
 
 impl MainView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let home = cx.new(HomeView::new);
-        let search = cx.new(SearchView::new);
+        let focus = cx.focus_handle();
+        let card_focus = cx.focus_handle();
+        let home = cx.new(|cx| HomeView::new(card_focus.clone(), window, cx));
+        let search = cx.new(|cx| SearchView::new(card_focus.clone(), window, cx));
         let messages = cx.new(|_| MessagesView::new());
-        let mine = cx.new(|cx| MineView::new(window, cx));
-        let space = cx.new(|cx| SpaceView::new(window, cx));
+        let mine = cx.new(|cx| MineView::new(card_focus.clone(), window, cx));
+        let space = cx.new(|cx| SpaceView::new(card_focus.clone(), window, cx));
         let search_box = SearchBox::new(window, cx);
         login::restore(window, cx);
 
-        let focus = cx.focus_handle();
+        cx.on_focus(&card_focus, window, |_, _, cx| cx.notify())
+            .detach();
+        cx.on_blur(&card_focus, window, |_, _, cx| cx.notify())
+            .detach();
         let deferred_focus = focus.clone();
         window.defer(cx, move |window, cx| deferred_focus.focus(window, cx));
 
@@ -188,6 +197,7 @@ impl MainView {
             search_box,
             page: Page::default(),
             focus,
+            card_focus,
             spaces: Vec::new(),
             playback: None,
             window_handle: window.window_handle(),
@@ -393,6 +403,70 @@ impl MainView {
         }
     }
 
+    fn page_card_count(&self, cx: &App) -> usize {
+        if self.messages_open || self.search_box_is_open() {
+            return 0;
+        }
+        if !self.spaces.is_empty() {
+            return self.space.read(cx).card_count();
+        }
+        match self.page {
+            Page::Home => self.home.read(cx).card_count(),
+            Page::Search => self.search.read(cx).card_count(),
+            Page::Mine => self.mine.read(cx).card_count(),
+        }
+    }
+
+    fn toggle_card_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.card_focus.is_focused(window) {
+            self.focus.focus(window, cx);
+            return;
+        }
+        if self.page_card_count(cx) == 0 {
+            return;
+        }
+        if self.spaces.is_empty() {
+            match self.page {
+                Page::Home => self.home.update(cx, |home, cx| home.ensure_card(cx)),
+                Page::Search => self.search.update(cx, |search, cx| search.ensure_card(cx)),
+                Page::Mine => self.mine.update(cx, |mine, cx| mine.ensure_card(cx)),
+            }
+        } else {
+            self.space.update(cx, |space, cx| space.ensure_card(cx));
+        }
+        self.card_focus.focus(window, cx);
+    }
+
+    fn step_card(&mut self, motion: CardMotion, cx: &mut Context<Self>) {
+        if self.messages_open {
+            return;
+        }
+        if self.spaces.is_empty() {
+            match self.page {
+                Page::Home => self.home.update(cx, |home, cx| home.step_card(motion, cx)),
+                Page::Search => self.search.update(cx, |search, cx| search.step_card(motion, cx)),
+                Page::Mine => self.mine.update(cx, |mine, cx| mine.step_card(motion, cx)),
+            }
+        } else {
+            self.space.update(cx, |space, cx| space.step_card(motion, cx));
+        }
+    }
+
+    fn open_card(&mut self, new_tab: bool, cx: &mut Context<Self>) {
+        if self.messages_open {
+            return;
+        }
+        if self.spaces.is_empty() {
+            match self.page {
+                Page::Home => self.home.update(cx, |home, cx| home.open_card(new_tab, cx)),
+                Page::Search => self.search.update(cx, |search, cx| search.open_card(new_tab, cx)),
+                Page::Mine => self.mine.update(cx, |mine, cx| mine.open_card(new_tab, cx)),
+            }
+        } else {
+            self.space.update(cx, |space, cx| space.open_card(new_tab, cx));
+        }
+    }
+
     fn focus_player(&mut self, cx: &mut Context<Self>) {
         if let Some(playback) = &self.playback {
             playback.activate(cx);
@@ -402,6 +476,8 @@ impl MainView {
     fn back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.search_box_is_open() {
             self.dismiss_search_box(window, cx);
+        } else if self.card_focus.is_focused(window) {
+            self.focus.focus(window, cx);
         } else if self.messages_open {
             self.messages_open = false;
             self.focus.focus(window, cx);
@@ -532,6 +608,27 @@ impl Render for MainView {
             .on_action(cx.listener(|this, _: &NextSubTab, _, cx| {
                 this.step_sub_tab(1, cx);
             }))
+            .on_action(cx.listener(|this, _: &ToggleCardFocus, window, cx| {
+                this.toggle_card_focus(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SelectCardLeft, _, cx| {
+                this.step_card(CardMotion::Left, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SelectCardRight, _, cx| {
+                this.step_card(CardMotion::Right, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SelectCardUp, _, cx| {
+                this.step_card(CardMotion::Up, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SelectCardDown, _, cx| {
+                this.step_card(CardMotion::Down, cx);
+            }))
+            .on_action(cx.listener(|this, _: &OpenSelectedCard, _, cx| {
+                this.open_card(false, cx);
+            }))
+            .on_action(cx.listener(|this, _: &OpenSelectedCardInNewTab, _, cx| {
+                this.open_card(true, cx);
+            }))
             .on_action(cx.listener(|this, _: &Back, window, cx| {
                 this.back(window, cx);
             }))
@@ -552,6 +649,10 @@ impl Render for MainView {
                             .flex_1()
                             .min_h_0()
                             .w_full()
+                            .track_focus(&self.card_focus)
+                            .when(self.card_focus.is_focused(window), |this| {
+                                this.key_context(CARD)
+                            })
                             .child(if !self.spaces.is_empty() {
                                 self.space.clone().into_any_element()
                             } else {

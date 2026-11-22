@@ -21,9 +21,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::preferences;
 use crate::shared::browse::filter;
-use crate::shared::browse::grid::{CardFrame, VideoCard};
+use crate::shared::browse::grid::{CardFrame, CardGrid, VideoCard, VideoCards};
 use crate::shared::browse::list::ListScroll;
 use crate::shared::browse::paging::Paged;
+use crate::shared::browse::selection::{CardCursor, CardNav};
 use crate::shared::ui::tabs::{TabNav, TabStrip};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,6 +188,7 @@ pub struct MineView {
     folder_scroll: ListScroll,
     favorites_keyword: String,
     search: filter::Search<MineView>,
+    cards: CardCursor,
 }
 
 impl EventEmitter<OpenVideo> for MineView {}
@@ -217,8 +219,10 @@ impl crate::shared::browse::season::SeasonOpener for MineView {
 }
 
 impl MineView {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(card_focus: FocusHandle, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let client = client::get(cx).ok();
+        let cards = CardCursor::new(card_focus);
+        cards.observe(window, cx);
         let search = filter::Search::new(window, cx, "搜索收藏、历史与追番", |this, cx| {
             this.submit_search(cx)
         });
@@ -244,6 +248,7 @@ impl MineView {
             folder_scroll: ListScroll::new(),
             favorites_keyword: String::new(),
             search,
+            cards,
         }
     }
 
@@ -251,6 +256,7 @@ impl MineView {
         if !self.search.submit(cx) {
             return;
         }
+        self.cards.clear();
         let folder_contents = self.tab == MineTab::Favorites
             && (self.favorites_view == FavoriteView::Folder || self.browsing_folder.is_some());
         if folder_contents {
@@ -292,6 +298,7 @@ impl MineView {
             return;
         }
         self.tab = tab;
+        self.cards.clear();
         preferences::set_mine_tab(cx, tab);
         self.load_if_needed(cx);
         cx.notify();
@@ -319,6 +326,7 @@ impl MineView {
         self.opening = None;
         self.notice = None;
         self.favorites_keyword.clear();
+        self.cards.clear();
 
         let weak = cx.entity().downgrade();
         window.defer(cx, move |window, cx| {
@@ -357,6 +365,110 @@ impl TabNav for MineView {
     fn select_tab(&mut self, tab: MineTab, cx: &mut Context<Self>) {
         self.show_tab(tab, cx);
     }
+}
+
+impl CardNav for MineView {
+    fn cards(&self) -> &CardCursor {
+        &self.cards
+    }
+
+    fn cards_mut(&mut self) -> &mut CardCursor {
+        &mut self.cards
+    }
+
+    fn card_count(&self) -> usize {
+        let Some(tab) = self.card_tab() else {
+            return 0;
+        };
+        let items = &self.state(tab).items;
+        match self.card_needle(tab) {
+            Some(needle) => items.iter().filter(|card| card_matches(card, &needle)).count(),
+            None => items.len(),
+        }
+    }
+
+    fn card_columns(&self) -> usize {
+        VideoCards::columns(self.list_width)
+    }
+
+    fn reveal_card(&self, index: usize) {
+        let Some(tab) = self.card_tab() else {
+            return;
+        };
+        let columns = self.card_columns().max(1);
+        self.state(tab)
+            .scroll
+            .scroll_to_item(index / columns, ScrollStrategy::Nearest);
+    }
+
+    fn open_card(&mut self, new_tab: bool, cx: &mut Context<Self>) {
+        let Some(tab) = self.card_tab() else {
+            return;
+        };
+        let Some(displayed) = self.cards.index() else {
+            return;
+        };
+        let Some(index) = self.card_item_index(tab, displayed) else {
+            return;
+        };
+        let Some(card) = self.state(tab).items.get(index) else {
+            return;
+        };
+        let mut open = card.open();
+        open.new_tab = new_tab;
+        cx.emit(open);
+    }
+}
+
+impl MineView {
+    fn card_tab(&self) -> Option<MineTab> {
+        match self.tab {
+            MineTab::History | MineTab::WatchLater => Some(self.tab),
+            MineTab::Favorites => match self.favorites_view {
+                FavoriteView::Folder => Some(MineTab::Favorites),
+                FavoriteView::Folders | FavoriteView::Subscribed
+                    if self.browsing_folder.is_some() =>
+                {
+                    Some(MineTab::Favorites)
+                }
+                _ => None,
+            },
+            MineTab::Offline => None,
+        }
+    }
+
+    fn card_needle(&self, tab: MineTab) -> Option<String> {
+        if tab == MineTab::Favorites {
+            None
+        } else {
+            self.search.needle()
+        }
+    }
+
+    fn card_item_index(&self, tab: MineTab, displayed: usize) -> Option<usize> {
+        let needle = self.card_needle(tab);
+        card_item_index(&self.state(tab).items, needle.as_deref(), displayed)
+    }
+}
+
+fn card_item_index(
+    cards: &[VideoCard],
+    needle: Option<&str>,
+    displayed: usize,
+) -> Option<usize> {
+    match needle {
+        Some(needle) => cards
+            .iter()
+            .enumerate()
+            .filter(|(_, card)| card_matches(card, needle))
+            .nth(displayed)
+            .map(|(index, _)| index),
+        None => (displayed < cards.len()).then_some(displayed),
+    }
+}
+
+fn card_matches(card: &VideoCard, needle: &str) -> bool {
+    filter::text_matches(card.title(), needle) || filter::text_matches(card.author(), needle)
 }
 
 impl Refresh for MineView {
@@ -423,5 +535,40 @@ impl Render for MineView {
                 this.child(self.render_tabs(cx))
                     .child(self.render_body(window, cx))
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rigili_bilibili::SearchVideo;
+
+    use super::card_item_index;
+    use crate::shared::browse::grid::VideoCard;
+
+    fn card(title: &str) -> VideoCard {
+        VideoCard::from(SearchVideo {
+            bvid: title.into(),
+            title: title.into(),
+            pic: String::new(),
+            author: String::new(),
+            mid: 0,
+            duration: 0,
+            pubdate: 0,
+            play: 0,
+            danmaku: 0,
+            like: 0,
+        })
+    }
+
+    #[test]
+    fn maps_filtered_card_positions_to_items() {
+        let cards = [card("Rust 入门"), card("Go 入门"), card("Rust 进阶")];
+
+        assert_eq!(card_item_index(&cards, Some("rust"), 0), Some(0));
+        assert_eq!(card_item_index(&cards, Some("rust"), 1), Some(2));
+        assert_eq!(card_item_index(&cards, Some("rust"), 2), None);
+
+        assert_eq!(card_item_index(&cards, None, 1), Some(1));
+        assert_eq!(card_item_index(&cards, None, 3), None);
     }
 }

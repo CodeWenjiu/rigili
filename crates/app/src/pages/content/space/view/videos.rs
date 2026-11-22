@@ -7,7 +7,7 @@ use rigili_bilibili::api::space::SpaceVideoOrder;
 
 use super::{SpaceTab, SpaceView, VideoMeta};
 use crate::shared::browse::grid::{
-    CardFrame, CardGrid, CardStyle, VideoCards, card_text_height, video_card_row,
+    CardFrame, CardGrid, CardRowView, CardStyle, VideoCards, card_text_height, video_card_row,
 };
 use crate::shared::browse::list::{LIST_FOOTER_HEIGHT, Rows, paged_footer, virtual_rows_tracked};
 use crate::shared::browse::paging::{Page, spawn_first, spawn_more};
@@ -196,6 +196,7 @@ impl SpaceView {
             self.list_width,
             &self.space_videos.scroll,
             move |this, range, window, cx| {
+                this.cards.set_first_row(range.start);
                 this.maybe_load_more_space_videos(range.end.saturating_sub(1), rows, cx);
                 range
                     .map(|row| {
@@ -229,7 +230,18 @@ impl SpaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        video_card_row(&self.space_videos.items, row, columns, frame, window, cx)
+        video_card_row(
+            &self.space_videos.items,
+            row,
+            columns,
+            CardRowView {
+                frame,
+                selection: self.cards.index(),
+                active: self.cards.active(window),
+            },
+            window,
+            cx,
+        )
     }
 
     fn render_space_videos_footer(&self, cx: &mut Context<Self>) -> AnyElement {

@@ -10,8 +10,9 @@ use super::{CardRow, FavoriteView, FolderSource, MineTab, MineView};
 use crate::app::platform::theme::cover_scrim;
 use crate::shared::browse::filter;
 use crate::shared::browse::grid::{
-    CARD_GAP, CardFrame, CardGrid, CardStyle, FolderCards, VideoCards, card_grid_loading,
-    card_text_height, folder_card_height, skeleton_card, video_card_row, video_card_row_indexed,
+    CARD_GAP, CardFrame, CardGrid, CardRowView, CardStyle, FolderCards, VideoCards,
+    card_grid_loading, card_text_height, folder_card_height, skeleton_card, video_card_row,
+    video_card_row_indexed,
 };
 use crate::shared::browse::list::{LIST_FOOTER_HEIGHT, Rows, paged_footer, virtual_rows_tracked};
 use crate::shared::ui::state_view::{Layout, empty_state, error_state};
@@ -228,11 +229,16 @@ impl MineView {
             frame,
         } = line;
         let state = self.state(tab);
+        let view = CardRowView {
+            frame,
+            selection: self.cards.index(),
+            active: self.cards.active(window),
+        };
         match filtered {
             Some(indices) => {
-                video_card_row_indexed(&state.items, indices, row, columns, frame, window, cx)
+                video_card_row_indexed(&state.items, indices, row, columns, view, window, cx)
             }
-            None => video_card_row(&state.items, row, columns, frame, window, cx),
+            None => video_card_row(&state.items, row, columns, view, window, cx),
         }
     }
 
@@ -285,6 +291,7 @@ impl MineView {
             self.list_width,
             &self.state(tab).scroll,
             move |this, range, window, cx| {
+                this.cards.set_first_row(range.start);
                 this.maybe_load_more(tab, range.end.saturating_sub(1), rows, cx);
                 range
                     .map(|row| {

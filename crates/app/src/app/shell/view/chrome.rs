@@ -252,7 +252,10 @@ impl MainView {
                             .on_click({
                                 let weak = weak.clone();
                                 move |_, _, cx| {
-                                    let _ = weak.update(cx, |this, cx| this.toggle_messages(cx));
+                                    let _ = weak.update_in(cx, |this, window, cx| {
+                                        this.toggle_messages(cx);
+                                        this.focus.focus(window, cx);
+                                    });
                                 }
                             })
                             .render("nav-messages", cx),

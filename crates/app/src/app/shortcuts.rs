@@ -4,6 +4,7 @@ use gpui_kit::*;
 use rigili_core::ShowShortcuts;
 
 pub(crate) const MAIN: &str = "Main";
+pub(crate) const CARD: &str = "CardFocus";
 
 actions!(
     shell,
@@ -32,6 +33,20 @@ actions!(
         PreviousSubTab,
         /// 下一个子标签
         NextSubTab,
+        /// 键盘浏览卡片
+        ToggleCardFocus,
+        /// 选择左侧卡片
+        SelectCardLeft,
+        /// 选择右侧卡片
+        SelectCardRight,
+        /// 选择上方卡片
+        SelectCardUp,
+        /// 选择下方卡片
+        SelectCardDown,
+        /// 打开选中项
+        OpenSelectedCard,
+        /// 在新标签页打开选中项
+        OpenSelectedCardInNewTab,
     ]
 );
 
@@ -89,6 +104,41 @@ const COMMANDS: &[Command] = &[
         keys: "}",
         context: MAIN,
         action: || Box::new(NextSubTab),
+    },
+    Command {
+        keys: "i",
+        context: MAIN,
+        action: || Box::new(ToggleCardFocus),
+    },
+    Command {
+        keys: "h",
+        context: CARD,
+        action: || Box::new(SelectCardLeft),
+    },
+    Command {
+        keys: "j",
+        context: CARD,
+        action: || Box::new(SelectCardDown),
+    },
+    Command {
+        keys: "k",
+        context: CARD,
+        action: || Box::new(SelectCardUp),
+    },
+    Command {
+        keys: "l",
+        context: CARD,
+        action: || Box::new(SelectCardRight),
+    },
+    Command {
+        keys: "enter",
+        context: CARD,
+        action: || Box::new(OpenSelectedCard),
+    },
+    Command {
+        keys: "ctrl-enter",
+        context: CARD,
+        action: || Box::new(OpenSelectedCardInNewTab),
     },
     Command {
         keys: "e",
@@ -162,7 +212,7 @@ mod tests {
     use gpui_kit::{KeyBinding, KeyBindingContextPredicate, KeyContext, Keystroke, Modifiers};
     use rigili_core::ShowShortcuts;
 
-    use super::{COMMANDS, MAIN, binding_predicate};
+    use super::{CARD, COMMANDS, MAIN, binding_predicate};
 
     #[test]
     fn commands_parse_and_do_not_conflict() {
@@ -185,7 +235,7 @@ mod tests {
                 command.keys,
                 command.context
             );
-            assert_eq!(command.context, MAIN);
+            assert!(command.context == MAIN || command.context == CARD);
         }
 
         let keys = COMMANDS
@@ -195,9 +245,67 @@ mod tests {
         assert_eq!(
             keys,
             BTreeSet::from([
-                "1", "2", "r", "s", "e", "!", "@", "[", "]", "{", "}", "?", "/"
+                "1", "2", "r", "s", "e", "!", "@", "[", "]", "{", "}", "?", "/", "i", "h", "j", "k", "l",
+                "enter", "ctrl-enter"
             ])
         );
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_enter_matches_the_platform_keystroke(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(gpui_kit::init);
+        let command = COMMANDS
+            .iter()
+            .find(|command| command.keys == "ctrl-enter")
+            .expect("ctrl-enter binding");
+        let binding = cx
+            .update(|cx| {
+                KeyBinding::load(command.keys, (command.action)(), None, false, None, cx)
+            })
+            .expect("static keystroke");
+        let typed = Keystroke {
+            key: "enter".into(),
+            key_char: None,
+            modifiers: Modifiers {
+                control: true,
+                ..Default::default()
+            },
+        };
+
+        assert_eq!(binding.match_keystrokes(&[typed]), Some(false));
+    }
+
+    #[test]
+    fn card_commands_only_apply_while_the_card_region_is_focused() {
+        let main = KeyContext::parse(MAIN).expect("main context");
+        let card = KeyContext::parse(CARD).expect("card context");
+        let card_commands = COMMANDS
+            .iter()
+            .filter(|command| command.context == CARD)
+            .collect::<Vec<_>>();
+        assert_eq!(card_commands.len(), 6);
+
+        for command in card_commands {
+            let predicate = binding_predicate(command.context);
+            assert!(
+                predicate.depth_of(std::slice::from_ref(&main)).is_none(),
+                "{} must not reach the main context",
+                command.keys
+            );
+            assert!(
+                predicate
+                    .depth_of(&[main.clone(), card.clone()])
+                    .is_some(),
+                "{} must reach the card context",
+                command.keys
+            );
+        }
+
+        let enter = COMMANDS
+            .iter()
+            .find(|command| command.keys == "enter")
+            .expect("enter binding");
+        assert_eq!(enter.context, CARD);
     }
 
     #[test]

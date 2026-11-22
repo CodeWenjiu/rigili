@@ -25,12 +25,14 @@ impl MineView {
         if self.favorites_view == view {
             if self.browsing_folder.is_some() {
                 self.browsing_folder = None;
+                self.cards.clear();
                 cx.notify();
             }
             return;
         }
         self.favorites_view = view;
         self.browsing_folder = None;
+        self.cards.clear();
         if view == FavoriteView::Folder {
             self.ensure_default_folder(cx);
             if self.favorites_keyword != self.search.keyword() {
@@ -66,6 +68,7 @@ impl MineView {
 
     fn close_folder(&mut self, cx: &mut Context<Self>) {
         self.browsing_folder = None;
+        self.cards.clear();
         cx.notify();
     }
 
@@ -211,6 +214,7 @@ impl MineView {
     pub(super) fn folders_changed(&mut self, cx: &mut Context<Self>) {
         self.favorites_view = FavoriteView::Folders;
         self.browsing_folder = None;
+        self.cards.clear();
         self.load_folders(cx);
         cx.notify();
     }

@@ -14,8 +14,9 @@ use rigili_core::{OpenSpace, OpenVideo, Refresh};
 
 use super::comment;
 use crate::shared::browse::filter;
-use crate::shared::browse::grid::VideoCard;
+use crate::shared::browse::grid::{CardGrid, VideoCard, VideoCards};
 use crate::shared::browse::paging::Paged;
+use crate::shared::browse::selection::{CardCursor, CardNav};
 use crate::shared::ui::scroll;
 use crate::shared::ui::tabs::{TabNav, TabStrip};
 
@@ -65,6 +66,7 @@ pub struct SpaceView {
     collections_scroll: scroll::ScrollArea,
     list_width: Pixels,
     search: filter::Search<SpaceView>,
+    cards: CardCursor,
 }
 
 impl EventEmitter<OpenVideo> for SpaceView {}
@@ -82,10 +84,12 @@ impl crate::shared::browse::list::ListWidth for SpaceView {
 }
 
 impl SpaceView {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(card_focus: FocusHandle, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search = filter::Search::new(window, cx, "搜索动态、投稿、合集", |this, cx| {
             this.submit_search(cx)
         });
+        let cards = CardCursor::new(card_focus);
+        cards.observe(window, cx);
         let comments_focus = cx.focus_handle();
         let comment_trigger_focus = cx.focus_handle();
         Self {
@@ -111,6 +115,7 @@ impl SpaceView {
             collections_scroll: scroll::ScrollArea::new(),
             list_width: px(0.),
             search,
+            cards,
         }
     }
 
@@ -137,6 +142,7 @@ impl SpaceView {
         self.space_order = SpaceVideoOrder::default();
         self.collections = CollectionsState::new();
         self.list_width = px(0.);
+        self.cards.clear();
         self.search.clear(window, cx);
         self.load_profile(cx);
         self.load_if_needed(cx);
@@ -170,6 +176,7 @@ impl SpaceView {
     }
 
     fn reload_tab(&mut self, cx: &mut Context<Self>) {
+        self.cards.clear();
         match self.tab {
             SpaceTab::Dynamics => self.load_dynamics(cx),
             SpaceTab::Videos => self.load_space_videos(cx),
@@ -182,6 +189,7 @@ impl SpaceView {
             return;
         }
         self.tab = tab;
+        self.cards.clear();
         self.load_if_needed(cx);
         cx.notify();
     }
@@ -192,6 +200,7 @@ impl SpaceView {
         }
         self.expanded_comments = None;
         self.comment_trigger_key = None;
+        self.cards.clear();
         if self.tab == SpaceTab::Videos {
             self.load_space_videos(cx);
         } else {
@@ -282,6 +291,47 @@ impl TabNav for SpaceView {
 
     fn select_tab(&mut self, tab: SpaceTab, cx: &mut Context<Self>) {
         self.show_tab(tab, cx);
+    }
+}
+
+impl CardNav for SpaceView {
+    fn cards(&self) -> &CardCursor {
+        &self.cards
+    }
+
+    fn cards_mut(&mut self) -> &mut CardCursor {
+        &mut self.cards
+    }
+
+    fn card_count(&self) -> usize {
+        if self.tab == SpaceTab::Videos {
+            self.space_videos.items.len()
+        } else {
+            0
+        }
+    }
+
+    fn card_columns(&self) -> usize {
+        VideoCards::columns(self.list_width)
+    }
+
+    fn reveal_card(&self, index: usize) {
+        let columns = self.card_columns().max(1);
+        self.space_videos
+            .scroll
+            .scroll_to_item(index / columns, ScrollStrategy::Nearest);
+    }
+
+    fn open_card(&mut self, new_tab: bool, cx: &mut Context<Self>) {
+        let Some(index) = self.cards.index() else {
+            return;
+        };
+        let Some(card) = self.space_videos.items.get(index) else {
+            return;
+        };
+        let mut open = card.open();
+        open.new_tab = new_tab;
+        cx.emit(open);
     }
 }
 

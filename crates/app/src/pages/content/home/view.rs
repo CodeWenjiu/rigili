@@ -10,7 +10,8 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rigili_bilibili::{Client, LiveRoom, PgcItem};
 
-use crate::shared::browse::grid::{LiveCard, PgcCard, VideoCard};
+use crate::shared::browse::grid::{CardGrid, LiveCard, PgcCard, VideoCard, VideoCards};
+use crate::shared::browse::selection::{CardCursor, CardNav};
 use crate::shared::ui::tabs::TabNav;
 use rigili_core::client;
 use rigili_core::{OpenLive, OpenSpace, OpenVideo, Refresh, api_error_message};
@@ -137,6 +138,7 @@ pub struct HomeView {
     list_width: Pixels,
     hovered: Option<SharedString>,
     prefetched: Option<(HomeTab, usize, usize)>,
+    cards: CardCursor,
 }
 
 impl EventEmitter<OpenVideo> for HomeView {}
@@ -154,7 +156,9 @@ impl crate::shared::browse::list::ListWidth for HomeView {
 }
 
 impl HomeView {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(card_focus: FocusHandle, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let cards = CardCursor::new(card_focus);
+        cards.observe(window, cx);
         let (client, error) = match client::get(cx) {
             Ok(client) => (Some(client), None),
             Err(error) => (None, Some(api_error_message(error))),
@@ -168,6 +172,7 @@ impl HomeView {
             list_width: px(0.),
             hovered: None,
             prefetched: None,
+            cards,
         };
         match error {
             Some(error) => {
@@ -203,6 +208,7 @@ impl HomeView {
 
         self.tab = tab;
         self.notice = None;
+        self.cards.clear();
         let needs_load = {
             let state = self.state(tab);
             state.items.is_empty() && !state.loading && state.error.is_none()
@@ -231,6 +237,42 @@ impl TabNav for HomeView {
 
     fn select_tab(&mut self, tab: HomeTab, cx: &mut Context<Self>) {
         self.show_tab(tab, cx);
+    }
+}
+
+impl CardNav for HomeView {
+    fn cards(&self) -> &CardCursor {
+        &self.cards
+    }
+
+    fn cards_mut(&mut self) -> &mut CardCursor {
+        &mut self.cards
+    }
+
+    fn card_count(&self) -> usize {
+        self.state(self.tab).items.len()
+    }
+
+    fn card_columns(&self) -> usize {
+        VideoCards::columns(self.list_width)
+    }
+
+    fn reveal_card(&self, index: usize) {
+        let columns = self.card_columns().max(1);
+        self.state(self.tab)
+            .scroll
+            .scroll_to_item(index / columns, ScrollStrategy::Nearest);
+    }
+
+    fn open_card(&mut self, new_tab: bool, cx: &mut Context<Self>) {
+        let Some(index) = self.cards.index() else {
+            return;
+        };
+        let Some(item) = self.state(self.tab).items.get(index) else {
+            return;
+        };
+        let target = item.target();
+        self.open_target(target, new_tab, cx);
     }
 }
 

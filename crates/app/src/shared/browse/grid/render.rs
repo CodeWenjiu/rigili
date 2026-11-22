@@ -31,6 +31,8 @@ pub(crate) struct MediaCard<'a> {
     pub(crate) author: Option<MediaAuthor>,
     pub(crate) video: Option<MediaVideo>,
     pub(crate) chrome: CoverChrome,
+    pub(crate) selected: bool,
+    pub(crate) active: bool,
 }
 
 /// How the cover's hover chrome joins the tree. A grid that tracks hover
@@ -43,6 +45,34 @@ pub(crate) enum CoverChrome {
     /// Dimmed and revealed by the cover's own hover, for lists that do not
     /// track hover themselves.
     OnHover,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CardView {
+    pub(crate) chrome: CoverChrome,
+    pub(crate) selected: bool,
+    pub(crate) active: bool,
+}
+
+pub(crate) fn selection_outline(primary: Hsla, radius: Pixels, active: bool) -> impl IntoElement {
+    let color = if active {
+        primary
+    } else {
+        primary.opacity(0.4)
+    };
+    div()
+        .absolute()
+        .inset_0()
+        .rounded(radius)
+        .border_2()
+        .border_color(color)
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct CardRowView {
+    pub(crate) frame: super::CardFrame,
+    pub(crate) selection: Option<usize>,
+    pub(crate) active: bool,
 }
 
 #[derive(Clone)]
@@ -85,6 +115,8 @@ pub(crate) fn media_card(
         author,
         video,
         chrome,
+        selected,
+        active,
     } = card;
 
     if video.is_some() {
@@ -264,6 +296,9 @@ pub(crate) fn media_card(
                             this.child(trailing.to_owned())
                         }),
                 )
+                .when(selected, |this| {
+                    this.child(selection_outline(style.primary, style.radius, active))
+                })
                 .when_some(video, |this, video| {
                     this.child(
                         Button::new(watch_later_id)
@@ -338,7 +373,7 @@ pub(crate) fn video_card<V>(
     card: &VideoCard,
     kind: VideoCardKind,
     frame: super::CardFrame,
-    chrome: CoverChrome,
+    view: CardView,
     window: &mut Window,
     cx: &mut Context<V>,
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -346,6 +381,11 @@ pub(crate) fn video_card<V>(
 where
     V: EventEmitter<OpenSpace> + 'static,
 {
+    let CardView {
+        chrome,
+        selected,
+        active,
+    } = view;
     let super::CardFrame { style, metrics } = frame;
     let views = card.views();
     let danmaku = card.danmaku();
@@ -393,6 +433,8 @@ where
                 badge: None,
             },
             chrome,
+            selected,
+            active,
         },
         style,
         metrics.width,
@@ -408,23 +450,31 @@ pub(crate) fn video_card_row<V>(
     cards: &[VideoCard],
     row: usize,
     columns: usize,
-    frame: super::CardFrame,
+    view: CardRowView,
     window: &mut Window,
     cx: &mut Context<V>,
 ) -> AnyElement
 where
     V: EventEmitter<OpenSpace> + EventEmitter<OpenVideo> + 'static,
 {
-    let super::CardFrame { style, metrics } = frame;
+    let super::CardFrame { style, metrics } = view.frame;
     let start = row * columns;
     let end = (start + columns).min(cards.len());
 
     h_flex()
         .h(metrics.height())
         .gap(CARD_GAP)
-        .children(
-            (start..end).map(|index| video_card_cell(&cards[index], style, metrics, window, cx)),
-        )
+        .children((start..end).map(|index| {
+            video_card_cell(
+                &cards[index],
+                style,
+                metrics,
+                view.selection == Some(index),
+                view.active,
+                window,
+                cx,
+            )
+        }))
         .into_any_element()
 }
 
@@ -433,24 +483,31 @@ pub(crate) fn video_card_row_indexed<V>(
     indices: &[usize],
     row: usize,
     columns: usize,
-    frame: super::CardFrame,
+    view: CardRowView,
     window: &mut Window,
     cx: &mut Context<V>,
 ) -> AnyElement
 where
     V: EventEmitter<OpenSpace> + EventEmitter<OpenVideo> + 'static,
 {
-    let super::CardFrame { style, metrics } = frame;
+    let super::CardFrame { style, metrics } = view.frame;
     let start = row * columns;
     let end = (start + columns).min(indices.len());
 
     h_flex()
         .h(metrics.height())
         .gap(CARD_GAP)
-        .children(
-            (start..end)
-                .map(|index| video_card_cell(&cards[indices[index]], style, metrics, window, cx)),
-        )
+        .children((start..end).map(|index| {
+            video_card_cell(
+                &cards[indices[index]],
+                style,
+                metrics,
+                view.selection == Some(index),
+                view.active,
+                window,
+                cx,
+            )
+        }))
         .into_any_element()
 }
 
@@ -458,6 +515,8 @@ fn video_card_cell<V>(
     card: &VideoCard,
     style: CardStyle,
     metrics: CardMetrics,
+    selected: bool,
+    active: bool,
     window: &mut Window,
     cx: &mut Context<V>,
 ) -> AnyElement
@@ -474,7 +533,11 @@ where
         card,
         VideoCardKind::Default,
         super::CardFrame { style, metrics },
-        CoverChrome::OnHover,
+        CardView {
+            chrome: CoverChrome::OnHover,
+            selected,
+            active,
+        },
         window,
         cx,
         on_open,
@@ -483,13 +546,19 @@ where
 
 pub(crate) fn live_card(
     card: &LiveCard,
-    style: CardStyle,
-    metrics: CardMetrics,
+    frame: super::CardFrame,
     footer_icon: Option<IconName>,
+    view: CardView,
     window: &mut Window,
     cx: &mut App,
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
+    let super::CardFrame { style, metrics } = frame;
+    let CardView {
+        chrome,
+        selected,
+        active,
+    } = view;
     media_card(
         MediaCard {
             id: card.id.clone(),
@@ -507,7 +576,9 @@ pub(crate) fn live_card(
             },
             author: None,
             video: None,
-            chrome: CoverChrome::OnHover,
+            chrome,
+            selected,
+            active,
         },
         style,
         metrics.width,
@@ -521,13 +592,19 @@ pub(crate) fn live_card(
 
 pub(crate) fn pgc_card(
     card: &PgcCard,
-    style: CardStyle,
-    metrics: CardMetrics,
+    frame: super::CardFrame,
     footer_icon: Option<IconName>,
+    view: CardView,
     window: &mut Window,
     cx: &mut App,
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
+    let super::CardFrame { style, metrics } = frame;
+    let CardView {
+        chrome,
+        selected,
+        active,
+    } = view;
     media_card(
         MediaCard {
             id: card.id.clone(),
@@ -545,7 +622,9 @@ pub(crate) fn pgc_card(
             },
             author: None,
             video: None,
-            chrome: CoverChrome::OnHover,
+            chrome,
+            selected,
+            active,
         },
         style,
         metrics.width,

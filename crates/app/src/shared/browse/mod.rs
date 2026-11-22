@@ -1,1 +1,1 @@
-rigili_macro::mod_pub!(crate, filter, grid, list, paging, season);
+rigili_macro::mod_pub!(crate, filter, grid, list, paging, season, selection);

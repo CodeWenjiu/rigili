@@ -7,7 +7,7 @@ use rigili_bilibili::thumbnail;
 use super::items::{ArticleItem, UserItem};
 use crate::shared::browse::grid::{
     CardGrid, CardOverlay, CardStyle, CoverChrome, MediaCard as CardLayout, MediaVideo, VideoCard,
-    VideoCards, card_height,
+    VideoCards, card_height, selection_outline,
 };
 
 pub(crate) const ROW_HEIGHT: Pixels = px(96.);
@@ -18,10 +18,13 @@ const USER_BLOCK_CHROME: f32 = 156.;
 pub(crate) fn article_row(
     article: &ArticleItem,
     style: CardStyle,
+    selected: bool,
+    active: bool,
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
     h_flex()
         .id(ElementId::NamedInteger("search-article".into(), article.id))
+        .relative()
         .h(ROW_HEIGHT)
         .w_full()
         .items_center()
@@ -79,17 +82,23 @@ pub(crate) fn article_row(
                         .child(article.meta.clone()),
                 ),
         )
+        .when(selected, |this| {
+            this.child(selection_outline(style.primary(), style.radius(), active))
+        })
         .into_any_element()
 }
 
 pub(crate) fn user_row(
     user: &UserItem,
     style: CardStyle,
+    selected: bool,
+    active: bool,
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     cx: &App,
 ) -> AnyElement {
     h_flex()
         .id(ElementId::NamedInteger("search-user".into(), user.mid))
+        .relative()
         .h(ROW_HEIGHT)
         .w_full()
         .items_center()
@@ -126,6 +135,9 @@ pub(crate) fn user_row(
                 )
                 .render(cx),
         )
+        .when(selected, |this| {
+            this.child(selection_outline(style.primary(), style.radius(), active))
+        })
         .into_any_element()
 }
 
@@ -158,6 +170,8 @@ pub(crate) fn preview_card(
                 cid: video.cid(),
             }),
             chrome: CoverChrome::OnHover,
+            selected: false,
+            active: false,
             overlay: CardOverlay {
                 leading: Some((IconName::Play, video.views())),
                 secondary: None,
