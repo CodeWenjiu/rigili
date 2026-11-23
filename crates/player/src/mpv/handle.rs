@@ -62,7 +62,16 @@ impl Mpv {
         let mpv = Self { handle };
 
         for (name, value) in OPTIONS.iter().chain(cache) {
-            mpv.set_option_string(name, value)?;
+            if let Err(error) = mpv.set_option_string(name, value) {
+                if error.is_unknown_option() {
+                    rigili_monitor::monitor!(
+                        "mpv",
+                        "ignoring unsupported option {name}={value}: {error}"
+                    );
+                } else {
+                    return Err(error.with_context(format!("option {name}={value}")));
+                }
+            }
         }
         if let Some(dir) = fonts.and_then(Path::to_str) {
             mpv.set_option_string("osd-fonts-dir", dir)?;
@@ -444,5 +453,11 @@ mod tests {
         };
         mpv.set_osd_overlay(Some(&overlay)).expect("set overlay");
         mpv.set_osd_overlay(None).expect("clear overlay");
+    }
+
+    #[test]
+    fn ignores_options_the_running_mpv_does_not_know() {
+        Mpv::new(&[("rigili-definitely-not-an-option", "1")], None)
+            .expect("unknown options must not block startup");
     }
 }

@@ -1,5 +1,8 @@
 use std::ffi::{c_char, c_int, c_void};
 
+pub(super) const MPV_ERROR_OPTION_NOT_FOUND: c_int = -5;
+pub(super) const MPV_ERROR_PROPERTY_NOT_FOUND: c_int = -8;
+
 pub(super) const MPV_FORMAT_STRING: c_int = 1;
 pub(super) const MPV_FORMAT_FLAG: c_int = 3;
 pub(super) const MPV_FORMAT_INT64: c_int = 4;

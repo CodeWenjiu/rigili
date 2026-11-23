@@ -233,7 +233,9 @@ impl Player {
     fn send(&self, command: Command) {
         if let Err(error) = lock(&self.inner.sender).send(command) {
             mutate_status(&self.inner.status, |status| {
-                status.error = Some(format!("播放器线程不可用：{error}"));
+                status.error.get_or_insert_with(|| {
+                    format!("播放器线程已退出（{error}），请从终端启动查看详细错误")
+                });
             });
         }
         self.inner.wake.signal();

@@ -32,7 +32,13 @@ impl Renderer {
         // EGL or VAAPI interop is unavailable.
         match GlRender::new(mpv, wake.clone()) {
             Ok(gl) => Ok(Self::Gl(Box::new(gl))),
-            Err(_) => Self::new_software(mpv, wake),
+            Err(error) => {
+                rigili_monitor::monitor!(
+                    "player",
+                    "GPU renderer unavailable, falling back to software: {error}"
+                );
+                Self::new_software(mpv, wake)
+            }
         }
     }
 

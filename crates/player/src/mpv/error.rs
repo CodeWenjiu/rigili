@@ -25,6 +25,16 @@ impl MpvError {
             message: message.into(),
         }
     }
+
+    pub(crate) fn is_unknown_option(&self) -> bool {
+        self.code == super::ffi::MPV_ERROR_OPTION_NOT_FOUND
+            || self.code == super::ffi::MPV_ERROR_PROPERTY_NOT_FOUND
+    }
+
+    pub(crate) fn with_context(mut self, context: impl std::fmt::Display) -> Self {
+        self.message = format!("{context}: {}", self.message);
+        self
+    }
 }
 
 fn error_string(code: c_int) -> String {

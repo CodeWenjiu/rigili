@@ -72,8 +72,10 @@ pub(super) fn run_worker(
     ) {
         Ok(mpv) => mpv,
         Err(error) => {
+            rigili_monitor::monitor!("player", "mpv initialization failed: {error}");
+            eprintln!("rigili: 无法初始化 libmpv：{error}");
             mutate_status(&status, |status| {
-                status.error = Some(error.to_string());
+                status.error = Some(format!("无法初始化 libmpv：{error}"));
             });
             return;
         }
@@ -85,8 +87,10 @@ pub(super) fn run_worker(
     let mut render = match render {
         Ok(render) => render,
         Err(error) => {
+            rigili_monitor::monitor!("player", "renderer initialization failed: {error}");
+            eprintln!("rigili: 无法初始化视频渲染器：{error}");
             mutate_status(&status, |status| {
-                status.error = Some(error.to_string());
+                status.error = Some(format!("无法初始化视频渲染器：{error}"));
             });
             return;
         }
