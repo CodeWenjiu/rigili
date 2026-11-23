@@ -21,9 +21,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::preferences;
 use crate::shared::browse::filter;
-use crate::shared::browse::grid::{CardFrame, CardGrid, VideoCard, VideoCards};
+use crate::shared::browse::grid::{
+    BangumiCards, CardFrame, CardGrid, FolderCards, VideoCard, VideoCards,
+};
 use crate::shared::browse::list::ListScroll;
 use crate::shared::browse::paging::Paged;
+use crate::shared::browse::season::SeasonOpener;
 use crate::shared::browse::selection::{CardCursor, CardNav};
 use crate::shared::ui::tabs::{TabNav, TabStrip};
 
@@ -223,9 +226,10 @@ impl MineView {
         let client = client::get(cx).ok();
         let cards = CardCursor::new(card_focus);
         cards.observe(window, cx);
-        let search = filter::Search::new(window, cx, "搜索收藏、历史与追番", |this, cx| {
-            this.submit_search(cx)
-        });
+        let search =
+            filter::Search::new(window, cx, "搜索收藏、历史与追番", |this, cx| {
+                this.submit_search(cx)
+            });
         Self {
             client,
             tab: preferences::mine_tab(cx),
@@ -377,64 +381,137 @@ impl CardNav for MineView {
     }
 
     fn card_count(&self) -> usize {
-        let Some(tab) = self.card_tab() else {
+        let Some(grid) = self.card_grid() else {
             return 0;
         };
-        let items = &self.state(tab).items;
-        match self.card_needle(tab) {
-            Some(needle) => items.iter().filter(|card| card_matches(card, &needle)).count(),
-            None => items.len(),
+        match grid {
+            CardGridSource::Videos(tab) => self
+                .video_indices(tab)
+                .map_or_else(|| self.state(tab).items.len(), |indices| indices.len()),
+            CardGridSource::Folders(source) => self.folder_indices(source).len(),
+            CardGridSource::Bangumi(cinema) => self.bangumi_indices(cinema).map_or_else(
+                || self.bangumi_state(cinema).items.len(),
+                |indices| indices.len(),
+            ),
         }
     }
 
     fn card_columns(&self) -> usize {
-        VideoCards::columns(self.list_width)
+        match self.card_grid() {
+            Some(CardGridSource::Folders(_)) => FolderCards::columns(self.list_width),
+            Some(CardGridSource::Bangumi(_)) => BangumiCards::columns(self.list_width),
+            _ => VideoCards::columns(self.list_width),
+        }
     }
 
     fn reveal_card(&self, index: usize) {
-        let Some(tab) = self.card_tab() else {
+        let Some(grid) = self.card_grid() else {
             return;
         };
         let columns = self.card_columns().max(1);
-        self.state(tab)
-            .scroll
-            .scroll_to_item(index / columns, ScrollStrategy::Nearest);
+        let row = index / columns;
+        match grid {
+            CardGridSource::Videos(tab) => self
+                .state(tab)
+                .scroll
+                .scroll_to_item(row, ScrollStrategy::Nearest),
+            CardGridSource::Folders(_) => self
+                .folder_scroll
+                .scroll_to_item(row, ScrollStrategy::Nearest),
+            CardGridSource::Bangumi(cinema) => self
+                .bangumi_state(cinema)
+                .scroll
+                .scroll_to_item(row, ScrollStrategy::Nearest),
+        }
     }
 
     fn open_card(&mut self, new_tab: bool, cx: &mut Context<Self>) {
-        let Some(tab) = self.card_tab() else {
-            return;
-        };
         let Some(displayed) = self.cards.index() else {
             return;
         };
-        let Some(index) = self.card_item_index(tab, displayed) else {
+        let Some(grid) = self.card_grid() else {
             return;
         };
-        let Some(card) = self.state(tab).items.get(index) else {
-            return;
-        };
-        let mut open = card.open();
-        open.new_tab = new_tab;
-        cx.emit(open);
+        match grid {
+            CardGridSource::Videos(tab) => {
+                let needle = self.card_needle(tab);
+                let Some(index) =
+                    card_item_index(&self.state(tab).items, needle.as_deref(), displayed)
+                else {
+                    return;
+                };
+                let Some(card) = self.state(tab).items.get(index) else {
+                    return;
+                };
+                let mut open = card.open();
+                open.new_tab = new_tab;
+                cx.emit(open);
+            }
+            CardGridSource::Folders(source) => {
+                let indices = self.folder_indices(source);
+                let Some(&index) = indices.get(displayed) else {
+                    return;
+                };
+                let Some(folder) = self.folder_items(source).get(index) else {
+                    return;
+                };
+                let id = folder.id;
+                self.open_folder(id, source, cx);
+            }
+            CardGridSource::Bangumi(cinema) => {
+                let indices = self.bangumi_indices(cinema);
+                let len = self.bangumi_state(cinema).items.len();
+                let Some(index) = filtered_item(indices.as_deref(), len, displayed) else {
+                    return;
+                };
+                let Some(item) = self.bangumi_state(cinema).items.get(index) else {
+                    return;
+                };
+                let season_id = item.season_id;
+                self.open_season(season_id, cx);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CardGridSource {
+    Videos(MineTab),
+    Folders(FolderSource),
+    Bangumi(bool),
+}
+
+fn card_grid_for(
+    tab: MineTab,
+    view: FavoriteView,
+    browsing_folder: bool,
+) -> Option<CardGridSource> {
+    match tab {
+        MineTab::History | MineTab::WatchLater => Some(CardGridSource::Videos(tab)),
+        MineTab::Offline => None,
+        MineTab::Favorites => match view {
+            FavoriteView::Folder => Some(CardGridSource::Videos(MineTab::Favorites)),
+            FavoriteView::Folders if browsing_folder => {
+                Some(CardGridSource::Videos(MineTab::Favorites))
+            }
+            FavoriteView::Folders => Some(CardGridSource::Folders(FolderSource::Created)),
+            FavoriteView::Subscribed if browsing_folder => {
+                Some(CardGridSource::Videos(MineTab::Favorites))
+            }
+            FavoriteView::Subscribed => Some(CardGridSource::Folders(FolderSource::Collected)),
+            FavoriteView::Bangumi => Some(CardGridSource::Bangumi(false)),
+            FavoriteView::Cinema => Some(CardGridSource::Bangumi(true)),
+        },
     }
 }
 
 impl MineView {
-    fn card_tab(&self) -> Option<MineTab> {
-        match self.tab {
-            MineTab::History | MineTab::WatchLater => Some(self.tab),
-            MineTab::Favorites => match self.favorites_view {
-                FavoriteView::Folder => Some(MineTab::Favorites),
-                FavoriteView::Folders | FavoriteView::Subscribed
-                    if self.browsing_folder.is_some() =>
-                {
-                    Some(MineTab::Favorites)
-                }
-                _ => None,
-            },
-            MineTab::Offline => None,
-        }
+    fn card_grid(&self) -> Option<CardGridSource> {
+        card_grid_for(
+            self.tab,
+            self.favorites_view,
+            self.browsing_folder.is_some(),
+        )
     }
 
     fn card_needle(&self, tab: MineTab) -> Option<String> {
@@ -445,26 +522,63 @@ impl MineView {
         }
     }
 
-    fn card_item_index(&self, tab: MineTab, displayed: usize) -> Option<usize> {
+    fn video_indices(&self, tab: MineTab) -> Option<Vec<usize>> {
         let needle = self.card_needle(tab);
-        card_item_index(&self.state(tab).items, needle.as_deref(), displayed)
+        filter::filter_indices(&self.state(tab).items, needle.as_deref(), |card, needle| {
+            card_matches(card, needle)
+        })
+    }
+
+    fn folder_items(&self, source: FolderSource) -> &[FavFolder] {
+        match source {
+            FolderSource::Created => &self.folders.folders,
+            FolderSource::Collected => &self.collected.folders,
+        }
+    }
+
+    fn folder_indices(&self, source: FolderSource) -> Vec<usize> {
+        let needle = self.search.needle();
+        filter::matching(
+            self.folder_items(source)
+                .iter()
+                .enumerate()
+                .filter(|(_, folder)| match source {
+                    FolderSource::Created => !folder.is_default(),
+                    FolderSource::Collected => folder.is_valid(),
+                }),
+            needle.as_deref(),
+            |item, needle| {
+                let (_, folder) = item;
+                filter::text_matches(&folder.title, needle)
+                    || (source == FolderSource::Collected
+                        && filter::text_matches(folder.owner(), needle))
+            },
+        )
+        .into_iter()
+        .map(|(index, _)| index)
+        .collect()
+    }
+
+    fn bangumi_indices(&self, cinema: bool) -> Option<Vec<usize>> {
+        let needle = self.search.needle();
+        filter::filter_indices(
+            &self.bangumi_state(cinema).items,
+            needle.as_deref(),
+            |item, needle| filter::text_matches(&item.title, needle),
+        )
     }
 }
 
-fn card_item_index(
-    cards: &[VideoCard],
-    needle: Option<&str>,
-    displayed: usize,
-) -> Option<usize> {
-    match needle {
-        Some(needle) => cards
-            .iter()
-            .enumerate()
-            .filter(|(_, card)| card_matches(card, needle))
-            .nth(displayed)
-            .map(|(index, _)| index),
-        None => (displayed < cards.len()).then_some(displayed),
+fn filtered_item(indices: Option<&[usize]>, len: usize, displayed: usize) -> Option<usize> {
+    match indices {
+        Some(indices) => indices.get(displayed).copied(),
+        None => (displayed < len).then_some(displayed),
     }
+}
+
+fn card_item_index(cards: &[VideoCard], needle: Option<&str>, displayed: usize) -> Option<usize> {
+    let indices = filter::filter_indices(cards, needle, card_matches);
+    filtered_item(indices.as_deref(), cards.len(), displayed)
 }
 
 fn card_matches(card: &VideoCard, needle: &str) -> bool {
@@ -542,7 +656,9 @@ impl Render for MineView {
 mod tests {
     use rigili_bilibili::SearchVideo;
 
-    use super::card_item_index;
+    use super::{
+        CardGridSource, FavoriteView, FolderSource, MineTab, card_grid_for, card_item_index,
+    };
     use crate::shared::browse::grid::VideoCard;
 
     fn card(title: &str) -> VideoCard {
@@ -570,5 +686,50 @@ mod tests {
 
         assert_eq!(card_item_index(&cards, None, 1), Some(1));
         assert_eq!(card_item_index(&cards, None, 3), None);
+    }
+
+    #[test]
+    fn routes_each_mine_view_to_its_card_grid() {
+        assert_eq!(
+            card_grid_for(MineTab::History, FavoriteView::Folder, false),
+            Some(CardGridSource::Videos(MineTab::History))
+        );
+        assert_eq!(
+            card_grid_for(MineTab::WatchLater, FavoriteView::Folder, false),
+            Some(CardGridSource::Videos(MineTab::WatchLater))
+        );
+        assert_eq!(
+            card_grid_for(MineTab::Offline, FavoriteView::Folder, false),
+            None
+        );
+
+        assert_eq!(
+            card_grid_for(MineTab::Favorites, FavoriteView::Folder, false),
+            Some(CardGridSource::Videos(MineTab::Favorites))
+        );
+        assert_eq!(
+            card_grid_for(MineTab::Favorites, FavoriteView::Folders, false),
+            Some(CardGridSource::Folders(FolderSource::Created))
+        );
+        assert_eq!(
+            card_grid_for(MineTab::Favorites, FavoriteView::Folders, true),
+            Some(CardGridSource::Videos(MineTab::Favorites))
+        );
+        assert_eq!(
+            card_grid_for(MineTab::Favorites, FavoriteView::Subscribed, false),
+            Some(CardGridSource::Folders(FolderSource::Collected))
+        );
+        assert_eq!(
+            card_grid_for(MineTab::Favorites, FavoriteView::Subscribed, true),
+            Some(CardGridSource::Videos(MineTab::Favorites))
+        );
+        assert_eq!(
+            card_grid_for(MineTab::Favorites, FavoriteView::Bangumi, false),
+            Some(CardGridSource::Bangumi(false))
+        );
+        assert_eq!(
+            card_grid_for(MineTab::Favorites, FavoriteView::Cinema, false),
+            Some(CardGridSource::Bangumi(true))
+        );
     }
 }

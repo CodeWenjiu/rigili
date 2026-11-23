@@ -5,9 +5,8 @@ use gpui_kit::*;
 use rigili_bilibili::BangumiFollow;
 
 use super::{CardRow, MineView};
-use crate::shared::browse::filter;
 use crate::shared::browse::grid::{
-    BangumiCards, CARD_GAP, CardFrame, CardGrid, CardMetrics, CardOverlay, CardStyle, CoverChrome,
+    BangumiCards, CARD_GAP, CardFrame, CardGrid, CardOverlay, CardStyle, CardView, CoverChrome,
     MediaCard, card_grid_loading, card_text_height, media_card, with_opening_overlay,
 };
 use crate::shared::browse::list::{LIST_FOOTER_HEIGHT, Rows, paged_footer, virtual_rows_tracked};
@@ -25,11 +24,9 @@ impl MineView {
         let loading = state.loading && state.items.is_empty();
         let error = state.error.clone();
         let empty = state.items.is_empty() && !state.loading;
-        let needle = self.search.needle();
-        let matched = filter::filter_indices(&state.items, needle.as_deref(), |item, needle| {
-            filter::text_matches(&item.title, needle)
-        })
-        .map_or(state.items.len(), |indices| indices.len());
+        let matched = self
+            .bangumi_indices(cinema)
+            .map_or(state.items.len(), |indices| indices.len());
         let danger = cx.theme().danger;
         let muted = cx.theme().muted_foreground;
         let radius = cx.theme().radius;
@@ -78,12 +75,14 @@ impl MineView {
             columns,
             frame,
         } = line;
-        let CardFrame { style, metrics } = frame;
+        let CardFrame { metrics, .. } = frame;
         let state = self.bangumi_state(cinema);
         let count = filtered.map_or(state.items.len(), |indices| indices.len());
         let start = row * columns;
         let end = (start + columns).min(count);
         let opening = self.opening;
+        let selection = self.cards.index();
+        let active = self.cards.active(window);
 
         h_flex()
             .h(metrics.height())
@@ -98,7 +97,19 @@ impl MineView {
                 let on_open = cx.listener(move |this, _, _, cx| {
                     this.open_season(season_id, cx);
                 });
-                bangumi_card(item, is_opening, style, metrics, window, cx, on_open)
+                bangumi_card(
+                    item,
+                    is_opening,
+                    CardView {
+                        chrome: CoverChrome::OnHover,
+                        selected: selection == Some(index),
+                        active,
+                    },
+                    frame,
+                    window,
+                    cx,
+                    on_open,
+                )
             }))
             .into_any_element()
     }
@@ -122,11 +133,8 @@ impl MineView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let style = CardStyle::new(cx);
-        let needle = self.search.needle();
         let state = self.bangumi_state(cinema);
-        let filtered = filter::filter_indices(&state.items, needle.as_deref(), |item, needle| {
-            filter::text_matches(&item.title, needle)
-        });
+        let filtered = self.bangumi_indices(cinema);
         let count = filtered.as_ref().map_or(state.items.len(), Vec::len);
         let columns = BangumiCards::columns(self.list_width);
         let metrics = BangumiCards::metrics(
@@ -152,6 +160,7 @@ impl MineView {
             self.list_width,
             &self.bangumi_state(cinema).scroll,
             move |this, range, window, cx| {
+                this.cards.set_first_row(range.start);
                 this.maybe_load_more_bangumi(cinema, range.end.saturating_sub(1), rows, cx);
                 range
                     .map(|row| {
@@ -180,12 +189,18 @@ impl MineView {
 fn bangumi_card(
     item: &BangumiFollow,
     opening: bool,
-    style: CardStyle,
-    metrics: CardMetrics,
+    view: CardView,
+    frame: CardFrame,
     window: &mut Window,
     cx: &mut App,
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
+    let CardFrame { style, metrics } = frame;
+    let CardView {
+        chrome,
+        selected,
+        active,
+    } = view;
     let latest = item.latest_ep();
     let score = item.score().map(|score| format!("{score:.1}"));
     let footer = if item.progress.is_empty() {
@@ -204,9 +219,9 @@ fn bangumi_card(
             thumb_width: metrics.thumb_width,
             author: None,
             video: None,
-            chrome: CoverChrome::OnHover,
-            selected: false,
-            active: false,
+            chrome,
+            selected,
+            active,
             overlay: CardOverlay {
                 leading: score.as_deref().map(|score| (IconName::Star, score)),
                 secondary: None,

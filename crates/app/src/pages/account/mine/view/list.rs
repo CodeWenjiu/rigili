@@ -8,10 +8,10 @@ use gpui_kit::*;
 use super::{CardRow, FavoriteView, FolderSource, MineTab, MineView};
 
 use crate::app::platform::theme::cover_scrim;
-use crate::shared::browse::filter;
 use crate::shared::browse::grid::{
     CARD_GAP, CardFrame, CardGrid, CardRowView, FolderCards, VideoCards, card_grid_loading,
-    card_text_height, folder_card_height, skeleton_card, video_card_row, video_card_row_indexed,
+    card_text_height, folder_card_height, selection_outline, skeleton_card, video_card_row,
+    video_card_row_indexed,
 };
 use crate::shared::browse::list::{LIST_FOOTER_HEIGHT, Rows, paged_footer, virtual_rows_tracked};
 use crate::shared::ui::state_view::{Layout, empty_state, error_state};
@@ -88,17 +88,10 @@ impl MineView {
         let muted = cx.theme().muted_foreground;
         let danger = cx.theme().danger;
         let radius = cx.theme().radius;
-        let (folders, loading, error) = match source {
-            FolderSource::Created => (
-                &self.folders.folders,
-                self.folders.loading,
-                self.folders.error.clone(),
-            ),
-            FolderSource::Collected => (
-                &self.collected.folders,
-                self.collected.loading,
-                self.collected.error.clone(),
-            ),
+        let folders = self.folder_items(source);
+        let (loading, error) = match source {
+            FolderSource::Created => (self.folders.loading, self.folders.error.clone()),
+            FolderSource::Collected => (self.collected.loading, self.collected.error.clone()),
         };
 
         if loading && folders.is_empty() {
@@ -134,25 +127,7 @@ impl MineView {
         }
 
         let needle = self.search.needle();
-        let indices = filter::matching(
-            folders
-                .iter()
-                .enumerate()
-                .filter(|(_, folder)| match source {
-                    FolderSource::Created => !folder.is_default(),
-                    FolderSource::Collected => folder.is_valid(),
-                }),
-            needle.as_deref(),
-            |item, needle| {
-                let (_, folder) = item;
-                filter::text_matches(&folder.title, needle)
-                    || (source == FolderSource::Collected
-                        && filter::text_matches(folder.owner(), needle))
-            },
-        )
-        .into_iter()
-        .map(|(index, _)| index)
-        .collect::<Vec<_>>();
+        let indices = self.folder_indices(source);
         if indices.is_empty() {
             let empty = if needle.is_some() {
                 match source {
@@ -184,11 +159,11 @@ impl MineView {
             rows,
             self.list_width,
             &self.folder_scroll,
-            move |this, range, _window, cx| {
-                let folders = match source {
-                    FolderSource::Created => &this.folders.folders,
-                    FolderSource::Collected => &this.collected.folders,
-                };
+            move |this, range, window, cx| {
+                this.cards.set_first_row(range.start);
+                let selection = this.cards.index();
+                let active = this.cards.active(window);
+                let folders = this.folder_items(source);
                 range
                     .map(|row| {
                         let start = row * columns;
@@ -196,9 +171,20 @@ impl MineView {
                         h_flex()
                             .h(row_height)
                             .gap_x(CARD_GAP)
-                            .children(render_indices[start..end].iter().map(|&index| {
-                                folder_card(&folders[index], index, source, width, cx)
-                            }))
+                            .children(render_indices[start..end].iter().enumerate().map(
+                                |(offset, &index)| {
+                                    let position = start + offset;
+                                    folder_card(
+                                        &folders[index],
+                                        index,
+                                        source,
+                                        width,
+                                        selection == Some(position),
+                                        active,
+                                        cx,
+                                    )
+                                },
+                            ))
                             .into_any_element()
                     })
                     .collect()
@@ -256,16 +242,8 @@ impl MineView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let needle = if tab == MineTab::Favorites {
-            None
-        } else {
-            self.search.needle()
-        };
         let state = self.state(tab);
-        let filtered = filter::filter_indices(&state.items, needle.as_deref(), |card, needle| {
-            filter::text_matches(card.title(), needle)
-                || filter::text_matches(card.author(), needle)
-        });
+        let filtered = self.video_indices(tab);
         if filtered.as_ref().is_some_and(Vec::is_empty) {
             return empty_state(Layout::Top, cx.theme().muted_foreground, "未找到匹配内容");
         }
@@ -315,6 +293,8 @@ fn folder_card(
     index: usize,
     source: FolderSource,
     width: Pixels,
+    selected: bool,
+    active: bool,
     cx: &mut Context<MineView>,
 ) -> AnyElement {
     let muted_bg = cx.theme().muted;
@@ -343,6 +323,7 @@ fn folder_card(
     v_flex()
         .group(group.clone())
         .id(("mine-folder-card", index))
+        .relative()
         .w(width)
         .gap_2()
         .cursor_pointer()
@@ -417,5 +398,8 @@ fn folder_card(
                 ),
         )
         .child(div().text_xs().text_color(muted).child(footer))
+        .when(selected, |this| {
+            this.child(selection_outline(primary, radius, active))
+        })
         .into_any_element()
 }
