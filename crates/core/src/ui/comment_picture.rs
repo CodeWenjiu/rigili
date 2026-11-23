@@ -133,6 +133,14 @@ fn show(pictures: Vec<CommentPicture>, index: usize, window: &mut Window, cx: &m
     });
 }
 
+/// Opens the picture viewer at `index`, clamped to the available pictures.
+pub fn open(pictures: &[CommentPicture], index: usize, window: &mut Window, cx: &mut App) {
+    if pictures.is_empty() {
+        return;
+    }
+    show(pictures.to_vec(), index.min(pictures.len() - 1), window, cx);
+}
+
 struct PictureViewer {
     pictures: Vec<CommentPicture>,
     index: usize,

@@ -11,10 +11,10 @@ use super::{INFO_MIN_WINDOW, PlayerWindow};
 use crate::info::InfoTab;
 use crate::shortcuts::{
     BackComments, CloseCommentThread, CloseTab, ExpandReplies, HistoryBack, HistoryForward,
-    NextComment, NextPage, NextRelated, NextTab, PlayRelated, PlayRelatedInNewTab, PreviousComment,
-    PreviousPage, PreviousRelated, PreviousTab, Reload, SeekBack, SpeedDown, SpeedUp, SwitchToMain,
-    ToggleComments, ToggleDanmaku, ToggleFullscreen, ToggleInfo, ToggleMute, TogglePanelNavigation,
-    TogglePlayback, ToggleSubtitles, WriteComment,
+    NextComment, NextPage, NextRelated, NextTab, OpenCommentImage, PlayRelated,
+    PlayRelatedInNewTab, PreviousComment, PreviousPage, PreviousRelated, PreviousTab, Reload,
+    SeekBack, SpeedDown, SpeedUp, SwitchToMain, ToggleComments, ToggleDanmaku, ToggleFullscreen,
+    ToggleInfo, ToggleMute, TogglePanelNavigation, TogglePlayback, ToggleSubtitles, WriteComment,
 };
 
 impl Render for PlayerWindow {
@@ -178,6 +178,12 @@ impl Render for PlayerWindow {
             }))
             .on_action(cx.listener(|this, _: &ExpandReplies, window, cx| {
                 this.expand_comment(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &OpenCommentImage, window, cx| {
+                let info = this.tab().info.clone();
+                info.update(cx, |info, cx| {
+                    info.open_selected_comment_picture(window, cx)
+                });
             }))
             .on_action(cx.listener(|this, _: &BackComments, window, cx| {
                 this.back_comment(window, cx);

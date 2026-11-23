@@ -5,16 +5,17 @@ use std::collections::VecDeque;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_bilibili::api::comment::CommentSort;
 use rigili_bilibili::CommentPage;
+use rigili_bilibili::api::comment::CommentSort;
+use rigili_bilibili::{Comment, CommentPicture};
 use rigili_core::client;
 use rigili_core::runtime::spawn_api;
 use rigili_core::toast;
 use rigili_core::{api_error_message, api_task_error_message};
 
+pub(super) use self::thread::CommentThread;
 use super::nav::{clamp_selection, stepped_selection};
 use super::{InfoPanel, InfoTab};
-pub(super) use self::thread::CommentThread;
 
 const COMMENT_RETAIN_PAGES: usize = 12;
 const PREVIEW_REPLIES: usize = 2;
@@ -24,7 +25,6 @@ const PREVIEW_REPLIES: usize = 2;
 /// The reply endpoint returns the whole chain under a root as one flat page of
 /// comments, so this needs no nested list: every reply, including a reply to a
 /// reply, is a row of the same list.
-
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CommentAction {
@@ -81,11 +81,7 @@ impl InfoPanel {
 
     fn touch_row_of(&self, rpid: u64) {
         if let Some(row) = self.comments.iter().position(|comment| {
-            comment.rpid == rpid
-                || comment
-                    .replies()
-                    .iter()
-                    .any(|reply| reply.rpid == rpid)
+            comment.rpid == rpid || comment.replies().iter().any(|reply| reply.rpid == rpid)
         }) && row < self.comments_list.item_count()
         {
             self.comments_list.remeasure_items(row..row + 1);
@@ -389,7 +385,9 @@ impl InfoPanel {
         self.thread_selection = Some(0);
         self.thread_list.reset(2);
         if let Some(draft) = &self.draft {
-            draft.update(cx, |state, cx| state.set_placeholder("回复评论", window, cx));
+            draft.update(cx, |state, cx| {
+                state.set_placeholder("回复评论", window, cx)
+            });
         }
         if focus {
             self.focus_composer(window, cx);
@@ -430,11 +428,7 @@ impl InfoPanel {
         cx.notify();
     }
 
-    pub(crate) fn back_in_comments(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    pub(crate) fn back_in_comments(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.thread.is_none() {
             return false;
         }
@@ -504,6 +498,22 @@ impl InfoPanel {
         self.open_thread(index, false, None, window, cx);
     }
 
+    pub(crate) fn open_selected_comment_picture(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pictures) = selected_comment_pictures(
+            self.thread.as_ref(),
+            self.thread_selection,
+            &self.comments,
+            self.comments_selection,
+        ) else {
+            return;
+        };
+        rigili_core::comment_picture::open(pictures, 0, window, cx);
+    }
+
     fn clamp_comments_selection(&mut self) {
         self.comments_selection = clamp_selection(self.comments_selection, self.comments.len());
     }
@@ -539,11 +549,7 @@ impl InfoPanel {
                 thread.root.set_liked(like);
                 found = true;
             }
-            if let Some(reply) = thread
-                .replies
-                .iter_mut()
-                .find(|reply| reply.rpid == rpid)
-            {
+            if let Some(reply) = thread.replies.iter_mut().find(|reply| reply.rpid == rpid) {
                 reply.set_liked(like);
                 found = true;
             }
@@ -586,6 +592,25 @@ impl InfoPanel {
             },
         );
     }
+}
+
+fn selected_comment_pictures<'a>(
+    thread: Option<&'a CommentThread>,
+    thread_selection: Option<usize>,
+    comments: &'a [Comment],
+    comments_selection: Option<usize>,
+) -> Option<&'a [CommentPicture]> {
+    let comment = if let Some(thread) = thread {
+        let index = thread_selection?;
+        if index == 0 {
+            &thread.root
+        } else {
+            thread.replies.get(index - 1)?
+        }
+    } else {
+        comments.get(comments_selection?)?
+    };
+    (!comment.content.pictures.is_empty()).then_some(comment.content.pictures.as_slice())
 }
 
 fn selection_outline(primary: Hsla, radius: Pixels, active: bool) -> impl IntoElement {
@@ -634,16 +659,19 @@ fn drain_back_pages(pages: &mut VecDeque<usize>) -> (u32, usize) {
 #[cfg(test)]
 mod tests {
     use super::list::has_hidden_replies;
-    use super::{COMMENT_RETAIN_PAGES, CommentThread, drain_back_pages, drain_front_pages};
+    use super::{
+        COMMENT_RETAIN_PAGES, CommentThread, drain_back_pages, drain_front_pages,
+        selected_comment_pictures,
+    };
     use crate::info::{InfoPanel, InfoSelections, InfoTab};
-    use gpui_kit::base::v_flex;
     use gpui_kit::TestSupportExt as _;
+    use gpui_kit::base::v_flex;
     use gpui_kit::prelude::*;
     use gpui_kit::test::TestWindowExt;
     use gpui_kit::{
         Bounds, Entity, TestAppContext, Window, WindowBounds, WindowOptions, div, px, size,
     };
-    use rigili_bilibili::{Comment, EmoteItem, EmotePackage, EmotePanel};
+    use rigili_bilibili::{Comment, CommentPicture, EmoteItem, EmotePackage, EmotePanel};
     use std::collections::VecDeque;
 
     fn comment(rpid: u64, rcount: u64) -> Comment {
@@ -659,6 +687,36 @@ mod tests {
             rpid,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn finds_the_picture_of_the_focused_comment() {
+        fn pictured(rpid: u64) -> Comment {
+            let mut comment = plain(rpid);
+            comment.content.pictures = vec![CommentPicture {
+                img_src: "//i0.hdslb.com/bfs/new_dyn/test.png".into(),
+                ..Default::default()
+            }];
+            comment
+        }
+
+        let list = [pictured(1), plain(2)];
+        assert!(selected_comment_pictures(None, None, &list, Some(0)).is_some());
+        assert!(selected_comment_pictures(None, None, &list, Some(1)).is_none());
+        assert!(selected_comment_pictures(None, None, &list, None).is_none());
+
+        let thread = CommentThread {
+            root: pictured(1),
+            replies: vec![plain(2), pictured(3)],
+            page: 1,
+            total: 2,
+            loading: false,
+            error: None,
+        };
+        assert!(selected_comment_pictures(Some(&thread), Some(0), &list, None).is_some());
+        assert!(selected_comment_pictures(Some(&thread), Some(1), &list, None).is_none());
+        assert!(selected_comment_pictures(Some(&thread), Some(2), &list, None).is_some());
+        assert!(selected_comment_pictures(Some(&thread), Some(3), &list, None).is_none());
     }
 
     #[test]
@@ -810,13 +868,18 @@ mod tests {
         });
 
         cx.update_window(window, |_, window, cx| {
-            panel.update(cx, |panel, cx| panel.open_thread(1, false, None, window, cx));
+            panel.update(cx, |panel, cx| {
+                panel.open_thread(1, false, None, window, cx)
+            });
         })
         .expect("open thread");
 
         cx.update_window(window, |_, window, cx| {
             panel.update(cx, |panel, cx| {
-                assert_eq!(panel.thread.as_ref().map(|thread| thread.root.rpid), Some(20));
+                assert_eq!(
+                    panel.thread.as_ref().map(|thread| thread.root.rpid),
+                    Some(20)
+                );
                 assert_eq!(panel.thread_list.item_count(), 2);
                 assert!(panel.back_in_comments(window, cx));
                 assert!(panel.thread.is_none());
@@ -834,13 +897,11 @@ mod tests {
     impl Render for EmotePickerHarness {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             v_flex()
+                .child(div().id("emote-picker-probe").test_support().size(px(10.)))
                 .child(
-                    div()
-                        .id("emote-picker-probe")
-                        .test_support()
-                        .size(px(10.)),
+                    self.panel
+                        .update(cx, |panel, cx| panel.render_emote_picker(cx)),
                 )
-                .child(self.panel.update(cx, |panel, cx| panel.render_emote_picker(cx)))
         }
     }
 
@@ -992,7 +1053,10 @@ mod tests {
         cx.update_window(window, |_, window, cx| {
             panel.update(cx, |panel, cx| {
                 panel.open_selected_thread(window, cx);
-                assert_eq!(panel.thread.as_ref().map(|thread| thread.root.rpid), Some(10));
+                assert_eq!(
+                    panel.thread.as_ref().map(|thread| thread.root.rpid),
+                    Some(10)
+                );
                 assert_eq!(panel.thread_selection, Some(0));
 
                 let count = {

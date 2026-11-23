@@ -59,6 +59,8 @@ actions!(
         NextComment,
         /// 展开回复
         ExpandReplies,
+        /// 打开评论图片
+        OpenCommentImage,
         /// 返回评论列表
         BackComments,
         /// 关闭当前标签页
@@ -207,6 +209,11 @@ const COMMANDS: &[Command] = &[
         action: || Box::new(ExpandReplies),
     },
     Command {
+        keys: "enter",
+        context: COMMENTS,
+        action: || Box::new(OpenCommentImage),
+    },
+    Command {
         keys: "h",
         context: COMMENTS,
         action: || Box::new(BackComments),
@@ -320,7 +327,7 @@ mod tests {
             .iter()
             .filter(|command| command.context == COMMENTS)
             .collect::<Vec<_>>();
-        assert_eq!(comment_commands.len(), 4);
+        assert_eq!(comment_commands.len(), 5);
 
         for command in comment_commands {
             let predicate = binding_predicate(command.context);
