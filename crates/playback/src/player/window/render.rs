@@ -14,7 +14,7 @@ use crate::shortcuts::{
     NextComment, NextPage, NextRelated, NextTab, PlayRelated, PlayRelatedInNewTab, PreviousComment,
     PreviousPage, PreviousRelated, PreviousTab, Reload, SeekBack, SpeedDown, SpeedUp, SwitchToMain,
     ToggleComments, ToggleDanmaku, ToggleFullscreen, ToggleInfo, ToggleMute, TogglePanelNavigation,
-    TogglePlayback, WriteComment,
+    TogglePlayback, ToggleSubtitles, WriteComment,
 };
 
 impl Render for PlayerWindow {
@@ -188,8 +188,7 @@ impl Render for PlayerWindow {
             .on_action(cx.listener(|this, _: &WriteComment, window, cx| {
                 let visible = this.show_info
                     && !this.tab().is_live
-                    && (window.is_fullscreen()
-                        || window.viewport_size().width >= INFO_MIN_WINDOW)
+                    && (window.is_fullscreen() || window.viewport_size().width >= INFO_MIN_WINDOW)
                     && this.tab().info.read(cx).tab() == InfoTab::Comments;
                 if !visible {
                     return;
@@ -200,6 +199,10 @@ impl Render for PlayerWindow {
             .on_action(cx.listener(|this, _: &ToggleDanmaku, _, cx| {
                 this.player
                     .update(cx, |player, cx| player.toggle_danmaku(cx));
+            }))
+            .on_action(cx.listener(|this, _: &ToggleSubtitles, _, cx| {
+                this.player
+                    .update(cx, |player, cx| player.toggle_subtitles(cx));
             }))
             .on_action(cx.listener(|this, _: &Reload, _, cx| {
                 this.reload(cx);

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use gpui_kit::prelude::*;
 use rigili_bilibili::Danmaku;
-use rigili_core::runtime::{spawn_api, spawn_api_task};
+use rigili_core::runtime::{ApiTaskError, spawn_api, spawn_api_task};
 
 use crate::player::danmaku::{feed, live};
 
@@ -125,5 +125,81 @@ impl PlayerWindow {
                 }
             },
         );
+    }
+
+    pub(super) fn load_subtitle_for(
+        &mut self,
+        tab_id: u64,
+        generation: u64,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        let Some(tab_index) = self.tab_index(tab_id) else {
+            return;
+        };
+        let tab = &mut self.tabs[tab_index];
+        if tab
+            .subtitle_files
+            .get(index)
+            .and_then(Option::as_ref)
+            .is_some()
+            || tab.subtitle_loading == Some(index)
+        {
+            return;
+        }
+        let Some(track) = tab.subtitles.get(index).cloned() else {
+            return;
+        };
+        tab.subtitle_loading = Some(index);
+
+        let task = spawn_api_task(
+            cx,
+            async move { client.subtitle(&track.url()).await },
+            move |this, result, cx| {
+                if !this.generation_matches(tab_id, generation) {
+                    return;
+                }
+                if let Some(tab_index) = this.tab_index(tab_id)
+                    && this.tabs[tab_index].subtitle_loading == Some(index)
+                {
+                    this.tabs[tab_index].subtitle_loading = None;
+                }
+                let file = match result {
+                    Ok(file) => file,
+                    Err(ApiTaskError::Api(error)) => {
+                        rigili_monitor::monitor!(
+                            "subtitle",
+                            "tab {tab_id}: subtitle {index} failed: {error}"
+                        );
+                        return;
+                    }
+                    Err(ApiTaskError::Join(error)) => {
+                        rigili_monitor::monitor!(
+                            "subtitle",
+                            "tab {tab_id}: subtitle task failed: {error}"
+                        );
+                        return;
+                    }
+                };
+                if let Some(tab_index) = this.tab_index(tab_id) {
+                    let tab = &mut this.tabs[tab_index];
+                    if tab.subtitle_files.len() <= index {
+                        tab.subtitle_files.resize(index + 1, None);
+                    }
+                    tab.subtitle_files[index] = Some(file.clone());
+                }
+                if this.is_active(tab_id, generation) {
+                    this.player
+                        .update(cx, |player, cx| player.set_subtitle_file(index, file, cx));
+                }
+                cx.notify();
+            },
+        );
+        if let Some(tab_index) = self.tab_index(tab_id) {
+            self.tabs[tab_index].subtitle_task = Some(task);
+        }
     }
 }

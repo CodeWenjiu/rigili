@@ -1,4 +1,4 @@
-use crate::{ApiError, Client, PlayerInfo, VideoDetail, VideoInfo, VideoShot};
+use crate::{ApiError, Client, PlayerInfo, SubtitleFile, VideoDetail, VideoInfo, VideoShot};
 
 const VIEW_URL: &str = "https://api.bilibili.com/x/web-interface/view";
 const DETAIL_URL: &str = "https://api.bilibili.com/x/web-interface/view/detail";
@@ -33,5 +33,9 @@ impl Client {
             &[("bvid", bvid.to_owned()), ("cid", cid.to_string())],
         )
         .await
+    }
+
+    pub async fn subtitle(&self, url: &str) -> Result<SubtitleFile, ApiError> {
+        self.get_raw(url).await
     }
 }

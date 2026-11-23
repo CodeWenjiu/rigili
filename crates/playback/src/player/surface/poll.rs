@@ -85,6 +85,18 @@ impl PlayerView {
         self.pump_danmaku(window);
         self.sync_danmaku_like(window, cx);
 
+        let cue = self.active_subtitle_index();
+        if cue != self.subtitle_cue {
+            self.subtitle_cue = cue;
+            changed = true;
+        }
+
+        let controls = self.controls_bounds.get();
+        if controls != self.controls_bounds_seen {
+            self.controls_bounds_seen = controls;
+            changed = true;
+        }
+
         if self.controls_idle() {
             self.controls_visible = false;
             self.preview_time = None;

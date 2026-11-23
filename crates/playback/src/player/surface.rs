@@ -9,7 +9,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::slider::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_bilibili::{Chapter, VideoPage, VideoShot};
+use rigili_bilibili::{Chapter, SubtitleFile, SubtitleTrack, VideoPage, VideoShot};
 use rigili_player::{OsdOverlay, PlaybackPhase, Player, PlayerStatus};
 
 use super::controls::VolumePopup;
@@ -84,6 +84,16 @@ pub(super) struct PlayerView {
     audio_url: Option<String>,
     quality_popover_open: bool,
     speed_popover_open: bool,
+    subtitles: Vec<SubtitleTrack>,
+    subtitle_files: Vec<Option<SubtitleFile>>,
+    subtitle_x: f32,
+    subtitle_y: f32,
+    subtitle_drag: Option<Point<Pixels>>,
+    subtitle_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    subtitle_cue: Option<usize>,
+    subtitle: usize,
+    subtitle_enabled: bool,
+    subtitle_popover_open: bool,
     pages: Vec<VideoPage>,
     selected_cid: Option<u64>,
     page_popover_open: bool,
@@ -93,6 +103,8 @@ pub(super) struct PlayerView {
     progress_max: f64,
     live: bool,
     controls_visible: bool,
+    controls_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    controls_bounds_seen: Option<Bounds<Pixels>>,
     pointer_in_video: bool,
     pointer_in_bar: bool,
     volume_popup_open: bool,
@@ -124,6 +136,7 @@ pub(super) struct PlayerView {
 
 pub(super) enum PlayerEvent {
     SelectPage(u64),
+    RequestSubtitle(usize),
 }
 
 impl EventEmitter<PlayerEvent> for PlayerView {}
@@ -151,6 +164,7 @@ impl PlayerView {
                 .step(1.0)
                 .default_value(DEFAULT_VOLUME as f32)
         });
+        let subtitle_settings = persisted.subtitle;
 
         let mut subscriptions = vec![cx.subscribe_in(
             &volume,
@@ -231,6 +245,16 @@ impl PlayerView {
             audio_url: None,
             quality_popover_open: false,
             speed_popover_open: false,
+            subtitles: Vec::new(),
+            subtitle_files: Vec::new(),
+            subtitle_x: subtitle_settings.x,
+            subtitle_y: subtitle_settings.y,
+            subtitle_drag: None,
+            subtitle_bounds: Rc::new(Cell::new(None)),
+            subtitle_cue: None,
+            subtitle: 0,
+            subtitle_enabled: false,
+            subtitle_popover_open: false,
             pages: Vec::new(),
             selected_cid: None,
             page_popover_open: false,
@@ -240,6 +264,8 @@ impl PlayerView {
             progress_max: 0.0,
             live: false,
             controls_visible: false,
+            controls_bounds: Rc::new(Cell::new(None)),
+            controls_bounds_seen: None,
             pointer_in_video: false,
             pointer_in_bar: false,
             volume_popup_open: false,
@@ -320,6 +346,14 @@ impl PlayerView {
         self.quality_popover_open = false;
         self.speed_popover_open = false;
         self.page_popover_open = false;
+        self.subtitles.clear();
+        self.subtitle_files.clear();
+        self.subtitle = 0;
+        self.subtitle_enabled = false;
+        self.subtitle_drag = None;
+        self.subtitle_cue = None;
+        self.subtitle_bounds.set(None);
+        self.subtitle_popover_open = false;
         self.clear_danmaku(cx);
         self.danmaku_source = None;
         self.danmaku_sending = false;
@@ -536,6 +570,14 @@ impl PlayerView {
         self.quality_popover_open = false;
         self.speed_popover_open = false;
         self.page_popover_open = false;
+        self.subtitles.clear();
+        self.subtitle_files.clear();
+        self.subtitle = 0;
+        self.subtitle_enabled = false;
+        self.subtitle_drag = None;
+        self.subtitle_cue = None;
+        self.subtitle_bounds.set(None);
+        self.subtitle_popover_open = false;
         self.native_bounds = None;
         self.native_requested = self.native.is_some() && !self.native_failed;
         if self.native_requested {
@@ -723,6 +765,147 @@ impl PlayerView {
     pub(super) fn set_chapters(&mut self, chapters: Vec<Chapter>, cx: &mut Context<Self>) {
         self.chapters = chapters;
         cx.notify();
+    }
+
+    pub(super) fn set_subtitles(
+        &mut self,
+        subtitles: Vec<SubtitleTrack>,
+        selected: Option<usize>,
+        files: Vec<Option<SubtitleFile>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.subtitles = subtitles;
+        self.subtitle = selected
+            .or_else(|| SubtitleTrack::default_index(&self.subtitles))
+            .unwrap_or_default()
+            .min(self.subtitles.len().saturating_sub(1));
+        self.subtitle_enabled = selected.is_some() && !self.subtitles.is_empty();
+        self.subtitle_files = files;
+        self.subtitle_cue = None;
+        self.subtitle_drag = None;
+        self.subtitle_popover_open = false;
+        cx.notify();
+    }
+
+    pub(super) fn set_subtitle_file(
+        &mut self,
+        index: usize,
+        file: SubtitleFile,
+        cx: &mut Context<Self>,
+    ) {
+        if self.subtitle_files.len() <= index {
+            self.subtitle_files.resize(index + 1, None);
+        }
+        self.subtitle_files[index] = Some(file);
+        self.subtitle_cue = self.active_subtitle_index();
+        cx.notify();
+    }
+
+    pub(super) fn subtitle_selection(&self) -> Option<usize> {
+        self.subtitle_enabled.then_some(self.subtitle)
+    }
+
+    pub(super) fn toggle_subtitles(&mut self, cx: &mut Context<Self>) {
+        if self.subtitles.is_empty() {
+            return;
+        }
+        let selected = (!self.subtitle_enabled).then_some(self.subtitle);
+        self.select_subtitle(selected, cx);
+    }
+
+    pub(super) fn select_subtitle(&mut self, selected: Option<usize>, cx: &mut Context<Self>) {
+        self.subtitle_popover_open = false;
+        match selected {
+            Some(index) if index < self.subtitles.len() => {
+                self.subtitle = index;
+                self.subtitle_enabled = true;
+            }
+            Some(_) => return,
+            None => self.subtitle_enabled = false,
+        }
+        crate::settings::update(cx, |settings| {
+            settings.subtitle.enabled = self.subtitle_enabled;
+        });
+        if self.subtitle_enabled
+            && self
+                .subtitle_files
+                .get(self.subtitle)
+                .and_then(Option::as_ref)
+                .is_none()
+        {
+            cx.emit(PlayerEvent::RequestSubtitle(self.subtitle));
+        }
+        cx.notify();
+    }
+
+    pub(super) fn set_subtitle_popover_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.subtitle_popover_open != open {
+            self.subtitle_popover_open = open;
+            if open {
+                self.last_activity = Instant::now();
+            }
+            cx.notify();
+        }
+    }
+
+    pub(super) fn begin_subtitle_drag(&mut self, pointer: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(bounds) = self.subtitle_bounds.get() else {
+            return;
+        };
+        self.subtitle_drag = Some(point(pointer.x - bounds.left(), pointer.y - bounds.top()));
+        self.last_activity = Instant::now();
+        cx.notify();
+    }
+
+    pub(super) fn drag_subtitle(&mut self, pointer: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(offset) = self.subtitle_drag else {
+            return;
+        };
+        let Some(video) = self.video_bounds.get() else {
+            return;
+        };
+        let Some(bounds) = self.subtitle_bounds.get() else {
+            return;
+        };
+        let width = f32::from(video.size.width);
+        let height = f32::from(video.size.height);
+        let box_width = f32::from(bounds.size.width);
+        let box_height = f32::from(bounds.size.height);
+        if width <= 0. || height <= 0. {
+            return;
+        }
+        let left = (f32::from(pointer.x - video.left()) - f32::from(offset.x))
+            .clamp(0.0, (width - box_width).max(0.0));
+        let top = (f32::from(pointer.y - video.top()) - f32::from(offset.y))
+            .clamp(0.0, (height - box_height).max(0.0));
+        self.last_activity = Instant::now();
+        self.set_subtitle_position((left + box_width / 2.0) / width, top / height, cx);
+    }
+
+    pub(super) fn end_subtitle_drag(&mut self, cx: &mut Context<Self>) {
+        if self.subtitle_drag.take().is_some() {
+            self.last_activity = Instant::now();
+            cx.notify();
+        }
+    }
+
+    fn set_subtitle_position(&mut self, x: f32, y: f32, cx: &mut Context<Self>) {
+        self.subtitle_x = x.clamp(0.0, 1.0);
+        self.subtitle_y = y.clamp(0.0, 1.0);
+        let (x, y) = (self.subtitle_x, self.subtitle_y);
+        crate::settings::update(cx, |settings| {
+            settings.subtitle.x = x;
+            settings.subtitle.y = y;
+        });
+        cx.notify();
+    }
+
+    pub(super) fn active_subtitle_index(&self) -> Option<usize> {
+        if !self.subtitle_enabled {
+            return None;
+        }
+        let file = self.subtitle_files.get(self.subtitle)?.as_ref()?;
+        file.cue_index_at(self.playback_time())
     }
 
     pub(super) fn set_progress_bounds(&mut self, bounds: Bounds<Pixels>) {

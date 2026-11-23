@@ -37,6 +37,8 @@ actions!(
         WriteComment,
         /// 弹幕开关
         ToggleDanmaku,
+        /// 字幕开关
+        ToggleSubtitles,
         /// 重新加载
         Reload,
         /// 回到主窗口
@@ -148,6 +150,11 @@ const COMMANDS: &[Command] = &[
         keys: "d",
         context: PLAYER,
         action: || Box::new(ToggleDanmaku),
+    },
+    Command {
+        keys: "v",
+        context: PLAYER,
+        action: || Box::new(ToggleSubtitles),
     },
     Command {
         keys: "r",
@@ -301,9 +308,7 @@ mod tests {
         }
 
         assert!(COMMANDS.iter().all(|command| {
-            command.context == PLAYER
-                || command.context == RELATED
-                || command.context == COMMENTS
+            command.context == PLAYER || command.context == RELATED || command.context == COMMENTS
         }));
     }
 

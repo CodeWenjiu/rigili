@@ -10,7 +10,7 @@ use gpui_kit::component::slider::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_bilibili::{Chapter, VideoPage};
+use rigili_bilibili::{Chapter, SubtitleTrack, VideoPage};
 use rigili_player::{BufferedRange, PlayerStatus};
 
 use super::danmaku::bar::DanmakuBar;
@@ -18,7 +18,7 @@ use super::surface::PlayerView;
 use crate::info::short_label;
 use crate::request::VideoQuality;
 use crate::settings::DanmakuSettings;
-use crate::shortcuts::{ToggleFullscreen, TogglePlayback};
+use crate::shortcuts::{ToggleFullscreen, TogglePlayback, ToggleSubtitles};
 use gpui_kit::base::{Slider as BaseSlider, SliderIndicator, SliderThumb, SliderTrack};
 use rigili_core::format_clock;
 
@@ -32,6 +32,9 @@ pub(super) struct Transport<'a> {
     pub(super) qualities: &'a [VideoQuality],
     pub(super) selected_quality: u32,
     pub(super) quality_open: bool,
+    pub(super) subtitles: &'a [SubtitleTrack],
+    pub(super) selected_subtitle: Option<usize>,
+    pub(super) subtitle_open: bool,
     pub(super) pages: &'a [VideoPage],
     pub(super) selected_cid: Option<u64>,
     pub(super) pages_open: bool,
@@ -91,6 +94,9 @@ const PROGRESS_HIT_HEIGHT: Pixels = px(24.);
 const PROGRESS_THUMB: Pixels = px(20.);
 
 const THUMB_ICON: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 22"><path d="M16.118 3.667h.382a3.667 3.667 0 0 1 3.667 3.667v7.333a3.667 3.667 0 0 1-3.667 3.667h-11a3.667 3.667 0 0 1-3.667-3.667V7.333A3.667 3.667 0 0 1 5.5 3.666h.382L4.95 2.053a1.1 1.1 0 0 1 1.906-1.1l1.567 2.714h5.156L15.146.953a1.101 1.101 0 0 1 1.906 1.1l-.934 1.614z" fill="#333"/><path d="M5.561 5.194h10.878a2.2 2.2 0 0 1 2.2 2.2v7.211a2.2 2.2 0 0 1-2.2 2.2H5.561a2.2 2.2 0 0 1-2.2-2.2V7.394a2.2 2.2 0 0 1 2.2-2.2z" fill="#fff"/><path d="M6.967 8.556a1.1 1.1 0 0 1 1.1 1.1v2.689a1.1 1.1 0 1 1-2.2 0V9.656a1.1 1.1 0 0 1 1.1-1.1zM15.033 8.556a1.1 1.1 0 0 1 1.1 1.1v2.689a1.1 1.1 0 1 1-2.2 0V9.656a1.1 1.1 0 0 1 1.1-1.1z" fill="#333"/></svg>"##;
+
+const SUBTITLE_ICON: &[u8] = include_bytes!("../../assets/icons/subtitle.svg");
+const SUBTITLE_OFF_ICON: &[u8] = include_bytes!("../../assets/icons/subtitle-off.svg");
 
 struct ProgressSegment {
     start: f64,
@@ -264,6 +270,7 @@ impl Transport<'_> {
         let muted = theme.muted_foreground;
         let primary = theme.primary;
         let background = theme.background;
+        let border = theme.border;
         let weak = self.player.clone();
         let display_time = self.seeking.unwrap_or(self.status.time_pos);
         let duration = self.status.duration.max(0.0);
@@ -283,6 +290,7 @@ impl Transport<'_> {
             _ => "切换清晰度".to_owned(),
         };
         let fullscreen = window.is_fullscreen();
+        let subtitle_on = self.selected_subtitle.is_some();
         let current_page = page_label(self.pages, self.selected_cid);
         let preview = self.preview.take();
         let progress = (!self.live).then(|| {
@@ -460,6 +468,106 @@ impl Transport<'_> {
                                 )),
                         )
                     })
+                    .when(!self.subtitles.is_empty() && !self.live, |this| {
+                        this.child(
+                            Popover::new("subtitle-popover")
+                                .anchor(Anchor::BottomRight)
+                                .offset(px(6.))
+                                .open(self.subtitle_open)
+                                .trigger(
+                                    Button::new("subtitles")
+                                        .ghost()
+                                        .with_size(px(32.))
+                                        .icon(subtitle_icon(
+                                            subtitle_on,
+                                            px(18.),
+                                            if subtitle_on { primary } else { muted },
+                                        ))
+                                        .text_color(if subtitle_on { primary } else { muted })
+                                        .accessibility_label("字幕")
+                                        .tooltip_with_action(
+                                            "字幕",
+                                            &ToggleSubtitles,
+                                            Some(crate::shortcuts::PLAYER),
+                                        ),
+                                )
+                                .on_open_change({
+                                    let weak = weak.clone();
+                                    move |open, _, cx| {
+                                        let _ = weak.update(cx, |this, cx| {
+                                            this.set_subtitle_popover_open(*open, cx);
+                                        });
+                                    }
+                                })
+                                .child(
+                                    v_flex()
+                                        .min_w(px(160.))
+                                        .max_w(px(240.))
+                                        .gap_2()
+                                        .child(
+                                            v_flex()
+                                                .id("subtitle-list")
+                                                .max_h(px(240.))
+                                                .overflow_y_scroll()
+                                                .gap_1()
+                                                .child(
+                                                    ListItem::new("subtitle-off")
+                                                        .check_icon(IconName::Check)
+                                                        .confirmed(self.selected_subtitle.is_none())
+                                                        .selected(self.selected_subtitle.is_none())
+                                                        .on_click({
+                                                            let weak = weak.clone();
+                                                            move |_, _, cx| {
+                                                                let _ =
+                                                                    weak.update(cx, |this, cx| {
+                                                                        this.select_subtitle(
+                                                                            None, cx,
+                                                                        );
+                                                                    });
+                                                            }
+                                                        })
+                                                        .child("关闭"),
+                                                )
+                                                .children(self.subtitles.iter().enumerate().map(
+                                                    |(index, subtitle)| {
+                                                        let selected =
+                                                            self.selected_subtitle == Some(index);
+                                                        ListItem::new(("subtitle", index as u32))
+                                                            .check_icon(IconName::Check)
+                                                            .confirmed(selected)
+                                                            .selected(selected)
+                                                            .on_click({
+                                                                let weak = weak.clone();
+                                                                move |_, _, cx| {
+                                                                    let _ = weak.update(
+                                                                        cx,
+                                                                        |this, cx| {
+                                                                            this.select_subtitle(
+                                                                                Some(index),
+                                                                                cx,
+                                                                            );
+                                                                        },
+                                                                    );
+                                                                }
+                                                            })
+                                                            .child(subtitle.label().to_owned())
+                                                    },
+                                                )),
+                                        )
+                                        .child(v_flex().gap_1().when(subtitle_on, |this| {
+                                            this.child(
+                                                div()
+                                                    .pt_2()
+                                                    .border_t_1()
+                                                    .border_color(border)
+                                                    .text_xs()
+                                                    .text_color(muted)
+                                                    .child("显示时可直接拖动字幕调整位置"),
+                                            )
+                                        })),
+                                ),
+                        )
+                    })
                     .when_some(current_page, |this, current| {
                         this.child(
                             Popover::new("player-page-popover")
@@ -574,6 +682,17 @@ impl Transport<'_> {
                     ),
             )
     }
+}
+
+fn subtitle_icon(enabled: bool, size: Pixels, color: Hsla) -> Icon {
+    Icon::default()
+        .data(if enabled {
+            SUBTITLE_ICON
+        } else {
+            SUBTITLE_OFF_ICON
+        })
+        .with_size(size)
+        .text_color(color)
 }
 
 fn volume_icon(volume: f64, muted: bool) -> IconName {

@@ -14,7 +14,7 @@ use crate::info::{InfoEvent, InfoPanel, InfoSelections, InfoTab};
 use crate::request::{
     PlaybackRequest, PlaybackSource, Resolved, Streams, resolve, resolve_streams,
 };
-use rigili_bilibili::{Chapter, Client, VideoPage};
+use rigili_bilibili::{Chapter, Client, SubtitleFile, SubtitleTrack, VideoPage};
 use rigili_core::client;
 use rigili_core::runtime::{ApiTaskError, spawn_api};
 use rigili_core::{FocusMain, OpenSpace};
@@ -68,6 +68,11 @@ struct Tab {
     background_playing: bool,
     pages: Vec<VideoPage>,
     chapters: Vec<Chapter>,
+    subtitles: Vec<SubtitleTrack>,
+    subtitle_files: Vec<Option<SubtitleFile>>,
+    subtitle: Option<usize>,
+    subtitle_loading: Option<usize>,
+    subtitle_task: Option<Task<()>>,
     streams: Option<CachedStreams>,
     /// Paused player kept alive while this tab is in the background, so
     /// switching back does not reopen the stream.
@@ -107,6 +112,7 @@ impl PlayerWindow {
         let player = cx.new(|cx| PlayerView::new(window, cx));
         let player_sub = cx.subscribe(&player, |this, _, event: &PlayerEvent, cx| match event {
             PlayerEvent::SelectPage(cid) => this.select_page(*cid, cx),
+            PlayerEvent::RequestSubtitle(index) => this.request_subtitle(*index, cx),
         });
         // Key bindings are looked up along the focused node's context stack, so
         // once the focused element unmounts (the auto-hiding bar, a comment row
@@ -187,6 +193,11 @@ impl PlayerWindow {
             background_playing: false,
             pages: Vec::new(),
             chapters: Vec::new(),
+            subtitles: Vec::new(),
+            subtitle_files: Vec::new(),
+            subtitle: None,
+            subtitle_loading: None,
+            subtitle_task: None,
             streams: None,
             player: None,
             last_used: Instant::now(),
@@ -337,9 +348,9 @@ impl PlayerWindow {
             .player
             .take()
             .unwrap_or_else(Self::new_player);
-        let outgoing = self.player.update(cx, |view, cx| {
-            view.swap_player(incoming, volume, muted, cx)
-        });
+        let outgoing = self
+            .player
+            .update(cx, |view, cx| view.swap_player(incoming, volume, muted, cx));
         if let Some(previous) = previous {
             self.keep_warm(previous, outgoing);
         }
@@ -425,6 +436,7 @@ impl PlayerWindow {
                 player.set_rendering(true);
             }
         });
+        self.restore_subtitles(cx);
         self.load_media_for(tab_id, generation, bvid, cid, cx);
     }
 
@@ -473,6 +485,7 @@ impl PlayerWindow {
                 view.sync_streams(&mut cached.streams);
             }
         }
+        let subtitle = self.player.read(cx).subtitle_selection();
         let interrupted = {
             let tab = &mut self.tabs[active];
             tab.background_playing = background;
@@ -496,6 +509,9 @@ impl PlayerWindow {
             tab.danmaku_task = None;
             let interrupted = tab.loading;
             tab.loading = false;
+            if session == Some(tab.id) {
+                tab.subtitle = subtitle;
+            }
             if interrupted {
                 tab.loaded = false;
             }
@@ -653,6 +669,11 @@ impl PlayerWindow {
             tab.paused = false;
             tab.pages.clear();
             tab.chapters.clear();
+            tab.subtitles.clear();
+            tab.subtitle_files.clear();
+            tab.subtitle = None;
+            tab.subtitle_loading = None;
+            tab.subtitle_task = None;
             tab.streams = None;
             tab.is_live = is_live;
             tab.request = request;
@@ -666,6 +687,7 @@ impl PlayerWindow {
             player.clear_danmaku_source(cx);
             player.clear_pages(cx);
             player.clear_danmaku(cx);
+            player.set_subtitles(Vec::new(), None, Vec::new(), cx);
             player.set_title(title, cx);
         });
         info.update(cx, |info, cx| {
@@ -763,6 +785,7 @@ impl PlayerWindow {
                 paused,
             };
             self.play_streams(target, streams, cx);
+            self.restore_subtitles(cx);
             return;
         }
 
@@ -796,6 +819,7 @@ impl PlayerWindow {
                                     paused,
                                 };
                                 this.play_streams(target, streams, cx);
+                                this.restore_subtitles(cx);
                             }
                             Err(error) => this.fail_active(tab_id, generation, error, cx),
                         }
@@ -824,6 +848,37 @@ impl PlayerWindow {
             player.load_streams_at(streams, false, resume, paused, cx)
         });
         self.load_media_for(tab_id, generation, bvid, cid, cx);
+    }
+
+    fn restore_subtitles(&mut self, cx: &mut Context<Self>) {
+        let (subtitles, subtitle, files, tab_id, generation) = {
+            let tab = self.tab();
+            (
+                tab.subtitles.clone(),
+                tab.subtitle,
+                tab.subtitle_files.clone(),
+                tab.id,
+                tab.generation,
+            )
+        };
+        let missing =
+            subtitle.is_some_and(|index| files.get(index).and_then(Option::as_ref).is_none());
+        self.player.update(cx, |player, cx| {
+            player.set_subtitles(subtitles, subtitle, files, cx)
+        });
+        if let Some(index) = subtitle
+            && missing
+        {
+            self.load_subtitle_for(tab_id, generation, index, cx);
+        }
+    }
+
+    fn request_subtitle(&mut self, index: usize, cx: &mut Context<Self>) {
+        let (tab_id, generation) = {
+            let tab = self.tab();
+            (tab.id, tab.generation)
+        };
+        self.load_subtitle_for(tab_id, generation, index, cx);
     }
 
     fn load_media_for(
@@ -926,6 +981,12 @@ impl PlayerWindow {
             .unwrap_or(video.duration);
         let start = watch::resume_position(player_info.last_play_time, duration as f64);
         let chapters = player_info.chapters();
+        let subtitles = player_info.subtitle.tracks().cloned().collect::<Vec<_>>();
+        let subtitle = crate::settings::current(cx)
+            .subtitle
+            .enabled
+            .then(|| player_info.subtitle.default_track())
+            .flatten();
         let pages = video.pages.clone();
         let title: SharedString = video.title.clone().into();
         let owner_mid = video.owner.mid;
@@ -940,6 +1001,11 @@ impl PlayerWindow {
             };
             tab.pages = pages.clone();
             tab.chapters = chapters.clone();
+            tab.subtitles = subtitles;
+            tab.subtitle_files.clear();
+            tab.subtitle = subtitle;
+            tab.subtitle_loading = None;
+            tab.subtitle_task = None;
             tab.streams = Some(CachedStreams {
                 streams: streams.clone(),
                 at: Instant::now(),
@@ -958,6 +1024,7 @@ impl PlayerWindow {
             player.set_chapters(chapters, cx);
             player.load_streams(streams, false, start, cx);
         });
+        self.restore_subtitles(cx);
         self.load_previews_for(tab_id, generation, bvid.clone(), cid, cx);
         self.load_danmaku_for(
             media::DanmakuRequest {
@@ -1032,13 +1099,20 @@ impl PlayerWindow {
             tab.error = None;
             tab.paused = false;
             tab.resume = None;
+            tab.subtitles.clear();
+            tab.subtitle_files.clear();
+            tab.subtitle = None;
+            tab.subtitle_loading = None;
+            tab.subtitle_task = None;
             tab.streams = None;
             let duration = tab.info.read(cx).page_duration(cid).unwrap_or_default();
             (tab.id, tab.generation, tab.info.clone(), duration)
         };
         self.session = None;
-        self.player
-            .update(cx, |player, cx| player.clear_danmaku_source(cx));
+        self.player.update(cx, |player, cx| {
+            player.clear_danmaku_source(cx);
+            player.set_subtitles(Vec::new(), None, Vec::new(), cx);
+        });
         info.update(cx, |info, cx| info.set_busy(true, cx));
         cx.notify();
 
@@ -1063,9 +1137,17 @@ impl PlayerWindow {
                         let start =
                             watch::resume_position(player_info.last_play_time, duration as f64);
                         let chapters = player_info.chapters();
+                        let subtitles = player_info.subtitle.tracks().cloned().collect::<Vec<_>>();
+                        let subtitle = crate::settings::current(cx)
+                            .subtitle
+                            .enabled
+                            .then(|| player_info.subtitle.default_track())
+                            .flatten();
                         {
                             let tab = this.tab_mut();
                             tab.chapters = chapters.clone();
+                            tab.subtitles = subtitles;
+                            tab.subtitle = subtitle;
                             tab.history.remember_cid(cid);
                             tab.streams = Some(CachedStreams {
                                 streams: streams.clone(),
@@ -1077,8 +1159,9 @@ impl PlayerWindow {
                         this.player.update(cx, |player, cx| {
                             player.set_selected_page(cid, cx);
                             player.set_chapters(chapters, cx);
-                            player.load_streams(streams, false, start, cx)
+                            player.load_streams(streams, false, start, cx);
                         });
+                        this.restore_subtitles(cx);
                         this.load_media_for(tab_id, generation, media_bvid, cid, cx);
                     }
                     Err(error) => {
@@ -1165,7 +1248,6 @@ impl PlayerWindow {
         );
     }
 }
-
 
 fn panel_visibility(visible: bool, current: InfoTab, target: InfoTab) -> bool {
     !(visible && current == target)

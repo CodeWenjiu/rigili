@@ -12,6 +12,8 @@ const FILE_NAME: &str = "playback.json";
 const TMP_FILE_NAME: &str = "playback.json.tmp";
 const DEFAULT_SCROLL_SECONDS: f64 = 8.0;
 const DEFAULT_AREA_RATIO: f32 = 0.72;
+const DEFAULT_SUBTITLE_X: f32 = 0.5;
+const DEFAULT_SUBTITLE_Y: f32 = 0.8;
 pub(crate) const DEFAULT_VOLUME: f64 = 100.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -48,10 +50,38 @@ impl DanmakuSettings {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct SubtitleSettings {
+    pub(crate) enabled: bool,
+    /// Horizontal center of the subtitle box, as a fraction of the video width.
+    pub(crate) x: f32,
+    /// Top edge of the subtitle box, as a fraction of the video height.
+    pub(crate) y: f32,
+}
+
+impl Default for SubtitleSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            x: DEFAULT_SUBTITLE_X,
+            y: DEFAULT_SUBTITLE_Y,
+        }
+    }
+}
+
+impl SubtitleSettings {
+    fn sanitize(&mut self) {
+        self.x = finite_or(self.x, DEFAULT_SUBTITLE_X).clamp(0.0, 1.0);
+        self.y = finite_or(self.y, DEFAULT_SUBTITLE_Y).clamp(0.0, 1.0);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct PlaybackSettings {
     pub(crate) danmaku: DanmakuSettings,
+    pub(crate) subtitle: SubtitleSettings,
     pub(crate) speed: f64,
     pub(crate) preferred_quality: Option<u32>,
     #[serde(skip)]
@@ -62,6 +92,7 @@ impl Default for PlaybackSettings {
     fn default() -> Self {
         Self {
             danmaku: DanmakuSettings::default(),
+            subtitle: SubtitleSettings::default(),
             speed: 1.0,
             preferred_quality: None,
             dirty: false,
@@ -112,6 +143,7 @@ fn load() -> PlaybackSettings {
 impl PlaybackSettings {
     fn normalize(&mut self) {
         self.danmaku.sanitize();
+        self.subtitle.sanitize();
         if self.speed.is_finite() {
             self.speed = self.speed.clamp(0.25, 4.0);
         } else {
@@ -169,7 +201,7 @@ fn restrict_permissions(_: &fs::File) -> io::Result<()> {
 mod tests {
     use std::fs;
 
-    use super::{DanmakuSettings, PlaybackSettings};
+    use super::{DanmakuSettings, PlaybackSettings, SubtitleSettings};
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -191,6 +223,11 @@ mod tests {
                 font_scale: 1.25,
                 scroll_seconds: 5.0,
                 area_ratio: 1.0,
+            },
+            subtitle: SubtitleSettings {
+                enabled: true,
+                x: 0.3,
+                y: 0.7,
             },
             speed: 2.0,
             preferred_quality: Some(80),
@@ -215,6 +252,17 @@ mod tests {
         assert_eq!(loaded.danmaku.opacity, 1.0);
         assert_eq!(loaded.danmaku.font_scale, 0.5);
         assert_eq!(loaded.speed, 4.0);
+        assert_eq!(loaded.subtitle.x, 0.5);
+        assert_eq!(loaded.subtitle.y, 0.8);
+
+        let mut subtitles = SubtitleSettings {
+            x: f32::NAN,
+            y: 2.0,
+            ..SubtitleSettings::default()
+        };
+        subtitles.sanitize();
+        assert_eq!(subtitles.x, 0.5);
+        assert_eq!(subtitles.y, 1.0);
 
         let mut danmaku = DanmakuSettings {
             scroll_seconds: f64::NAN,

@@ -170,6 +170,8 @@ impl PlayerView {
             || self.quality_popover_open
             || self.speed_popover_open
             || self.page_popover_open
+            || self.subtitle_popover_open
+            || self.subtitle_drag.is_some()
             || self.danmaku_settings_open
             || self.danmaku_sending
             || self.danmaku_input_focused

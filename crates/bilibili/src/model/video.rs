@@ -86,6 +86,111 @@ pub struct PlayerInfo {
     /// Milliseconds into the requested part where the viewer stopped last time.
     #[serde(default)]
     pub last_play_time: f64,
+    #[serde(default, deserialize_with = "null_or_default")]
+    pub subtitle: SubtitleInfo,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct SubtitleInfo {
+    #[serde(default)]
+    pub subtitles: Vec<SubtitleTrack>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct SubtitleTrack {
+    #[serde(default, deserialize_with = "null_or_default")]
+    pub lan: String,
+    #[serde(default, deserialize_with = "null_or_default")]
+    pub lan_doc: String,
+    #[serde(default, deserialize_with = "null_or_default")]
+    pub subtitle_url: String,
+    #[serde(default, deserialize_with = "null_or_default")]
+    pub ai_type: u32,
+}
+
+impl SubtitleInfo {
+    /// Subtitle tracks mpv can load, in the order the API returned them.
+    pub fn tracks(&self) -> impl Iterator<Item = &SubtitleTrack> {
+        self.subtitles
+            .iter()
+            .filter(|track| !track.subtitle_url.is_empty())
+    }
+
+    /// The track to enable without asking when subtitles are on.
+    pub fn default_track(&self) -> Option<usize> {
+        preferred_index(self.tracks())
+    }
+}
+
+impl SubtitleTrack {
+    /// The preferred index in an already filtered track list.
+    pub fn default_index(tracks: &[SubtitleTrack]) -> Option<usize> {
+        preferred_index(tracks.iter())
+    }
+    /// Absolute URL of the subtitle JSON file.
+    pub fn url(&self) -> String {
+        crate::media::normalize_url(&self.subtitle_url)
+    }
+
+    /// Human-readable name for pickers.
+    pub fn label(&self) -> &str {
+        if !self.lan_doc.is_empty() {
+            &self.lan_doc
+        } else if !self.lan.is_empty() {
+            &self.lan
+        } else {
+            "字幕"
+        }
+    }
+
+    fn is_chinese(&self) -> bool {
+        self.lan.starts_with("zh") || self.lan_doc.contains("中文")
+    }
+
+    fn preference(&self) -> u8 {
+        match (self.is_chinese(), self.ai_type) {
+            (true, 0) => 0,
+            (true, _) => 1,
+            (false, _) => 2,
+        }
+    }
+}
+
+fn preferred_index<'a>(tracks: impl Iterator<Item = &'a SubtitleTrack>) -> Option<usize> {
+    tracks
+        .enumerate()
+        .min_by_key(|(_, track)| track.preference())
+        .map(|(index, _)| index)
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct SubtitleFile {
+    #[serde(default)]
+    pub body: Vec<SubtitleLine>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct SubtitleLine {
+    #[serde(default)]
+    pub from: f64,
+    #[serde(default)]
+    pub to: f64,
+    #[serde(default)]
+    pub content: String,
+}
+
+impl SubtitleFile {
+    /// The cue covering `time`, if any.
+    pub fn cue_at(&self, time: f64) -> Option<&SubtitleLine> {
+        self.body.get(self.cue_index_at(time)?)
+    }
+
+    /// Index of the cue covering `time`, if any.
+    pub fn cue_index_at(&self, time: f64) -> Option<usize> {
+        self.body
+            .iter()
+            .position(|line| line.from <= time && time < line.to)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -390,8 +495,8 @@ pub struct RecommendVideo {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArchiveRelation, Dash, DashAudio, DashVideo, PlayerInfo, RecommendVideo, VideoDetail,
-        VideoShot,
+        ArchiveRelation, Dash, DashAudio, DashVideo, PlayerInfo, RecommendVideo, SubtitleFile,
+        VideoDetail, VideoShot,
     };
 
     fn video(codecid: u32, bandwidth: u64) -> DashVideo {
@@ -577,6 +682,104 @@ mod tests {
         assert_eq!((chapters[0].start, chapters[0].end), (0., 30.));
         assert_eq!((chapters[1].start, chapters[1].end), (30., 60.));
         assert_eq!((chapters[2].start, chapters[2].end), (60., f64::INFINITY));
+    }
+
+    #[test]
+    fn parses_player_subtitles_and_prefers_human_chinese() {
+        let info: PlayerInfo = serde_json::from_str(
+            r#"{
+                "last_play_time": 0,
+                "subtitle": {
+                    "allow_submit": false,
+                    "lan": "zh-CN",
+                    "lan_doc": "中文（中国）",
+                    "subtitles": [
+                        {
+                            "id": 1, "lan": "en-US", "lan_doc": "英语（美国）",
+                            "subtitle_url": "//i0.hdslb.com/bfs/subtitle/a.json",
+                            "type": 0, "id_str": "1", "ai_type": 0, "ai_status": 0
+                        },
+                        {
+                            "id": 2, "lan": "ai-zh", "lan_doc": "中文（自动生成）",
+                            "subtitle_url": "https://i0.hdslb.com/bfs/subtitle/b.json",
+                            "type": 0, "id_str": "2", "ai_type": 1, "ai_status": 0
+                        },
+                        {
+                            "id": 3, "lan": "zh-CN", "lan_doc": "中文（中国）",
+                            "subtitle_url": "//i0.hdslb.com/bfs/subtitle/c.json",
+                            "type": 0, "id_str": "3", "ai_type": 0, "ai_status": 0
+                        },
+                        {
+                            "id": 4, "lan": "zh-Hant", "lan_doc": "中文（繁体）",
+                            "subtitle_url": "",
+                            "type": 0, "id_str": "4", "ai_type": 0, "ai_status": 0
+                        }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let tracks = info.subtitle.tracks().collect::<Vec<_>>();
+        assert_eq!(tracks.len(), 3);
+        assert_eq!(tracks[2].url(), "https://i0.hdslb.com/bfs/subtitle/c.json");
+        assert_eq!(tracks[2].label(), "中文（中国）");
+        assert_eq!(info.subtitle.default_track(), Some(2));
+    }
+
+    #[test]
+    fn tolerates_missing_or_null_subtitles() {
+        let missing: PlayerInfo = serde_json::from_str(r#"{"last_play_time":0}"#).unwrap();
+        assert!(missing.subtitle.tracks().next().is_none());
+        assert_eq!(missing.subtitle.default_track(), None);
+
+        let null: PlayerInfo =
+            serde_json::from_str(r#"{"last_play_time":0,"subtitle":null}"#).unwrap();
+        assert!(null.subtitle.tracks().next().is_none());
+
+        let english: PlayerInfo = serde_json::from_str(
+            r#"{"subtitle":{"subtitles":[{"lan":"ai-en","subtitle_url":"//i0.hdslb.com/a.json","ai_type":1}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(english.subtitle.default_track(), Some(0));
+
+        let ai_chinese: PlayerInfo = serde_json::from_str(
+            r#"{"subtitle":{"subtitles":[{"lan":"ai-zh","lan_doc":"中文（自动生成）","subtitle_url":"//i0.hdslb.com/a.json","ai_type":1}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(ai_chinese.subtitle.default_track(), Some(0));
+
+        let null_fields: PlayerInfo = serde_json::from_str(
+            r#"{"subtitle":{"subtitles":[{"lan":null,"lan_doc":null,"subtitle_url":null,"ai_type":null}]}}"#,
+        )
+        .unwrap();
+        assert!(null_fields.subtitle.tracks().next().is_none());
+    }
+
+    #[test]
+    fn finds_the_subtitle_cue_at_a_time() {
+        let file: SubtitleFile = serde_json::from_str(
+            r##"{
+                "body": [
+                    {"from": -1.0, "to": 2.5, "location": 2, "content": "第一行"},
+                    {"from": 61.2, "to": 62.05, "content": "第二行"},
+                    {"from": 3.0, "to": 3.0, "content": "空"}
+                ]
+            }"##,
+        )
+        .unwrap();
+
+        assert_eq!(
+            file.cue_at(-0.5).map(|cue| cue.content.as_str()),
+            Some("第一行")
+        );
+        assert_eq!(file.cue_at(2.5), None);
+        assert_eq!(
+            file.cue_at(61.5).map(|cue| cue.content.as_str()),
+            Some("第二行")
+        );
+        assert_eq!(file.cue_at(3.0), None);
+        assert_eq!(file.cue_at(62.05), None);
     }
 
     #[test]
