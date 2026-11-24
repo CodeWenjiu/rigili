@@ -11,7 +11,7 @@ use crate::shortcuts::{PLAYER, ToggleDanmaku};
 
 use crate::settings::DanmakuSettings;
 
-use crate::player::surface::PlayerView;
+use crate::player::surface::{BarOverlay, PlayerView};
 
 pub(crate) struct DanmakuBar<'a> {
     pub(crate) settings: DanmakuSettings,
@@ -90,8 +90,9 @@ impl DanmakuBar<'_> {
                     .on_open_change({
                         let weak = weak.clone();
                         move |open, _, cx| {
-                            let _ = weak
-                                .update(cx, |this, cx| this.set_danmaku_settings_open(*open, cx));
+                            let _ = weak.update(cx, |this, cx| {
+                                this.set_bar_overlay(BarOverlay::DanmakuSettings, *open, cx)
+                            });
                         }
                     })
                     .when_some(settings_panel, |popover, panel| popover.child(panel)),

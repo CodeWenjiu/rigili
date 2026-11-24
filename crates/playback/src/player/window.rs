@@ -704,10 +704,23 @@ impl PlayerWindow {
 
         match source {
             PlaybackSource::Video { bvid, cid, episode } => {
-                let preferred = crate::settings::current(cx).preferred_quality;
+                let settings = crate::settings::current(cx);
+                let preferred = settings.preferred_quality;
+                let preferred_audio = settings.preferred_audio;
                 spawn_api(
                     cx,
-                    async move { resolve(client, resolve_title, bvid, cid, episode, preferred).await },
+                    async move {
+                        resolve(
+                            client,
+                            resolve_title,
+                            bvid,
+                            cid,
+                            episode,
+                            preferred,
+                            preferred_audio,
+                        )
+                        .await
+                    },
                     move |this, result, cx| {
                         if !this.is_active(tab_id, generation) {
                             return;
@@ -782,7 +795,9 @@ impl PlayerWindow {
             } = request.source.clone()
         {
             rigili_monitor::monitor!("stream", "tab {tab_id}: reusing streams cached {age:?} ago");
-            apply_preferred_quality(&mut streams, crate::settings::current(cx).preferred_quality);
+            let settings = crate::settings::current(cx);
+            apply_preferred_quality(&mut streams, settings.preferred_quality);
+            streams.select_audio(settings.preferred_audio);
             let target = StreamTarget {
                 tab_id,
                 generation,
@@ -802,12 +817,22 @@ impl PlayerWindow {
                 cid: Some(cid),
                 episode,
             } => {
-                let preferred = crate::settings::current(cx).preferred_quality;
+                let settings = crate::settings::current(cx);
+                let preferred = settings.preferred_quality;
+                let preferred_audio = settings.preferred_audio;
                 let request_bvid = bvid.clone();
                 spawn_api(
                     cx,
                     async move {
-                        resolve_streams(&client, &request_bvid, cid, episode, preferred).await
+                        resolve_streams(
+                            &client,
+                            &request_bvid,
+                            cid,
+                            episode,
+                            preferred,
+                            preferred_audio,
+                        )
+                        .await
                     },
                     move |this, result, cx| {
                         if !this.is_active(tab_id, generation) {
@@ -1154,12 +1179,14 @@ impl PlayerWindow {
         cx.notify();
 
         let media_bvid = bvid.clone();
-        let preferred = crate::settings::current(cx).preferred_quality;
+        let settings = crate::settings::current(cx);
+        let preferred = settings.preferred_quality;
+        let preferred_audio = settings.preferred_audio;
         spawn_api(
             cx,
             async move {
                 let (streams, player_info) = tokio::join!(
-                    resolve_streams(&client, &bvid, cid, episode, preferred),
+                    resolve_streams(&client, &bvid, cid, episode, preferred, preferred_audio),
                     client.player_info(&bvid, cid, episode)
                 );
                 streams.map(|resolved| (resolved.streams, player_info.unwrap_or_default()))
@@ -1299,6 +1326,7 @@ impl PlayerWindow {
             0 => None,
             quality => Some(quality),
         };
+        let preferred_audio = crate::settings::current(cx).preferred_audio;
         self.session = Some(tab_id);
         self.player
             .update(cx, |player, cx| player.clear_danmaku_source(cx));
@@ -1306,7 +1334,9 @@ impl PlayerWindow {
 
         spawn_api(
             cx,
-            async move { resolve_streams(&client, &bvid, cid, episode, preferred).await },
+            async move {
+                resolve_streams(&client, &bvid, cid, episode, preferred, preferred_audio).await
+            },
             move |this, result, cx| {
                 if !this.is_active(tab_id, generation) {
                     return;
@@ -1477,7 +1507,8 @@ mod tests {
         let mut streams = Streams {
             video: "high".into(),
             video_id: 80,
-            audio: None,
+            audio_tracks: Vec::new(),
+            audio_kind: None,
             qualities: vec![quality(80, "high"), quality(64, "low")],
         };
 

@@ -771,6 +771,59 @@ mod tests {
     }
 
     #[test]
+    fn parses_dolby_and_flac_audio() {
+        let playurl: PlayUrl = parse_envelope(
+            r#"
+            {
+              "code": 0,
+              "data": {
+                "dash": {
+                  "video": [],
+                  "audio": null,
+                  "dolby": {
+                    "type": 2,
+                    "audio": [
+                      {
+                        "id": 30250,
+                        "baseUrl": "https://example.invalid/dolby.m4s",
+                        "backupUrl": [],
+                        "bandwidth": 1025174,
+                        "codecs": "ec-3"
+                      }
+                    ]
+                  },
+                  "flac": {
+                    "display": true,
+                    "audio": {
+                      "id": 30251,
+                      "baseUrl": "https://example.invalid/hires.m4s",
+                      "backupUrl": [],
+                      "bandwidth": 1642465,
+                      "codecs": "fLaC"
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        )
+        .expect("audio fixture");
+        let dash = playurl.dash.expect("dash");
+        assert!(dash.audio.is_empty());
+
+        let dolby = dash.dolby.expect("dolby");
+        assert_eq!(dolby.audio.len(), 1);
+        assert_eq!(dolby.audio[0].id, 30250);
+        assert_eq!(dolby.audio[0].codecs, "ec-3");
+
+        let flac = dash.flac.expect("flac");
+        assert!(flac.display);
+        let flac_audio = flac.audio.expect("flac audio");
+        assert_eq!(flac_audio.id, 30251);
+        assert_eq!(flac_audio.bandwidth, 1_642_465);
+    }
+
+    #[test]
     fn surfaces_api_errors() {
         let risk = parse_envelope::<Popular>(r#"{"code":-352,"message":"风控校验失败"}"#)
             .expect_err("risk control response");

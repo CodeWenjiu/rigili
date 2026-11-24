@@ -1,4 +1,4 @@
-rigili_macro::mod_prv!(input, native, poll, render);
+rigili_macro::mod_prv!(input, native, overlays, poll, render);
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -14,9 +14,10 @@ use rigili_player::{OsdOverlay, PlaybackPhase, Player, PlayerStatus};
 
 use super::controls::VolumePopup;
 use super::danmaku;
-use crate::request::{Streams, VideoQuality};
+use crate::request::{AudioKind, AudioTrack, Streams, VideoQuality};
 use crate::settings::DEFAULT_VOLUME;
 use native::{NativeSurface, create_native_surface};
+pub(super) use overlays::{BarOverlay, BarOverlays};
 
 const PREVIEW_WIDTH: f32 = 200.;
 
@@ -81,9 +82,9 @@ pub(super) struct PlayerView {
     pub(super) video_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     qualities: Vec<VideoQuality>,
     selected_quality: u32,
-    audio_url: Option<String>,
-    quality_popover_open: bool,
-    speed_popover_open: bool,
+    audio_tracks: Vec<AudioTrack>,
+    selected_audio: Option<AudioKind>,
+    bar_overlays: BarOverlays,
     subtitles: Vec<SubtitleTrack>,
     subtitle_files: Vec<Option<SubtitleFile>>,
     subtitle_x: f32,
@@ -93,10 +94,8 @@ pub(super) struct PlayerView {
     subtitle_cue: Option<usize>,
     subtitle: usize,
     subtitle_enabled: bool,
-    subtitle_popover_open: bool,
     pages: Vec<VideoPage>,
     selected_cid: Option<u64>,
-    page_popover_open: bool,
     seeking: Option<f64>,
     volume_dragging: bool,
     volume_dirty: bool,
@@ -107,7 +106,6 @@ pub(super) struct PlayerView {
     controls_bounds_seen: Option<Bounds<Pixels>>,
     pointer_in_video: bool,
     pointer_in_bar: bool,
-    volume_popup_open: bool,
     pub(super) last_activity: Instant,
     title: SharedString,
     chapters: Vec<Chapter>,
@@ -122,7 +120,6 @@ pub(super) struct PlayerView {
     pub(super) danmaku_source: Option<danmaku::DanmakuSource>,
     pub(super) danmaku_demand: Arc<danmaku::DanmakuDemand>,
     pub(super) danmaku_sending: bool,
-    pub(super) danmaku_settings_open: bool,
     pub(super) danmaku_input_focused: bool,
     pub(super) danmaku_pin: Option<danmaku::DanmakuPin>,
     pub(super) danmaku_like_generation: u64,
@@ -242,9 +239,9 @@ impl PlayerView {
             video_bounds: Rc::new(Cell::new(None)),
             qualities: Vec::new(),
             selected_quality: 0,
-            audio_url: None,
-            quality_popover_open: false,
-            speed_popover_open: false,
+            audio_tracks: Vec::new(),
+            selected_audio: None,
+            bar_overlays: BarOverlays::default(),
             subtitles: Vec::new(),
             subtitle_files: Vec::new(),
             subtitle_x: subtitle_settings.x,
@@ -254,10 +251,8 @@ impl PlayerView {
             subtitle_cue: None,
             subtitle: 0,
             subtitle_enabled: false,
-            subtitle_popover_open: false,
             pages: Vec::new(),
             selected_cid: None,
-            page_popover_open: false,
             seeking: None,
             volume_dragging: false,
             volume_dirty: false,
@@ -268,7 +263,6 @@ impl PlayerView {
             controls_bounds_seen: None,
             pointer_in_video: false,
             pointer_in_bar: false,
-            volume_popup_open: false,
             last_activity: Instant::now(),
             title: SharedString::default(),
             chapters: Vec::new(),
@@ -283,7 +277,6 @@ impl PlayerView {
             danmaku_source: None,
             danmaku_demand: Arc::new(danmaku::DanmakuDemand::new(persisted.danmaku.enabled)),
             danmaku_sending: false,
-            danmaku_settings_open: false,
             danmaku_input_focused: false,
             danmaku_pin: None,
             danmaku_like_generation: 0,
@@ -343,9 +336,7 @@ impl PlayerView {
         self.preview_time = None;
         self.notice = None;
         self.progress_max = 0.0;
-        self.quality_popover_open = false;
-        self.speed_popover_open = false;
-        self.page_popover_open = false;
+        self.bar_overlays.close_all();
         self.subtitles.clear();
         self.subtitle_files.clear();
         self.subtitle = 0;
@@ -353,14 +344,14 @@ impl PlayerView {
         self.subtitle_drag = None;
         self.subtitle_cue = None;
         self.subtitle_bounds.set(None);
-        self.subtitle_popover_open = false;
         self.clear_danmaku(cx);
         self.danmaku_source = None;
         self.danmaku_sending = false;
-        self.danmaku_settings_open = false;
         self.play_anchor = None;
         self.selected_quality = streams.video_id;
-        self.audio_url = streams.audio.clone();
+        self.audio_tracks = streams.audio_tracks.clone();
+        self.selected_audio = streams.audio_kind;
+        let audio = streams.audio_url().map(str::to_owned);
         self.qualities = streams.qualities;
         self.status = PlayerStatus {
             phase: PlaybackPhase::Loading,
@@ -373,7 +364,7 @@ impl PlayerView {
         };
         self.player.switch_video(
             &streams.video,
-            streams.audio.as_deref(),
+            audio.as_deref(),
             start.unwrap_or_default(),
             paused,
         );
@@ -404,18 +395,18 @@ impl PlayerView {
         }
         self.seeking = None;
         self.notice = None;
-        self.quality_popover_open = false;
-        self.speed_popover_open = false;
-        self.page_popover_open = false;
+        self.bar_overlays.close_all();
         self.play_anchor = Some((start, Instant::now()));
         self.seek_danmaku(start, cx);
         self.selected_quality = streams.video_id;
-        self.audio_url = streams.audio.clone();
+        self.audio_tracks = streams.audio_tracks.clone();
+        self.selected_audio = streams.audio_kind;
+        let audio = streams.audio_url().map(str::to_owned);
         self.qualities = streams.qualities;
         self.status.phase = PlaybackPhase::Loading;
         self.status.error = None;
         self.player
-            .switch_video(&streams.video, streams.audio.as_deref(), start, paused);
+            .switch_video(&streams.video, audio.as_deref(), start, paused);
         self.last_activity = Instant::now();
         cx.notify();
     }
@@ -439,32 +430,46 @@ impl PlayerView {
         let start = self.seeking.unwrap_or(self.status.time_pos).max(0.0);
         let paused = self.status.paused;
         self.selected_quality = id;
-        self.quality_popover_open = false;
-        self.speed_popover_open = false;
-        self.page_popover_open = false;
+        self.bar_overlays.close_all();
         crate::settings::update(cx, |settings| settings.preferred_quality = Some(id));
         self.play_anchor = Some((start, Instant::now()));
         self.seek_danmaku(start, cx);
         self.status.phase = PlaybackPhase::Loading;
         self.status.error = None;
         self.player
-            .switch_video(&quality.url, self.audio_url.as_deref(), start, paused);
+            .switch_video(&quality.url, self.selected_audio_url(), start, paused);
         cx.notify();
     }
 
-    pub(super) fn set_quality_popover_open(&mut self, open: bool, cx: &mut Context<Self>) {
-        if self.quality_popover_open != open {
-            self.quality_popover_open = open;
-            if open {
-                self.last_activity = Instant::now();
-            }
-            cx.notify();
-        }
+    fn selected_audio_url(&self) -> Option<&str> {
+        let kind = self.selected_audio?;
+        self.audio_tracks
+            .iter()
+            .find(|track| track.kind == kind)
+            .map(|track| track.url.as_str())
     }
 
-    pub(super) fn set_speed_popover_open(&mut self, open: bool, cx: &mut Context<Self>) {
-        if self.speed_popover_open != open {
-            self.speed_popover_open = open;
+    pub(super) fn switch_audio(&mut self, kind: AudioKind, cx: &mut Context<Self>) {
+        if self.live || self.selected_audio == Some(kind) {
+            return;
+        }
+        let Some(track) = self.audio_tracks.iter().find(|track| track.kind == kind) else {
+            return;
+        };
+        self.player.set_audio(&track.url);
+        self.selected_audio = Some(kind);
+        self.bar_overlays.set(BarOverlay::Audio, false);
+        crate::settings::update(cx, |settings| settings.preferred_audio = kind);
+        cx.notify();
+    }
+
+    pub(super) fn set_bar_overlay(
+        &mut self,
+        overlay: BarOverlay,
+        open: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.bar_overlays.set(overlay, open) {
             if open {
                 self.last_activity = Instant::now();
             }
@@ -475,7 +480,7 @@ impl PlayerView {
     pub(super) fn set_pages(&mut self, pages: Vec<VideoPage>, cid: u64, cx: &mut Context<Self>) {
         self.pages = pages;
         self.selected_cid = Some(cid);
-        self.page_popover_open = false;
+        self.bar_overlays.set(BarOverlay::Pages, false);
         cx.notify();
     }
 
@@ -483,7 +488,7 @@ impl PlayerView {
         if !self.pages.is_empty() || self.selected_cid.is_some() {
             self.pages.clear();
             self.selected_cid = None;
-            self.page_popover_open = false;
+            self.bar_overlays.set(BarOverlay::Pages, false);
             cx.notify();
         }
     }
@@ -503,21 +508,11 @@ impl PlayerView {
     }
 
     pub(super) fn request_page(&mut self, cid: u64, cx: &mut Context<Self>) {
-        self.page_popover_open = false;
+        self.bar_overlays.set(BarOverlay::Pages, false);
         if self.selected_cid != Some(cid) {
             cx.emit(PlayerEvent::SelectPage(cid));
         }
         cx.notify();
-    }
-
-    pub(super) fn set_page_popover_open(&mut self, open: bool, cx: &mut Context<Self>) {
-        if self.page_popover_open != open {
-            self.page_popover_open = open;
-            if open {
-                self.last_activity = Instant::now();
-            }
-            cx.notify();
-        }
     }
 
     pub(super) fn toggle_pause(&mut self, cx: &mut Context<Self>) {
@@ -567,9 +562,7 @@ impl PlayerView {
         self.previews = None;
         self.preview_time = None;
         self.preview_hovered = false;
-        self.quality_popover_open = false;
-        self.speed_popover_open = false;
-        self.page_popover_open = false;
+        self.bar_overlays.close_all();
         self.subtitles.clear();
         self.subtitle_files.clear();
         self.subtitle = 0;
@@ -577,7 +570,6 @@ impl PlayerView {
         self.subtitle_drag = None;
         self.subtitle_cue = None;
         self.subtitle_bounds.set(None);
-        self.subtitle_popover_open = false;
         self.native_bounds = None;
         self.native_requested = self.native.is_some() && !self.native_failed;
         if self.native_requested {
@@ -598,7 +590,8 @@ impl PlayerView {
     pub(super) fn adopt_streams(&mut self, streams: &Streams, cx: &mut Context<Self>) {
         self.qualities.clone_from(&streams.qualities);
         self.selected_quality = streams.video_id;
-        self.audio_url.clone_from(&streams.audio);
+        self.audio_tracks.clone_from(&streams.audio_tracks);
+        self.selected_audio = streams.audio_kind;
         cx.notify();
     }
 
@@ -607,7 +600,7 @@ impl PlayerView {
             return;
         }
         streams.video_id = self.selected_quality;
-        streams.audio.clone_from(&self.audio_url);
+        streams.audio_kind = self.selected_audio;
         streams.qualities.clone_from(&self.qualities);
         if let Some(quality) = self
             .qualities
@@ -642,7 +635,7 @@ impl PlayerView {
         if self.live {
             return;
         }
-        self.speed_popover_open = false;
+        self.bar_overlays.set(BarOverlay::Speed, false);
         if (self.status.speed - speed).abs() < 1e-3 {
             cx.notify();
             return;
@@ -783,7 +776,7 @@ impl PlayerView {
         self.subtitle_files = files;
         self.subtitle_cue = None;
         self.subtitle_drag = None;
-        self.subtitle_popover_open = false;
+        self.bar_overlays.set(BarOverlay::Subtitle, false);
         cx.notify();
     }
 
@@ -814,7 +807,7 @@ impl PlayerView {
     }
 
     pub(super) fn select_subtitle(&mut self, selected: Option<usize>, cx: &mut Context<Self>) {
-        self.subtitle_popover_open = false;
+        self.bar_overlays.set(BarOverlay::Subtitle, false);
         match selected {
             Some(index) if index < self.subtitles.len() => {
                 self.subtitle = index;
@@ -836,16 +829,6 @@ impl PlayerView {
             cx.emit(PlayerEvent::RequestSubtitle(self.subtitle));
         }
         cx.notify();
-    }
-
-    pub(super) fn set_subtitle_popover_open(&mut self, open: bool, cx: &mut Context<Self>) {
-        if self.subtitle_popover_open != open {
-            self.subtitle_popover_open = open;
-            if open {
-                self.last_activity = Instant::now();
-            }
-            cx.notify();
-        }
     }
 
     pub(super) fn begin_subtitle_drag(&mut self, pointer: Point<Pixels>, cx: &mut Context<Self>) {

@@ -49,6 +49,9 @@ pub(super) enum Command {
         paused: bool,
     },
     TogglePause,
+    SetAudio {
+        audio: String,
+    },
     Stop,
     Seek(f64),
     SetVolume(f64),
@@ -142,6 +145,12 @@ impl Player {
 
     pub fn toggle_pause(&self) {
         self.send(Command::TogglePause);
+    }
+
+    pub fn set_audio(&self, audio: &str) {
+        self.send(Command::SetAudio {
+            audio: audio.to_owned(),
+        });
     }
 
     /// Unloads the current file so mpv releases its demuxer and decoder buffers.

@@ -2,9 +2,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rigili_bilibili::{
-    ApiError, Client, Dash, DashVideo, EpisodeId, PgcEpisode, PgcPlayUrl, PgcSeason, PlayUrl,
-    PlayerInfo, RecommendVideo, VideoInfo, VideoPage,
+    ApiError, Client, Dash, DashAudio, DashVideo, EpisodeId, PgcEpisode, PgcPlayUrl, PgcSeason,
+    PlayUrl, PlayerInfo, RecommendVideo, VideoInfo, VideoPage,
 };
+use serde::{Deserialize, Serialize};
 use tokio::task::JoinSet;
 
 const PROBE_FAST_ENOUGH: Duration = Duration::from_millis(500);
@@ -91,11 +92,40 @@ pub(super) struct ResolvedStreams {
     pub(super) duration: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AudioKind {
+    #[default]
+    Regular,
+    Dolby,
+    Flac,
+}
+
+impl AudioKind {
+    fn rank(self) -> u8 {
+        match self {
+            Self::Regular => 0,
+            Self::Dolby => 1,
+            Self::Flac => 2,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AudioTrack {
+    pub(crate) kind: AudioKind,
+    pub(crate) id: u32,
+    pub(crate) label: String,
+    pub(crate) url: String,
+    pub(crate) backup_urls: Vec<String>,
+}
+
 #[derive(Clone)]
 pub(crate) struct Streams {
     pub(crate) video: String,
     pub(crate) video_id: u32,
-    pub(crate) audio: Option<String>,
+    pub(crate) audio_tracks: Vec<AudioTrack>,
+    pub(crate) audio_kind: Option<AudioKind>,
     pub(crate) qualities: Vec<VideoQuality>,
 }
 
@@ -112,8 +142,44 @@ impl Streams {
         Self {
             video,
             video_id: 0,
-            audio: None,
+            audio_tracks: Vec::new(),
+            audio_kind: None,
             qualities: Vec::new(),
+        }
+    }
+
+    pub(crate) fn select_audio(&mut self, preferred: AudioKind) {
+        let preferred = preferred.rank();
+        self.audio_kind = self
+            .audio_tracks
+            .iter()
+            .filter(|track| track.kind.rank() <= preferred)
+            .max_by_key(|track| track.kind.rank())
+            .or_else(|| {
+                self.audio_tracks
+                    .iter()
+                    .min_by_key(|track| track.kind.rank())
+            })
+            .map(|track| track.kind);
+    }
+
+    pub(crate) fn audio(&self) -> Option<&AudioTrack> {
+        let kind = self.audio_kind?;
+        self.audio_tracks.iter().find(|track| track.kind == kind)
+    }
+
+    pub(crate) fn audio_url(&self) -> Option<&str> {
+        self.audio().map(|track| track.url.as_str())
+    }
+
+    pub(crate) fn set_audio_url(&mut self, url: String) {
+        let kind = self.audio_kind;
+        if let Some(track) = self
+            .audio_tracks
+            .iter_mut()
+            .find(|track| Some(track.kind) == kind)
+        {
+            track.url = url;
         }
     }
 }
@@ -125,12 +191,22 @@ pub(super) async fn resolve(
     cid: Option<u64>,
     episode: Option<EpisodeId>,
     preferred_quality: Option<u32>,
+    preferred_audio: AudioKind,
 ) -> Result<Resolved, ApiError> {
     match episode {
         Some(episode) => {
-            resolve_episode(client, title, bvid, cid, episode, preferred_quality).await
+            resolve_episode(
+                client,
+                title,
+                bvid,
+                cid,
+                episode,
+                preferred_quality,
+                preferred_audio,
+            )
+            .await
         }
-        None => resolve_video(client, title, bvid, cid, preferred_quality).await,
+        None => resolve_video(client, title, bvid, cid, preferred_quality, preferred_audio).await,
     }
 }
 
@@ -140,6 +216,7 @@ async fn resolve_video(
     bvid: String,
     cid: Option<u64>,
     preferred_quality: Option<u32>,
+    preferred_audio: AudioKind,
 ) -> Result<Resolved, ApiError> {
     let started = Instant::now();
     rigili_monitor::monitor!("stream", "resolving {bvid} (cid {cid:?})");
@@ -153,7 +230,16 @@ async fn resolve_video(
                     season_id: season.season_id,
                 };
                 let cid = Some(cid.unwrap_or(detail.view.cid));
-                return resolve_episode(client, title, bvid, cid, episode, preferred_quality).await;
+                return resolve_episode(
+                    client,
+                    title,
+                    bvid,
+                    cid,
+                    episode,
+                    preferred_quality,
+                    preferred_audio,
+                )
+                .await;
             }
             Ok(_) => {}
             Err(error) => {
@@ -164,7 +250,14 @@ async fn resolve_video(
     let info = detail.view;
     let cid = cid.unwrap_or(info.cid);
     let (streams, player_info) = tokio::join!(
-        resolve_streams(&client, &bvid, cid, None, preferred_quality),
+        resolve_streams(
+            &client,
+            &bvid,
+            cid,
+            None,
+            preferred_quality,
+            preferred_audio
+        ),
         client.player_info(&bvid, cid, None)
     );
     let streams = streams?.streams;
@@ -200,6 +293,7 @@ async fn resolve_episode(
     cid: Option<u64>,
     episode: EpisodeId,
     preferred_quality: Option<u32>,
+    preferred_audio: AudioKind,
 ) -> Result<Resolved, ApiError> {
     let started = Instant::now();
     rigili_monitor::monitor!(
@@ -224,7 +318,14 @@ async fn resolve_episode(
         .ok_or_else(|| ApiError::InvalidResponse("该剧集没有可用的播放分片".into()))?;
 
     let (streams, player_info, detail, season) = tokio::join!(
-        resolve_streams(&client, &bvid, cid, Some(episode), preferred_quality),
+        resolve_streams(
+            &client,
+            &bvid,
+            cid,
+            Some(episode),
+            preferred_quality,
+            preferred_audio
+        ),
         client.player_info(&bvid, cid, Some(episode)),
         client.video_detail(&bvid),
         async {
@@ -299,6 +400,7 @@ pub(super) async fn resolve_streams(
     cid: u64,
     episode: Option<EpisodeId>,
     preferred_quality: Option<u32>,
+    preferred_audio: AudioKind,
 ) -> Result<ResolvedStreams, ApiError> {
     let (dash, accept_quality, accept_description, preview, duration) = match episode {
         Some(episode) => {
@@ -359,12 +461,13 @@ pub(super) async fn resolve_streams(
         &accept_quality,
         &accept_description,
         preferred_quality,
+        preferred_audio,
     ) else {
         return Err(ApiError::InvalidResponse("没有可用的视频流".into()));
     };
 
     let video_primary = streams.video.clone();
-    let audio_primary = streams.audio.clone();
+    let audio_primary = streams.audio_url().map(str::to_owned);
     let video_probe = fastest_stream(client, "video", &video_primary, video_urls);
     let audio_probe = async {
         match audio_primary.as_deref() {
@@ -385,7 +488,7 @@ pub(super) async fn resolve_streams(
         streams.video = url;
     }
     if let Some(url) = audio {
-        streams.audio = Some(url);
+        streams.set_audio_url(url);
     }
     Ok(ResolvedStreams {
         streams,
@@ -417,9 +520,18 @@ fn select_streams(
     accept_quality: &[u32],
     accept_description: &[String],
     preferred_quality: Option<u32>,
+    preferred_audio: AudioKind,
 ) -> Option<(Streams, Vec<String>, Vec<String>)> {
     let video = preferred_video(dash, preferred_quality)?;
-    let audio = dash.best_audio();
+    let mut streams = Streams {
+        video: video.base_url.clone(),
+        video_id: video.id,
+        audio_tracks: audio_tracks(dash),
+        audio_kind: None,
+        qualities: quality_tracks(dash, accept_quality, accept_description),
+    };
+    streams.select_audio(preferred_audio);
+    let audio = streams.audio().cloned();
     rigili_monitor::monitor!(
         "stream",
         "chose video qn={} {}x{} codec={} codecid={} bandwidth={} host={}",
@@ -433,28 +545,77 @@ fn select_streams(
     );
     rigili_monitor::monitor!(
         "stream",
-        "chose audio id={} codec={} bandwidth={} host={}",
-        audio.map(|audio| audio.id).unwrap_or_default(),
-        audio.map(|audio| audio.codecs.as_str()).unwrap_or("none"),
-        audio.map(|audio| audio.bandwidth).unwrap_or_default(),
+        "chose audio id={} kind={:?} label={} host={}",
+        audio.as_ref().map(|audio| audio.id).unwrap_or_default(),
+        audio.as_ref().map(|audio| audio.kind),
         audio
-            .map(|audio| rigili_monitor::host(&audio.base_url))
+            .as_ref()
+            .map(|audio| audio.label.as_str())
+            .unwrap_or("none"),
+        audio
+            .as_ref()
+            .map(|audio| rigili_monitor::host(&audio.url))
             .unwrap_or("none")
     );
     let video_urls = candidates(&video.base_url, &video.backup_urls);
     let audio_urls = audio
-        .map(|audio| candidates(&audio.base_url, &audio.backup_urls))
+        .as_ref()
+        .map(|audio| candidates(&audio.url, &audio.backup_urls))
         .unwrap_or_default();
-    Some((
-        Streams {
-            video: video.base_url.clone(),
-            video_id: video.id,
-            audio: audio.map(|audio| audio.base_url.clone()),
-            qualities: quality_tracks(dash, accept_quality, accept_description),
-        },
-        video_urls,
-        audio_urls,
-    ))
+    Some((streams, video_urls, audio_urls))
+}
+
+fn audio_tracks(dash: &Dash) -> Vec<AudioTrack> {
+    let mut tracks = Vec::new();
+    if let Some(audio) = dash.best_audio() {
+        tracks.push(AudioTrack {
+            kind: AudioKind::Regular,
+            id: audio.id,
+            label: format!("普通 {}", regular_audio_label(audio)),
+            url: audio.base_url.clone(),
+            backup_urls: audio.backup_urls.clone(),
+        });
+    }
+    if let Some(dolby) = dash.dolby.as_ref().and_then(|dolby| {
+        dolby
+            .audio
+            .iter()
+            .filter(|audio| !audio.base_url.is_empty())
+            .max_by_key(|audio| audio.bandwidth)
+    }) {
+        tracks.push(AudioTrack {
+            kind: AudioKind::Dolby,
+            id: dolby.id,
+            label: "杜比全景声".into(),
+            url: dolby.base_url.clone(),
+            backup_urls: dolby.backup_urls.clone(),
+        });
+    }
+    if let Some(flac) = dash
+        .flac
+        .as_ref()
+        .filter(|flac| flac.display)
+        .and_then(|flac| flac.audio.as_ref())
+        .filter(|audio| !audio.base_url.is_empty())
+    {
+        tracks.push(AudioTrack {
+            kind: AudioKind::Flac,
+            id: flac.id,
+            label: "Hi-Res 无损".into(),
+            url: flac.base_url.clone(),
+            backup_urls: flac.backup_urls.clone(),
+        });
+    }
+    tracks
+}
+
+fn regular_audio_label(audio: &DashAudio) -> String {
+    match audio.id {
+        30216 => "64K".into(),
+        30232 => "132K".into(),
+        30280 => "192K".into(),
+        _ => format!("{}K", audio.bandwidth / 1000),
+    }
 }
 
 fn preferred_video(dash: &Dash, preferred: Option<u32>) -> Option<&DashVideo> {
@@ -730,12 +891,12 @@ fn episode_pages(season: &PgcSeason) -> Vec<VideoPage> {
 #[cfg(test)]
 mod tests {
     use super::{
-        candidates, episode_from_redirect, episode_pages, normalize_episode_info, season_resume_ms,
-        select_streams,
+        AudioKind, candidates, episode_from_redirect, episode_pages, normalize_episode_info,
+        season_resume_ms, select_streams,
     };
     use rigili_bilibili::{
-        Dash, DashAudio, DashVideo, EpisodeId, PgcEpisode, PgcProgress, PgcSeason, PgcUserStatus,
-        PlayUrl, VideoInfo,
+        Dash, DashAudio, DashDolby, DashFlac, DashVideo, EpisodeId, PgcEpisode, PgcProgress,
+        PgcSeason, PgcUserStatus, PlayUrl, VideoInfo,
     };
 
     #[test]
@@ -816,6 +977,8 @@ mod tests {
                 bandwidth: 196_608,
                 codecs: "mp4a.40.2".into(),
             }],
+            dolby: None,
+            flac: None,
         };
         let playurl = PlayUrl {
             dash: Some(dash),
@@ -828,18 +991,167 @@ mod tests {
             &playurl.accept_quality,
             &playurl.accept_description,
             None,
+            AudioKind::Regular,
         )
         .expect("streams")
         .0;
         assert_eq!(streams.video, "https://example.invalid/avc.m4s");
         assert_eq!(
-            streams.audio.as_deref(),
+            streams.audio_url(),
             Some("https://example.invalid/audio.m4s")
         );
         assert_eq!(streams.video_id, 80);
         assert_eq!(streams.qualities.len(), 1);
         assert_eq!(streams.qualities[0].label, "1080P 高清");
         assert_eq!(streams.qualities[0].short_label, "1080P");
+    }
+
+    #[test]
+    fn offers_regular_dolby_and_hires_audio() {
+        let audio = |id, url: &str, bandwidth| DashAudio {
+            id,
+            base_url: url.into(),
+            backup_urls: Vec::new(),
+            bandwidth,
+            codecs: String::new(),
+        };
+        let video = DashVideo {
+            id: 80,
+            base_url: "video".into(),
+            backup_urls: Vec::new(),
+            bandwidth: 600_000,
+            width: 1920,
+            height: 1080,
+            codecs: String::new(),
+            codecid: 7,
+        };
+        let dash = Dash {
+            video: vec![video],
+            audio: vec![audio(30280, "regular", 196_608)],
+            dolby: Some(DashDolby {
+                audio: vec![audio(30250, "dolby", 1_025_174)],
+            }),
+            flac: Some(DashFlac {
+                display: true,
+                audio: Some(audio(30251, "hires", 1_642_465)),
+            }),
+        };
+
+        let streams = select_streams(&dash, &[80], &[], None, AudioKind::Regular)
+            .expect("streams")
+            .0;
+        let tracks: Vec<_> = streams
+            .audio_tracks
+            .iter()
+            .map(|track| (track.kind, track.id, track.url.as_str()))
+            .collect();
+        assert_eq!(
+            tracks,
+            [
+                (AudioKind::Regular, 30280, "regular"),
+                (AudioKind::Dolby, 30250, "dolby"),
+                (AudioKind::Flac, 30251, "hires"),
+            ]
+        );
+        assert_eq!(streams.audio_url(), Some("regular"));
+
+        for (preferred, expected) in [
+            (AudioKind::Dolby, Some("dolby")),
+            (AudioKind::Flac, Some("hires")),
+        ] {
+            let streams = select_streams(&dash, &[80], &[], None, preferred)
+                .expect("streams")
+                .0;
+            assert_eq!(streams.audio_url(), expected);
+        }
+
+        let hidden = Dash {
+            video: vec![DashVideo {
+                id: 80,
+                base_url: "video".into(),
+                backup_urls: Vec::new(),
+                bandwidth: 600_000,
+                width: 1920,
+                height: 1080,
+                codecs: String::new(),
+                codecid: 7,
+            }],
+            audio: vec![audio(30280, "regular", 196_608)],
+            dolby: None,
+            flac: Some(DashFlac {
+                display: false,
+                audio: Some(audio(30251, "hires", 1_642_465)),
+            }),
+        };
+        let streams = select_streams(&hidden, &[], &[], None, AudioKind::Flac)
+            .expect("streams")
+            .0;
+        assert_eq!(streams.audio_tracks.len(), 1);
+        assert_eq!(streams.audio_url(), Some("regular"));
+    }
+
+    #[test]
+    fn falls_back_between_audio_tiers_like_video_quality() {
+        let audio = |id, url: &str, bandwidth| DashAudio {
+            id,
+            base_url: url.into(),
+            backup_urls: Vec::new(),
+            bandwidth,
+            codecs: String::new(),
+        };
+        let video = || DashVideo {
+            id: 80,
+            base_url: "video".into(),
+            backup_urls: Vec::new(),
+            bandwidth: 600_000,
+            width: 1920,
+            height: 1080,
+            codecs: String::new(),
+            codecid: 7,
+        };
+        let dash = |regular: bool, dolby: bool, flac: bool| Dash {
+            video: vec![video()],
+            audio: if regular {
+                vec![audio(30280, "regular", 196_608)]
+            } else {
+                Vec::new()
+            },
+            dolby: dolby.then(|| DashDolby {
+                audio: vec![audio(30250, "dolby", 1_025_174)],
+            }),
+            flac: flac.then(|| DashFlac {
+                display: true,
+                audio: Some(audio(30251, "hires", 1_642_465)),
+            }),
+        };
+        let chosen = |regular, dolby, flac, preferred| {
+            select_streams(&dash(regular, dolby, flac), &[80], &[], None, preferred)
+                .expect("streams")
+                .0
+                .audio_kind
+        };
+
+        assert_eq!(
+            chosen(true, true, false, AudioKind::Flac),
+            Some(AudioKind::Dolby)
+        );
+        assert_eq!(
+            chosen(true, false, true, AudioKind::Dolby),
+            Some(AudioKind::Regular)
+        );
+        assert_eq!(
+            chosen(false, true, false, AudioKind::Regular),
+            Some(AudioKind::Dolby)
+        );
+        assert_eq!(
+            chosen(false, false, true, AudioKind::Regular),
+            Some(AudioKind::Flac)
+        );
+        assert_eq!(
+            chosen(false, true, true, AudioKind::Regular),
+            Some(AudioKind::Dolby)
+        );
+        assert_eq!(chosen(false, false, false, AudioKind::Flac), None);
     }
 
     #[test]
@@ -862,6 +1174,8 @@ mod tests {
                     video(64, "720p", 7, 300_000),
                 ],
                 audio: Vec::new(),
+                dolby: None,
+                flac: None,
             }),
             accept_quality: vec![80, 64],
             accept_description: Vec::new(),
@@ -872,6 +1186,7 @@ mod tests {
             &playurl.accept_quality,
             &playurl.accept_description,
             None,
+            AudioKind::Regular,
         )
         .expect("streams")
         .0;
@@ -906,28 +1221,30 @@ mod tests {
         let dash = Dash {
             video: vec![video(80, "1080p", 600_000), video(64, "720p", 300_000)],
             audio: Vec::new(),
+            dolby: None,
+            flac: None,
         };
         let accept = [80, 64];
 
-        let exact = select_streams(&dash, &accept, &[], Some(80))
+        let exact = select_streams(&dash, &accept, &[], Some(80), AudioKind::Regular)
             .expect("streams")
             .0;
         assert_eq!(exact.video, "1080p");
         assert_eq!(exact.video_id, 80);
 
-        let below = select_streams(&dash, &accept, &[], Some(64))
+        let below = select_streams(&dash, &accept, &[], Some(64), AudioKind::Regular)
             .expect("streams")
             .0;
         assert_eq!(below.video, "720p");
         assert_eq!(below.video_id, 64);
 
-        let unavailable = select_streams(&dash, &accept, &[], Some(32))
+        let unavailable = select_streams(&dash, &accept, &[], Some(32), AudioKind::Regular)
             .expect("streams")
             .0;
         assert_eq!(unavailable.video, "720p");
         assert_eq!(unavailable.video_id, 64);
 
-        let above = select_streams(&dash, &accept, &[], Some(127))
+        let above = select_streams(&dash, &accept, &[], Some(127), AudioKind::Regular)
             .expect("streams")
             .0;
         assert_eq!(above.video, "1080p");
@@ -936,8 +1253,10 @@ mod tests {
         let only_high = Dash {
             video: vec![video(80, "1080p", 600_000)],
             audio: Vec::new(),
+            dolby: None,
+            flac: None,
         };
-        let lowest = select_streams(&only_high, &[80], &[], Some(32))
+        let lowest = select_streams(&only_high, &[80], &[], Some(32), AudioKind::Regular)
             .expect("streams")
             .0;
         assert_eq!(lowest.video_id, 80);

@@ -8,6 +8,8 @@ use gpui_kit::*;
 use rigili_bilibili::data_dir;
 use serde::{Deserialize, Serialize};
 
+use crate::request::AudioKind;
+
 const FILE_NAME: &str = "playback.json";
 const TMP_FILE_NAME: &str = "playback.json.tmp";
 const DEFAULT_SCROLL_SECONDS: f64 = 8.0;
@@ -84,6 +86,7 @@ pub(crate) struct PlaybackSettings {
     pub(crate) subtitle: SubtitleSettings,
     pub(crate) speed: f64,
     pub(crate) preferred_quality: Option<u32>,
+    pub(crate) preferred_audio: AudioKind,
     #[serde(skip)]
     dirty: bool,
 }
@@ -95,6 +98,7 @@ impl Default for PlaybackSettings {
             subtitle: SubtitleSettings::default(),
             speed: 1.0,
             preferred_quality: None,
+            preferred_audio: AudioKind::Regular,
             dirty: false,
         }
     }
@@ -202,6 +206,7 @@ mod tests {
     use std::fs;
 
     use super::{DanmakuSettings, PlaybackSettings, SubtitleSettings};
+    use crate::request::AudioKind;
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -231,6 +236,7 @@ mod tests {
             },
             speed: 2.0,
             preferred_quality: Some(80),
+            preferred_audio: AudioKind::Dolby,
             dirty: false,
         };
         settings.save_to(&dir).expect("save");

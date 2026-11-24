@@ -14,9 +14,9 @@ use rigili_bilibili::{Chapter, SubtitleTrack, VideoPage};
 use rigili_player::{BufferedRange, PlayerStatus};
 
 use super::danmaku::bar::DanmakuBar;
-use super::surface::PlayerView;
+use super::surface::{BarOverlay, BarOverlays, PlayerView};
 use crate::info::short_label;
-use crate::request::VideoQuality;
+use crate::request::{AudioKind, AudioTrack, VideoQuality};
 use crate::settings::DanmakuSettings;
 use crate::shortcuts::{ToggleFullscreen, TogglePlayback, ToggleSubtitles};
 use gpui_kit::base::{Slider as BaseSlider, SliderIndicator, SliderThumb, SliderTrack};
@@ -31,21 +31,19 @@ pub(super) struct Transport<'a> {
     pub(super) volume_popup: Entity<VolumePopup>,
     pub(super) qualities: &'a [VideoQuality],
     pub(super) selected_quality: u32,
-    pub(super) quality_open: bool,
+    pub(super) audio_tracks: &'a [AudioTrack],
+    pub(super) selected_audio: Option<AudioKind>,
+    pub(super) overlays: BarOverlays,
     pub(super) subtitles: &'a [SubtitleTrack],
     pub(super) selected_subtitle: Option<usize>,
-    pub(super) subtitle_open: bool,
     pub(super) pages: &'a [VideoPage],
     pub(super) selected_cid: Option<u64>,
-    pub(super) pages_open: bool,
     pub(super) speeds: &'a [f64],
-    pub(super) speed_open: bool,
     pub(super) preview: Option<AnyElement>,
     pub(super) live: bool,
     pub(super) danmaku: DanmakuSettings,
     pub(super) danmaku_input: &'a Entity<InputState>,
     pub(super) danmaku_sending: bool,
-    pub(super) danmaku_settings_open: bool,
     pub(super) can_send_danmaku: bool,
     pub(super) player: WeakEntity<PlayerView>,
 }
@@ -289,6 +287,12 @@ impl Transport<'_> {
             }
             _ => "切换清晰度".to_owned(),
         };
+        let audio_label = self
+            .audio_tracks
+            .iter()
+            .find(|track| Some(track.kind) == self.selected_audio)
+            .filter(|_| self.audio_tracks.len() > 1)
+            .map(|track| audio_short_label(track.kind));
         let fullscreen = window.is_fullscreen();
         let subtitle_on = self.selected_subtitle.is_some();
         let current_page = page_label(self.pages, self.selected_cid);
@@ -395,7 +399,9 @@ impl Transport<'_> {
                                     settings: self.danmaku,
                                     input: self.danmaku_input,
                                     sending: self.danmaku_sending,
-                                    settings_open: self.danmaku_settings_open,
+                                    settings_open: self
+                                        .overlays
+                                        .is_open(BarOverlay::DanmakuSettings),
                                     can_send: self.can_send_danmaku,
                                     player: weak.clone(),
                                 }
@@ -420,246 +426,229 @@ impl Transport<'_> {
                             .on_open_change({
                                 let weak = weak.clone();
                                 move |open, _, cx| {
-                                    let _ = weak.update(cx, |this, _| {
-                                        this.set_volume_popup_open(*open);
+                                    let _ = weak.update(cx, |this, cx| {
+                                        this.set_bar_overlay(BarOverlay::Volume, *open, cx);
                                     });
                                 }
                             }),
                     )
                     .when_some(quality, |this, current| {
-                        this.child(
-                            Popover::new("quality-popover")
-                                .anchor(Anchor::BottomRight)
-                                .offset(px(6.))
-                                .open(self.quality_open)
-                                .trigger(
-                                    Button::new("quality")
-                                        .ghost()
-                                        .small()
-                                        .label(current)
-                                        .tooltip(quality_tooltip),
-                                )
-                                .on_open_change({
-                                    let weak = weak.clone();
-                                    move |open, _, cx| {
-                                        let _ = weak.update(cx, |this, cx| {
-                                            this.set_quality_popover_open(*open, cx);
-                                        });
-                                    }
-                                })
-                                .child(v_flex().min_w(px(120.)).gap_1().children(
-                                    self.qualities.iter().map(|quality| {
-                                        let selected = quality.id == self.selected_quality;
-                                        ListItem::new(("quality", quality.id))
-                                            .check_icon(IconName::Check)
-                                            .confirmed(selected)
-                                            .selected(selected)
-                                            .on_click({
-                                                let weak = weak.clone();
-                                                let id = quality.id;
-                                                move |_, _, cx| {
-                                                    let _ = weak.update(cx, |this, cx| {
-                                                        this.switch_quality(id, cx);
-                                                    });
-                                                }
-                                            })
-                                            .child(quality.label.clone())
-                                    }),
-                                )),
-                        )
+                        this.child(bar_popover(
+                            BarOverlay::Quality,
+                            Anchor::BottomRight,
+                            &weak,
+                            self.overlays.is_open(BarOverlay::Quality),
+                            Button::new("quality")
+                                .ghost()
+                                .small()
+                                .label(current)
+                                .tooltip(quality_tooltip),
+                            v_flex()
+                                .min_w(px(120.))
+                                .gap_1()
+                                .children(self.qualities.iter().map(|quality| {
+                                    let selected = quality.id == self.selected_quality;
+                                    ListItem::new(("quality", quality.id))
+                                        .check_icon(IconName::Check)
+                                        .confirmed(selected)
+                                        .selected(selected)
+                                        .on_click({
+                                            let weak = weak.clone();
+                                            let id = quality.id;
+                                            move |_, _, cx| {
+                                                let _ = weak.update(cx, |this, cx| {
+                                                    this.switch_quality(id, cx);
+                                                });
+                                            }
+                                        })
+                                        .child(quality.label.clone())
+                                })),
+                        ))
+                    })
+                    .when_some(audio_label, |this, current| {
+                        this.child(bar_popover(
+                            BarOverlay::Audio,
+                            Anchor::BottomRight,
+                            &weak,
+                            self.overlays.is_open(BarOverlay::Audio),
+                            Button::new("audio")
+                                .ghost()
+                                .small()
+                                .label(current)
+                                .tooltip("切换音质"),
+                            v_flex().min_w(px(140.)).gap_1().children(
+                                self.audio_tracks.iter().map(|track| {
+                                    let selected = Some(track.kind) == self.selected_audio;
+                                    ListItem::new(("audio", track.id))
+                                        .check_icon(IconName::Check)
+                                        .confirmed(selected)
+                                        .selected(selected)
+                                        .on_click({
+                                            let weak = weak.clone();
+                                            let kind = track.kind;
+                                            move |_, _, cx| {
+                                                let _ = weak.update(cx, |this, cx| {
+                                                    this.switch_audio(kind, cx);
+                                                });
+                                            }
+                                        })
+                                        .child(track.label.clone())
+                                }),
+                            ),
+                        ))
                     })
                     .when(!self.subtitles.is_empty() && !self.live, |this| {
-                        this.child(
-                            Popover::new("subtitle-popover")
-                                .anchor(Anchor::BottomRight)
-                                .offset(px(6.))
-                                .open(self.subtitle_open)
-                                .trigger(
-                                    Button::new("subtitles")
-                                        .ghost()
-                                        .with_size(px(32.))
-                                        .icon(subtitle_icon(
-                                            subtitle_on,
-                                            px(18.),
-                                            if subtitle_on { primary } else { muted },
-                                        ))
-                                        .text_color(if subtitle_on { primary } else { muted })
-                                        .accessibility_label("字幕")
-                                        .tooltip_with_action(
-                                            "字幕",
-                                            &ToggleSubtitles,
-                                            Some(crate::shortcuts::PLAYER),
-                                        ),
-                                )
-                                .on_open_change({
-                                    let weak = weak.clone();
-                                    move |open, _, cx| {
-                                        let _ = weak.update(cx, |this, cx| {
-                                            this.set_subtitle_popover_open(*open, cx);
-                                        });
-                                    }
-                                })
-                                .child(
-                                    v_flex()
-                                        .min_w(px(160.))
-                                        .max_w(px(240.))
-                                        .gap_2()
-                                        .child(
-                                            v_flex()
-                                                .id("subtitle-list")
-                                                .max_h(px(240.))
-                                                .overflow_y_scroll()
-                                                .gap_1()
-                                                .child(
-                                                    ListItem::new("subtitle-off")
-                                                        .check_icon(IconName::Check)
-                                                        .confirmed(self.selected_subtitle.is_none())
-                                                        .selected(self.selected_subtitle.is_none())
-                                                        .on_click({
-                                                            let weak = weak.clone();
-                                                            move |_, _, cx| {
-                                                                let _ =
-                                                                    weak.update(cx, |this, cx| {
-                                                                        this.select_subtitle(
-                                                                            None, cx,
-                                                                        );
-                                                                    });
-                                                            }
-                                                        })
-                                                        .child("关闭"),
-                                                )
-                                                .children(self.subtitles.iter().enumerate().map(
-                                                    |(index, subtitle)| {
-                                                        let selected =
-                                                            self.selected_subtitle == Some(index);
-                                                        ListItem::new(("subtitle", index as u32))
-                                                            .check_icon(IconName::Check)
-                                                            .confirmed(selected)
-                                                            .selected(selected)
-                                                            .on_click({
-                                                                let weak = weak.clone();
-                                                                move |_, _, cx| {
-                                                                    let _ = weak.update(
-                                                                        cx,
-                                                                        |this, cx| {
-                                                                            this.select_subtitle(
-                                                                                Some(index),
-                                                                                cx,
-                                                                            );
-                                                                        },
-                                                                    );
-                                                                }
-                                                            })
-                                                            .child(subtitle.label().to_owned())
-                                                    },
-                                                )),
-                                        )
-                                        .child(v_flex().gap_1().when(subtitle_on, |this| {
-                                            this.child(
-                                                div()
-                                                    .pt_2()
-                                                    .border_t_1()
-                                                    .border_color(border)
-                                                    .text_xs()
-                                                    .text_color(muted)
-                                                    .child("显示时可直接拖动字幕调整位置"),
-                                            )
-                                        })),
+                        this.child(bar_popover(
+                            BarOverlay::Subtitle,
+                            Anchor::BottomRight,
+                            &weak,
+                            self.overlays.is_open(BarOverlay::Subtitle),
+                            Button::new("subtitles")
+                                .ghost()
+                                .with_size(px(32.))
+                                .icon(subtitle_icon(
+                                    subtitle_on,
+                                    px(18.),
+                                    if subtitle_on { primary } else { muted },
+                                ))
+                                .text_color(if subtitle_on { primary } else { muted })
+                                .accessibility_label("字幕")
+                                .tooltip_with_action(
+                                    "字幕",
+                                    &ToggleSubtitles,
+                                    Some(crate::shortcuts::PLAYER),
                                 ),
-                        )
-                    })
-                    .when_some(current_page, |this, current| {
-                        this.child(
-                            Popover::new("player-page-popover")
-                                .anchor(Anchor::BottomRight)
-                                .offset(px(6.))
-                                .open(self.pages_open)
-                                .trigger(
-                                    Button::new("player-page")
-                                        .ghost()
-                                        .small()
-                                        .label(current)
-                                        .tooltip("选集"),
-                                )
-                                .on_open_change({
-                                    let weak = weak.clone();
-                                    move |open, _, cx| {
-                                        let _ = weak.update(cx, |this, cx| {
-                                            this.set_page_popover_open(*open, cx);
-                                        });
-                                    }
-                                })
+                            v_flex()
+                                .min_w(px(160.))
+                                .max_w(px(240.))
+                                .gap_2()
                                 .child(
                                     v_flex()
-                                        .id("player-page-list")
-                                        .min_w(px(160.))
-                                        .max_w(px(320.))
-                                        .max_h(px(360.))
+                                        .id("subtitle-list")
+                                        .max_h(px(240.))
                                         .overflow_y_scroll()
                                         .gap_1()
-                                        .children(self.pages.iter().map(|page| {
-                                            let selected = Some(page.cid) == self.selected_cid;
-                                            let cid = page.cid;
-                                            let label = short_label(page);
-                                            ListItem::new(("player-page-item", cid))
-                                                .text_sm()
+                                        .child(
+                                            ListItem::new("subtitle-off")
                                                 .check_icon(IconName::Check)
-                                                .confirmed(selected)
-                                                .selected(selected)
+                                                .confirmed(self.selected_subtitle.is_none())
+                                                .selected(self.selected_subtitle.is_none())
                                                 .on_click({
                                                     let weak = weak.clone();
                                                     move |_, _, cx| {
                                                         let _ = weak.update(cx, |this, cx| {
-                                                            this.request_page(cid, cx);
+                                                            this.select_subtitle(None, cx);
                                                         });
                                                     }
                                                 })
-                                                .child(div().min_w_0().truncate().child(label))
-                                        })),
-                                ),
-                        )
+                                                .child("关闭"),
+                                        )
+                                        .children(self.subtitles.iter().enumerate().map(
+                                            |(index, subtitle)| {
+                                                let selected =
+                                                    self.selected_subtitle == Some(index);
+                                                ListItem::new(("subtitle", index as u32))
+                                                    .check_icon(IconName::Check)
+                                                    .confirmed(selected)
+                                                    .selected(selected)
+                                                    .on_click({
+                                                        let weak = weak.clone();
+                                                        move |_, _, cx| {
+                                                            let _ = weak.update(cx, |this, cx| {
+                                                                this.select_subtitle(
+                                                                    Some(index),
+                                                                    cx,
+                                                                );
+                                                            });
+                                                        }
+                                                    })
+                                                    .child(subtitle.label().to_owned())
+                                            },
+                                        )),
+                                )
+                                .child(v_flex().gap_1().when(subtitle_on, |this| {
+                                    this.child(
+                                        div()
+                                            .pt_2()
+                                            .border_t_1()
+                                            .border_color(border)
+                                            .text_xs()
+                                            .text_color(muted)
+                                            .child("显示时可直接拖动字幕调整位置"),
+                                    )
+                                })),
+                        ))
+                    })
+                    .when_some(current_page, |this, current| {
+                        this.child(bar_popover(
+                            BarOverlay::Pages,
+                            Anchor::BottomRight,
+                            &weak,
+                            self.overlays.is_open(BarOverlay::Pages),
+                            Button::new("player-page")
+                                .ghost()
+                                .small()
+                                .label(current)
+                                .tooltip("选集"),
+                            v_flex()
+                                .id("player-page-list")
+                                .min_w(px(160.))
+                                .max_w(px(320.))
+                                .max_h(px(360.))
+                                .overflow_y_scroll()
+                                .gap_1()
+                                .children(self.pages.iter().map(|page| {
+                                    let selected = Some(page.cid) == self.selected_cid;
+                                    let cid = page.cid;
+                                    let label = short_label(page);
+                                    ListItem::new(("player-page-item", cid))
+                                        .text_sm()
+                                        .check_icon(IconName::Check)
+                                        .confirmed(selected)
+                                        .selected(selected)
+                                        .on_click({
+                                            let weak = weak.clone();
+                                            move |_, _, cx| {
+                                                let _ = weak.update(cx, |this, cx| {
+                                                    this.request_page(cid, cx);
+                                                });
+                                            }
+                                        })
+                                        .child(div().min_w_0().truncate().child(label))
+                                })),
+                        ))
                     })
                     .when(!self.live, |this| {
-                        this.child(
-                            Popover::new("speed-popover")
-                                .anchor(Anchor::BottomRight)
-                                .offset(px(6.))
-                                .open(self.speed_open)
-                                .trigger(
-                                    Button::new("speed")
-                                        .ghost()
-                                        .small()
-                                        .label(speed_label(speed))
-                                        .tooltip("切换倍速"),
-                                )
-                                .on_open_change({
-                                    let weak = weak.clone();
-                                    move |open, _, cx| {
-                                        let _ = weak.update(cx, |this, cx| {
-                                            this.set_speed_popover_open(*open, cx);
-                                        });
-                                    }
-                                })
-                                .child(v_flex().min_w(px(96.)).gap_1().children(
-                                    self.speeds.iter().enumerate().rev().map(|(index, value)| {
-                                        let selected = (speed - *value).abs() < 1e-3;
-                                        ListItem::new(("speed", index as u32))
-                                            .check_icon(IconName::Check)
-                                            .confirmed(selected)
-                                            .selected(selected)
-                                            .on_click({
-                                                let weak = weak.clone();
-                                                let value = *value;
-                                                move |_, _, cx| {
-                                                    let _ = weak.update(cx, |this, cx| {
-                                                        this.select_speed(value, cx);
-                                                    });
-                                                }
-                                            })
-                                            .child(speed_label(*value))
-                                    }),
-                                )),
-                        )
+                        this.child(bar_popover(
+                            BarOverlay::Speed,
+                            Anchor::BottomRight,
+                            &weak,
+                            self.overlays.is_open(BarOverlay::Speed),
+                            Button::new("speed")
+                                .ghost()
+                                .small()
+                                .label(speed_label(speed))
+                                .tooltip("切换倍速"),
+                            v_flex().min_w(px(96.)).gap_1().children(
+                                self.speeds.iter().enumerate().rev().map(|(index, value)| {
+                                    let selected = (speed - *value).abs() < 1e-3;
+                                    ListItem::new(("speed", index as u32))
+                                        .check_icon(IconName::Check)
+                                        .confirmed(selected)
+                                        .selected(selected)
+                                        .on_click({
+                                            let weak = weak.clone();
+                                            let value = *value;
+                                            move |_, _, cx| {
+                                                let _ = weak.update(cx, |this, cx| {
+                                                    this.select_speed(value, cx);
+                                                });
+                                            }
+                                        })
+                                        .child(speed_label(*value))
+                                }),
+                            ),
+                        ))
                     })
                     .child(
                         Button::new("fullscreen")
@@ -681,6 +670,36 @@ impl Transport<'_> {
                             }),
                     ),
             )
+    }
+}
+
+fn bar_popover(
+    overlay: BarOverlay,
+    anchor: Anchor,
+    weak: &WeakEntity<PlayerView>,
+    open: bool,
+    trigger: Button,
+    content: impl IntoElement + 'static,
+) -> Popover {
+    let weak = weak.clone();
+    Popover::new(overlay.id())
+        .anchor(anchor)
+        .offset(px(6.))
+        .open(open)
+        .trigger(trigger)
+        .on_open_change(move |open, _, cx| {
+            let _ = weak.update(cx, |this, cx| {
+                this.set_bar_overlay(overlay, *open, cx);
+            });
+        })
+        .child(content)
+}
+
+fn audio_short_label(kind: AudioKind) -> &'static str {
+    match kind {
+        AudioKind::Regular => "普通",
+        AudioKind::Dolby => "杜比全景声",
+        AudioKind::Flac => "Hi-Res",
     }
 }
 

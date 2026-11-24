@@ -155,24 +155,12 @@ impl PlayerView {
         }
     }
 
-    pub(crate) fn set_volume_popup_open(&mut self, open: bool) {
-        self.volume_popup_open = open;
-        if open {
-            self.last_activity = Instant::now();
-        }
-    }
-
     pub(super) fn bar_interacting(&self) -> bool {
         self.pointer_in_bar
             || self.seeking.is_some()
             || self.volume_dragging
-            || self.volume_popup_open
-            || self.quality_popover_open
-            || self.speed_popover_open
-            || self.page_popover_open
-            || self.subtitle_popover_open
             || self.subtitle_drag.is_some()
-            || self.danmaku_settings_open
+            || self.bar_overlays.any_open()
             || self.danmaku_sending
             || self.danmaku_input_focused
     }

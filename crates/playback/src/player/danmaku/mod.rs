@@ -227,16 +227,6 @@ impl PlayerView {
         }
     }
 
-    pub(crate) fn set_danmaku_settings_open(&mut self, open: bool, cx: &mut Context<Self>) {
-        if self.danmaku_settings_open != open {
-            self.danmaku_settings_open = open;
-            if open {
-                self.last_activity = Instant::now();
-            }
-            cx.notify();
-        }
-    }
-
     pub(super) fn on_danmaku_input(
         &mut self,
         event: &InputEvent,

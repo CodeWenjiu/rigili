@@ -145,21 +145,7 @@ pub(super) fn run_worker(
                     // its video has finished loading, so both demuxers share the
                     // network latency instead of running one after the other.
                     if let Some(audio) = state.pending_audio.take() {
-                        match mpv.command_async(
-                            &["audio-add", audio.as_str(), "select"],
-                            AUDIO_ADD_TAG | state.generation,
-                        ) {
-                            Ok(()) => {
-                                state.audio_requested = Some(Instant::now());
-                                rigili_monitor::monitor!("mpv", "audio-add issued");
-                            }
-                            Err(error) => {
-                                rigili_monitor::monitor!("mpv", "audio-add failed: {error}");
-                                mutate_status(&status, |status| {
-                                    status.error = Some(error.to_string());
-                                });
-                            }
-                        }
+                        state.request_audio(&mpv, audio, &status);
                     }
                 }
                 MPV_EVENT_COMMAND_REPLY => {
@@ -403,6 +389,13 @@ impl State {
                 }
                 self.needs_redraw = true;
             }
+            Command::SetAudio { audio } => {
+                if self.current_entry.is_some() {
+                    self.request_audio(mpv, audio, status);
+                } else {
+                    self.pending_audio = Some(audio);
+                }
+            }
             Command::TogglePause => {
                 let paused = mpv.get_property_flag("pause").unwrap_or(false);
                 if let Err(error) = mpv.set_property_flag("pause", !paused) {
@@ -507,6 +500,24 @@ impl State {
         }
 
         ControlFlow::Continue(())
+    }
+
+    fn request_audio(&mut self, mpv: &Mpv, audio: String, status: &StatusSlot) {
+        match mpv.command_async(
+            &["audio-add", audio.as_str(), "select"],
+            AUDIO_ADD_TAG | self.generation,
+        ) {
+            Ok(()) => {
+                self.audio_requested = Some(Instant::now());
+                rigili_monitor::monitor!("mpv", "audio-add issued");
+            }
+            Err(error) => {
+                rigili_monitor::monitor!("mpv", "audio-add failed: {error}");
+                mutate_status(status, |status| {
+                    status.error = Some(error.to_string());
+                });
+            }
+        }
     }
 
     fn render(&mut self, mpv: &Mpv, render: &mut Renderer) -> Option<VideoFrame> {

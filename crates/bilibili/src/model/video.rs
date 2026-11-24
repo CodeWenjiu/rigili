@@ -312,6 +312,24 @@ pub struct Dash {
     pub video: Vec<DashVideo>,
     #[serde(default, deserialize_with = "null_or_default")]
     pub audio: Vec<DashAudio>,
+    #[serde(default)]
+    pub dolby: Option<DashDolby>,
+    #[serde(default)]
+    pub flac: Option<DashFlac>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct DashDolby {
+    #[serde(default, deserialize_with = "null_or_default")]
+    pub audio: Vec<DashAudio>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct DashFlac {
+    #[serde(default)]
+    pub display: bool,
+    #[serde(default)]
+    pub audio: Option<DashAudio>,
 }
 
 impl Dash {
@@ -529,6 +547,8 @@ mod tests {
         let dash = Dash {
             video: vec![video(13, 900_000), video(7, 600_000)],
             audio: vec![audio(65_536), audio(196_608)],
+            dolby: None,
+            flac: None,
         };
         assert_eq!(dash.best_video().map(|video| video.codecid), Some(7));
         assert_eq!(
@@ -539,6 +559,8 @@ mod tests {
         let no_avc = Dash {
             video: vec![video(12, 600_000), video(13, 900_000)],
             audio: Vec::new(),
+            dolby: None,
+            flac: None,
         };
         assert_eq!(no_avc.best_video().map(|video| video.codecid), Some(13));
 
@@ -553,6 +575,8 @@ mod tests {
                 base_url: String::new(),
                 ..audio(1)
             }],
+            dolby: None,
+            flac: None,
         };
         assert!(unavailable.best_video().is_none());
         assert!(unavailable.best_audio().is_none());
@@ -568,6 +592,8 @@ mod tests {
                 track(16, 360, 7, 500_000),
             ],
             audio: Vec::new(),
+            dolby: None,
+            flac: None,
         };
         assert_eq!(
             dash.preview_video().map(|video| video.codecid),
@@ -579,6 +605,8 @@ mod tests {
         let no_avc = Dash {
             video: vec![track(80, 1080, 13, 2_000_000), track(32, 480, 13, 600_000)],
             audio: Vec::new(),
+            dolby: None,
+            flac: None,
         };
         assert_eq!(no_avc.preview_video().map(|video| video.id), Some(32));
 
@@ -588,6 +616,8 @@ mod tests {
                 ..track(16, 360, 7, 500_000)
             }],
             audio: Vec::new(),
+            dolby: None,
+            flac: None,
         };
         assert!(unavailable.preview_video().is_none());
     }
