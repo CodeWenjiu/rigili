@@ -77,6 +77,14 @@ pub(crate) fn clear_search_history(cx: &mut App) {
     });
 }
 
+pub(crate) fn remove_search(cx: &mut App, keyword: &str) {
+    update(cx, |preferences| {
+        if preferences.remove_search(keyword) {
+            preferences.dirty = true;
+        }
+    });
+}
+
 fn update(cx: &mut App, apply: impl FnOnce(&mut Preferences)) {
     if cx.has_global::<Preferences>() {
         cx.update_global::<Preferences, _>(|preferences, _| apply(preferences));
@@ -104,6 +112,18 @@ impl Preferences {
         self.search_history.retain(|existing| existing != keyword);
         self.search_history.insert(0, keyword.to_owned());
         self.search_history.truncate(HISTORY_LIMIT);
+        true
+    }
+
+    fn remove_search(&mut self, keyword: &str) -> bool {
+        let Some(index) = self
+            .search_history
+            .iter()
+            .position(|existing| existing == keyword)
+        else {
+            return false;
+        };
+        self.search_history.remove(index);
         true
     }
 
@@ -204,6 +224,19 @@ mod tests {
         assert!(!preferences.insert_search("   "));
         assert_eq!(preferences.search_history, ["first", "second"]);
         assert!(!preferences.insert_search("first"));
+    }
+
+    #[test]
+    fn removes_a_single_keyword() {
+        let mut preferences = Preferences::default();
+        for keyword in ["first", "second", "third"] {
+            preferences.insert_search(keyword);
+        }
+
+        assert!(preferences.remove_search("second"));
+        assert_eq!(preferences.search_history, ["third", "first"]);
+        assert!(!preferences.remove_search("missing"));
+        assert_eq!(preferences.search_history, ["third", "first"]);
     }
 
     #[test]

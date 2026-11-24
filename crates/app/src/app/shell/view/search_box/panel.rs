@@ -108,16 +108,43 @@ impl MainView {
                     .gap_2()
                     .children(keywords.into_iter().enumerate().map(|(index, keyword)| {
                         let term = keyword.clone();
-                        let weak = weak.clone();
-                        Button::new(("history-chip", index))
-                            .custom(history_chip(cx))
-                            .small()
-                            .label(keyword)
-                            .on_click(move |_, window, cx| {
-                                let _ = weak.update(cx, |this, cx| {
-                                    this.pick_search(term.clone(), window, cx);
-                                });
-                            })
+                        let remove_term = keyword;
+                        let search = weak.clone();
+                        let remove = weak.clone();
+                        h_flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                Button::new(("history-chip", index))
+                                    .custom(history_chip(cx))
+                                    .small()
+                                    .label(term.clone())
+                                    .on_click(move |_, window, cx| {
+                                        let _ = search.update(cx, |this, cx| {
+                                            this.pick_search(term.clone(), window, cx);
+                                        });
+                                    }),
+                            )
+                            .child(
+                                Button::new(("remove-history-chip", index))
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::Close)
+                                    .text_color(muted)
+                                    .accessibility_label(format!("删除搜索历史：{remove_term}"))
+                                    .tooltip("删除")
+                                    .on_click(move |_, _, cx| {
+                                        let _ = remove.update(cx, |this, cx| {
+                                            preferences::remove_search(cx, &remove_term);
+                                            if preferences::search_history(cx).len()
+                                                <= HISTORY_COLLAPSED
+                                            {
+                                                this.search_box.history_expanded = false;
+                                            }
+                                            cx.notify();
+                                        });
+                                    }),
+                            )
                     })),
             )
             .when(total > HISTORY_COLLAPSED, |this| {
