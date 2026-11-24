@@ -1,0 +1,28 @@
+{
+  "code": 0,
+  "message": "success",
+  "ttl": 1,
+  "result": {
+    "accept_quality": [80, 64],
+    "accept_description": ["1080P 高清", "720P 高清"],
+    "timelength": 2938060,
+    "is_preview": 0,
+    "is_drm": false,
+    "dash": {
+      "duration": 2938,
+      "video": [
+        {
+          "id": 80,
+          "baseUrl": "https://example.invalid/video.m4s",
+          "backupUrl": ["https://example.invalid/video-backup.m4s"],
+          "bandwidth": 2000000,
+          "width": 1920,
+          "height": 1080,
+          "codecs": "avc1.640028",
+          "codecid": 7
+        }
+      ],
+      "audio": null
+    }
+  }
+}

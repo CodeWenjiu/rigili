@@ -435,7 +435,10 @@ impl InfoPanel {
         if self.tab != InfoTab::Info || self.related.is_empty() {
             return;
         }
-        let index = self.related_selection.unwrap_or(0).min(self.related.len() - 1);
+        let index = self
+            .related_selection
+            .unwrap_or(0)
+            .min(self.related.len() - 1);
         self.related_selection = Some(index);
         self.reveal_related(index);
         self.related_focus.request_focus();
@@ -607,10 +610,16 @@ mod tests {
         );
 
         let inside = Bounds::new(point(px(0.), px(200.)), size(px(400.), px(100.)));
-        assert_eq!(scroll_y_to_show(viewport, inside, px(0.), px(2000.)), px(0.));
+        assert_eq!(
+            scroll_y_to_show(viewport, inside, px(0.), px(2000.)),
+            px(0.)
+        );
 
         let above = Bounds::new(point(px(0.), px(-500.)), size(px(400.), px(100.)));
-        assert_eq!(scroll_y_to_show(viewport, above, px(-500.), px(2000.)), px(0.));
+        assert_eq!(
+            scroll_y_to_show(viewport, above, px(-500.), px(2000.)),
+            px(0.)
+        );
     }
 
     #[gpui_kit::test]
@@ -629,6 +638,7 @@ mod tests {
             owner: Owner::default(),
             stat: Stat::default(),
             rights: VideoRights::default(),
+            redirect_url: String::new(),
             pages: vec![VideoPage {
                 cid: 1,
                 page: 1,
@@ -683,7 +693,10 @@ mod tests {
                 .expect("related row bounds");
             let viewport = panel.scroll.bounds();
             assert!(row.top() >= viewport.top(), "row starts above the panel");
-            assert!(row.bottom() <= viewport.bottom(), "row ends below the panel");
+            assert!(
+                row.bottom() <= viewport.bottom(),
+                "row ends below the panel"
+            );
         });
     }
 

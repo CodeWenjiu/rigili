@@ -1,4 +1,6 @@
-use crate::{ApiError, Client, PlayerInfo, SubtitleFile, VideoDetail, VideoInfo, VideoShot};
+use crate::{
+    ApiError, Client, EpisodeId, PlayerInfo, SubtitleFile, VideoDetail, VideoInfo, VideoShot,
+};
 
 const VIEW_URL: &str = "https://api.bilibili.com/x/web-interface/view";
 const DETAIL_URL: &str = "https://api.bilibili.com/x/web-interface/view/detail";
@@ -27,12 +29,18 @@ impl Client {
         .await
     }
 
-    pub async fn player_info(&self, bvid: &str, cid: u64) -> Result<PlayerInfo, ApiError> {
-        self.get_wbi_json(
-            PLAYER_URL,
-            &[("bvid", bvid.to_owned()), ("cid", cid.to_string())],
-        )
-        .await
+    pub async fn player_info(
+        &self,
+        bvid: &str,
+        cid: u64,
+        episode: Option<EpisodeId>,
+    ) -> Result<PlayerInfo, ApiError> {
+        let mut params = vec![("bvid", bvid.to_owned()), ("cid", cid.to_string())];
+        if let Some(episode) = episode {
+            params.push(("ep_id", episode.ep_id.to_string()));
+            params.push(("season_id", episode.season_id.to_string()));
+        }
+        self.get_wbi_json(PLAYER_URL, &params).await
     }
 
     pub async fn subtitle(&self, url: &str) -> Result<SubtitleFile, ApiError> {

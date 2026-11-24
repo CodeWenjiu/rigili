@@ -42,6 +42,8 @@ pub struct VideoInfo {
     pub stat: Stat,
     #[serde(default)]
     pub rights: VideoRights,
+    #[serde(default, deserialize_with = "null_or_default")]
+    pub redirect_url: String,
     #[serde(default)]
     pub pages: Vec<VideoPage>,
 }
@@ -306,9 +308,9 @@ pub struct PlayUrl {
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Dash {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_or_default")]
     pub video: Vec<DashVideo>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_or_default")]
     pub audio: Vec<DashAudio>,
 }
 

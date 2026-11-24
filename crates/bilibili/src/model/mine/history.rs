@@ -1,5 +1,7 @@
 use serde::Deserialize;
 
+use crate::EpisodeId;
+
 /// Playback progress posted to the web heartbeat. This is what creates and
 /// advances an entry in the site's watch history; reading history from
 /// `/x/web-interface/history/cursor` does not.
@@ -8,6 +10,7 @@ pub struct WatchReport {
     pub aid: u64,
     pub bvid: String,
     pub cid: u64,
+    pub episode: Option<EpisodeId>,
     /// Current position, in seconds.
     pub played: u64,
     /// Length of this part, in seconds.

@@ -309,7 +309,8 @@ impl MainView {
             }
             SearchHost::Mine => {
                 self.search_box.close();
-                self.mine.update(cx, |mine, cx| mine.focus_search(window, cx));
+                self.mine
+                    .update(cx, |mine, cx| mine.focus_search(window, cx));
             }
             SearchHost::Space => {
                 self.search_box.close();
@@ -394,7 +395,8 @@ impl MainView {
             self.space
                 .update(cx, |space, cx| space.step_sub_tab(delta, cx))
         } else if self.page == Page::Mine {
-            self.mine.update(cx, |mine, cx| mine.step_sub_tab(delta, cx))
+            self.mine
+                .update(cx, |mine, cx| mine.step_sub_tab(delta, cx))
         } else {
             false
         };
@@ -444,11 +446,14 @@ impl MainView {
         if self.spaces.is_empty() {
             match self.page {
                 Page::Home => self.home.update(cx, |home, cx| home.step_card(motion, cx)),
-                Page::Search => self.search.update(cx, |search, cx| search.step_card(motion, cx)),
+                Page::Search => self
+                    .search
+                    .update(cx, |search, cx| search.step_card(motion, cx)),
                 Page::Mine => self.mine.update(cx, |mine, cx| mine.step_card(motion, cx)),
             }
         } else {
-            self.space.update(cx, |space, cx| space.step_card(motion, cx));
+            self.space
+                .update(cx, |space, cx| space.step_card(motion, cx));
         }
     }
 
@@ -459,11 +464,14 @@ impl MainView {
         if self.spaces.is_empty() {
             match self.page {
                 Page::Home => self.home.update(cx, |home, cx| home.open_card(new_tab, cx)),
-                Page::Search => self.search.update(cx, |search, cx| search.open_card(new_tab, cx)),
+                Page::Search => self
+                    .search
+                    .update(cx, |search, cx| search.open_card(new_tab, cx)),
                 Page::Mine => self.mine.update(cx, |mine, cx| mine.open_card(new_tab, cx)),
             }
         } else {
-            self.space.update(cx, |space, cx| space.open_card(new_tab, cx));
+            self.space
+                .update(cx, |space, cx| space.open_card(new_tab, cx));
         }
     }
 
@@ -511,7 +519,8 @@ impl MainView {
 
     fn refresh_page(&mut self, cx: &mut Context<Self>) {
         if self.messages_open {
-            self.messages.update(cx, |messages, cx| messages.refresh(cx));
+            self.messages
+                .update(cx, |messages, cx| messages.refresh(cx));
             return;
         }
         if !self.spaces.is_empty() {
@@ -526,11 +535,11 @@ impl MainView {
     }
 
     fn play(&mut self, video: OpenVideo, cx: &mut Context<Self>) {
-        self.open_playback(
-            PlaybackRequest::video(video.title, video.bvid, video.cid),
-            video.new_tab,
-            cx,
-        );
+        let request = match video.episode {
+            Some(episode) => PlaybackRequest::episode(video.title, video.bvid, video.cid, episode),
+            None => PlaybackRequest::video(video.title, video.bvid, video.cid),
+        };
+        self.open_playback(request, video.new_tab, cx);
     }
 
     fn play_live(&mut self, live: OpenLive, cx: &mut Context<Self>) {

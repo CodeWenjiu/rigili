@@ -84,6 +84,7 @@ impl VideoCard {
             cid: self.cid,
             title: self.title.clone(),
             new_tab: false,
+            episode: None,
         }
     }
 }

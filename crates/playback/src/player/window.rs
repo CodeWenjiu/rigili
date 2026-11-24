@@ -14,7 +14,9 @@ use crate::info::{InfoEvent, InfoPanel, InfoSelections, InfoTab};
 use crate::request::{
     PlaybackRequest, PlaybackSource, Resolved, Streams, resolve, resolve_streams,
 };
-use rigili_bilibili::{Chapter, Client, SubtitleFile, SubtitleTrack, VideoPage};
+use rigili_bilibili::{
+    Chapter, Client, EpisodeId, PgcEpisode, SubtitleFile, SubtitleTrack, VideoPage,
+};
 use rigili_core::client;
 use rigili_core::runtime::{ApiTaskError, spawn_api};
 use rigili_core::{FocusMain, OpenSpace};
@@ -67,6 +69,7 @@ struct Tab {
     muted: bool,
     background_playing: bool,
     pages: Vec<VideoPage>,
+    episodes: Vec<PgcEpisode>,
     chapters: Vec<Chapter>,
     subtitles: Vec<SubtitleTrack>,
     subtitle_files: Vec<Option<SubtitleFile>>,
@@ -192,6 +195,7 @@ impl PlayerWindow {
             muted: false,
             background_playing: false,
             pages: Vec::new(),
+            episodes: Vec::new(),
             chapters: Vec::new(),
             subtitles: Vec::new(),
             subtitle_files: Vec::new(),
@@ -399,6 +403,7 @@ impl PlayerWindow {
                     PlaybackSource::Video {
                         bvid,
                         cid: Some(cid),
+                        ..
                     },
                     Some(cached),
                 ) => Some((
@@ -560,12 +565,11 @@ impl PlayerWindow {
     }
 
     fn start_source(&mut self, source: PlaybackSource, cx: &mut Context<Self>) {
-        let request = match source {
-            PlaybackSource::Video { bvid, cid } => PlaybackRequest::video(String::new(), bvid, cid),
-            PlaybackSource::Live { room_id } => {
-                PlaybackRequest::live(format!("直播间 {room_id}"), room_id)
-            }
+        let title = match &source {
+            PlaybackSource::Live { room_id } => format!("直播间 {room_id}"),
+            PlaybackSource::Video { .. } => String::new(),
         };
+        let request = PlaybackRequest::from_source(title, source);
         self.start_active(request, cx);
     }
 
@@ -668,6 +672,7 @@ impl PlayerWindow {
             tab.resume = None;
             tab.paused = false;
             tab.pages.clear();
+            tab.episodes.clear();
             tab.chapters.clear();
             tab.subtitles.clear();
             tab.subtitle_files.clear();
@@ -682,6 +687,7 @@ impl PlayerWindow {
             }
             (tab.id, tab.generation, tab.title.clone(), tab.info.clone())
         };
+        let resolve_title = title.to_string();
         self.session = None;
         self.player.update(cx, |player, cx| {
             player.clear_danmaku_source(cx);
@@ -697,11 +703,11 @@ impl PlayerWindow {
         cx.notify();
 
         match source {
-            PlaybackSource::Video { bvid, cid } => {
+            PlaybackSource::Video { bvid, cid, episode } => {
                 let preferred = crate::settings::current(cx).preferred_quality;
                 spawn_api(
                     cx,
-                    async move { resolve(client, bvid, cid, preferred).await },
+                    async move { resolve(client, resolve_title, bvid, cid, episode, preferred).await },
                     move |this, result, cx| {
                         if !this.is_active(tab_id, generation) {
                             return;
@@ -772,6 +778,7 @@ impl PlayerWindow {
             && let PlaybackSource::Video {
                 bvid,
                 cid: Some(cid),
+                ..
             } = request.source.clone()
         {
             rigili_monitor::monitor!("stream", "tab {tab_id}: reusing streams cached {age:?} ago");
@@ -793,19 +800,23 @@ impl PlayerWindow {
             PlaybackSource::Video {
                 bvid,
                 cid: Some(cid),
+                episode,
             } => {
                 let preferred = crate::settings::current(cx).preferred_quality;
                 let request_bvid = bvid.clone();
                 spawn_api(
                     cx,
-                    async move { resolve_streams(&client, &request_bvid, cid, preferred).await },
+                    async move {
+                        resolve_streams(&client, &request_bvid, cid, episode, preferred).await
+                    },
                     move |this, result, cx| {
                         if !this.is_active(tab_id, generation) {
                             return;
                         }
                         this.tab_mut().loading = false;
                         match result {
-                            Ok(streams) => {
+                            Ok(resolved) => {
+                                let streams = resolved.streams;
                                 this.tab_mut().streams = Some(CachedStreams {
                                     streams: streams.clone(),
                                     at: Instant::now(),
@@ -970,7 +981,12 @@ impl PlayerWindow {
             cid,
             streams,
             player_info,
+            episode,
+            episodes,
+            preview,
         } = resolved;
+        let mut video = video;
+        video.title = display_title(&video.title, preview);
         let bvid = video.bvid.clone();
         let aid = video.aid;
         let duration = video
@@ -998,8 +1014,11 @@ impl PlayerWindow {
             tab.request.source = PlaybackSource::Video {
                 bvid: bvid.clone(),
                 cid: Some(cid),
+                episode,
             };
+            tab.history.remember_source(tab.request.source.clone());
             tab.pages = pages.clone();
+            tab.episodes = episodes;
             tab.chapters = chapters.clone();
             tab.subtitles = subtitles;
             tab.subtitle_files.clear();
@@ -1070,18 +1089,35 @@ impl PlayerWindow {
     }
 
     fn select_page(&mut self, cid: u64, cx: &mut Context<Self>) {
+        if self.tab().loading {
+            return;
+        }
+        let playing = match &self.tab().request.source {
+            PlaybackSource::Video { cid, .. } => *cid,
+            PlaybackSource::Live { .. } => None,
+        };
+        if self.tab().episodes.iter().any(|episode| episode.cid == cid) {
+            if playing != Some(cid) {
+                self.switch_episode(cid, cx);
+            }
+            return;
+        }
+        if self.tab().request.source.episode().is_some() {
+            return;
+        }
+
         let Some(client) = self.client.clone() else {
             return;
         };
-        let (bvid, current_cid) = {
+        let (bvid, current_cid, episode) = {
             let tab = self.tab();
             if tab.is_live || tab.loading {
                 return;
             }
-            let PlaybackSource::Video { bvid, cid } = tab.request.source.clone() else {
+            let PlaybackSource::Video { bvid, cid, episode } = tab.request.source.clone() else {
                 return;
             };
-            (bvid, cid)
+            (bvid, cid, episode)
         };
         if current_cid == Some(cid) {
             return;
@@ -1092,6 +1128,7 @@ impl PlayerWindow {
             tab.request.source = PlaybackSource::Video {
                 bvid: bvid.clone(),
                 cid: Some(cid),
+                episode,
             };
             tab.generation = tab.generation.wrapping_add(1);
             tab.danmaku_task = None;
@@ -1122,10 +1159,10 @@ impl PlayerWindow {
             cx,
             async move {
                 let (streams, player_info) = tokio::join!(
-                    resolve_streams(&client, &bvid, cid, preferred),
-                    client.player_info(&bvid, cid)
+                    resolve_streams(&client, &bvid, cid, episode, preferred),
+                    client.player_info(&bvid, cid, episode)
                 );
-                streams.map(|streams| (streams, player_info.unwrap_or_default()))
+                streams.map(|resolved| (resolved.streams, player_info.unwrap_or_default()))
             },
             move |this, result, cx| {
                 if !this.is_active(tab_id, generation) {
@@ -1174,15 +1211,51 @@ impl PlayerWindow {
         );
     }
 
+    fn switch_episode(&mut self, cid: u64, cx: &mut Context<Self>) {
+        let Some((episode, season_id)) = self
+            .tab()
+            .episodes
+            .iter()
+            .find(|episode| episode.cid == cid)
+            .cloned()
+            .zip(
+                self.tab()
+                    .request
+                    .source
+                    .episode()
+                    .map(|episode| episode.season_id),
+            )
+        else {
+            return;
+        };
+        if episode.bvid.is_empty() || episode.ep_id == 0 {
+            return;
+        }
+
+        let request = PlaybackRequest::episode(
+            String::new(),
+            episode.bvid,
+            Some(episode.cid),
+            EpisodeId {
+                ep_id: episode.ep_id,
+                season_id,
+            },
+        );
+        self.tab_mut()
+            .history
+            .remember_source(request.source.clone());
+        self.start_active(request, cx);
+    }
+
     fn retry(&mut self, cx: &mut Context<Self>) {
         let request = self.tab().request.clone();
         self.start_active(request, cx);
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
-        let (loading, is_live) = {
+        let (loading, is_live, episode) = {
             let tab = self.tab();
-            (tab.loading, tab.is_live)
+            (tab.loading, tab.is_live, tab.request.source.episode())
         };
         if loading {
             return;
@@ -1190,6 +1263,10 @@ impl PlayerWindow {
         if is_live {
             let request = self.tab().request.clone();
             self.start_active(request, cx);
+            return;
+        }
+        if episode.is_some() {
+            self.reload_stream(cx);
             return;
         }
         self.tab()
@@ -1202,11 +1279,12 @@ impl PlayerWindow {
         let Some(client) = self.client.clone() else {
             return;
         };
-        let (tab_id, generation, bvid, cid) = {
+        let (tab_id, generation, bvid, cid, episode) = {
             let tab = self.tab_mut();
             let PlaybackSource::Video {
                 bvid,
                 cid: Some(cid),
+                episode,
             } = tab.request.source.clone()
             else {
                 return;
@@ -1215,9 +1293,12 @@ impl PlayerWindow {
             tab.loading = true;
             tab.error = None;
             tab.streams = None;
-            (tab.id, tab.generation, bvid, cid)
+            (tab.id, tab.generation, bvid, cid, episode)
         };
-        let preferred = self.player.read(cx).selected_quality();
+        let preferred = match self.player.read(cx).selected_quality() {
+            0 => None,
+            quality => Some(quality),
+        };
         self.session = Some(tab_id);
         self.player
             .update(cx, |player, cx| player.clear_danmaku_source(cx));
@@ -1225,14 +1306,15 @@ impl PlayerWindow {
 
         spawn_api(
             cx,
-            async move { resolve_streams(&client, &bvid, cid, Some(preferred)).await },
+            async move { resolve_streams(&client, &bvid, cid, episode, preferred).await },
             move |this, result, cx| {
                 if !this.is_active(tab_id, generation) {
                     return;
                 }
                 this.tab_mut().loading = false;
                 match result {
-                    Ok(streams) => {
+                    Ok(resolved) => {
+                        let streams = resolved.streams;
                         this.tab_mut().streams = Some(CachedStreams {
                             streams: streams.clone(),
                             at: Instant::now(),
@@ -1262,6 +1344,14 @@ fn same_source(a: &PlaybackSource, b: &PlaybackSource) -> bool {
         (PlaybackSource::Video { bvid: a, .. }, PlaybackSource::Video { bvid: b, .. }) => a == b,
         (PlaybackSource::Live { room_id: a }, PlaybackSource::Live { room_id: b }) => a == b,
         _ => false,
+    }
+}
+
+fn display_title(title: &str, preview: bool) -> String {
+    if preview {
+        format!("{title}（试看）")
+    } else {
+        title.to_owned()
     }
 }
 
@@ -1325,8 +1415,8 @@ mod tests {
     use rigili_player::{PlaybackPhase, PlayerStatus};
 
     use super::{
-        InfoTab, PlaybackSource, apply_preferred_quality, can_focus_panel, keeps_background_audio,
-        panel_visibility, same_source, stash_resume,
+        InfoTab, PlaybackSource, apply_preferred_quality, can_focus_panel, display_title,
+        keeps_background_audio, panel_visibility, same_source, stash_resume,
     };
     use crate::request::{Streams, VideoQuality};
 
@@ -1343,20 +1433,29 @@ mod tests {
         let video = PlaybackSource::Video {
             bvid: "BV1".into(),
             cid: Some(1),
+            episode: None,
         };
         let same_video = PlaybackSource::Video {
             bvid: "BV1".into(),
             cid: Some(2),
+            episode: None,
         };
         let other_video = PlaybackSource::Video {
             bvid: "BV2".into(),
             cid: Some(1),
+            episode: None,
         };
         let live = PlaybackSource::Live { room_id: 7 };
         assert!(same_source(&video, &same_video));
         assert!(!same_source(&video, &other_video));
         assert!(!same_source(&video, &live));
         assert!(same_source(&live, &PlaybackSource::Live { room_id: 7 }));
+    }
+
+    #[test]
+    fn marks_a_preview_in_the_title() {
+        assert_eq!(display_title("某剧集", false), "某剧集");
+        assert_eq!(display_title("某剧集", true), "某剧集（试看）");
     }
 
     #[test]

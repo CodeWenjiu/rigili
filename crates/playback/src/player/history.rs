@@ -16,11 +16,15 @@ impl History {
                     PlaybackSource::Video {
                         bvid: current_bvid,
                         cid: current_cid,
+                        episode: current_episode,
                     },
-                    PlaybackSource::Video { bvid, cid },
+                    PlaybackSource::Video { bvid, cid, episode },
                 ) if *current_bvid == bvid => {
                     if cid.is_some() {
                         *current_cid = cid;
+                    }
+                    if episode.is_some() {
+                        *current_episode = episode;
                     }
                     return;
                 }
@@ -46,6 +50,12 @@ impl History {
         }) = self.entries.get_mut(self.index)
         {
             *current_cid = Some(cid);
+        }
+    }
+
+    pub(super) fn remember_source(&mut self, source: PlaybackSource) {
+        if let Some(entry) = self.entries.get_mut(self.index) {
+            *entry = source;
         }
     }
 
@@ -87,11 +97,13 @@ impl History {
 mod tests {
     use super::{HISTORY_LIMIT, History};
     use crate::request::PlaybackSource;
+    use rigili_bilibili::EpisodeId;
 
     fn video(bvid: &str, cid: Option<u64>) -> PlaybackSource {
         PlaybackSource::Video {
             bvid: bvid.into(),
             cid,
+            episode: None,
         }
     }
 
@@ -119,6 +131,51 @@ mod tests {
 
         assert_eq!(history.back(), Some(video("BV1", None)));
         assert_eq!(history.forward(), Some(video("BV2", Some(11))));
+    }
+
+    #[test]
+    fn replaces_the_current_entry_after_an_episode_switch() {
+        let episode = EpisodeId {
+            ep_id: 3,
+            season_id: 1,
+        };
+        let switched = PlaybackSource::Video {
+            bvid: "BV3".into(),
+            cid: Some(30),
+            episode: Some(episode),
+        };
+        let mut history = History::default();
+        history.open(video("BV1", None));
+        history.open(video("BV2", None));
+        history.remember_source(switched.clone());
+
+        assert_eq!(history.back(), Some(video("BV1", None)));
+        assert_eq!(history.forward(), Some(switched));
+    }
+
+    #[test]
+    fn reopening_a_video_keeps_a_newly_known_episode() {
+        let episode = EpisodeId {
+            ep_id: 3,
+            season_id: 1,
+        };
+        let mut history = History::default();
+        history.open(video("BV1", None));
+        history.open(PlaybackSource::Video {
+            bvid: "BV1".into(),
+            cid: Some(2),
+            episode: Some(episode),
+        });
+        history.open(video("BV2", None));
+
+        assert_eq!(
+            history.back(),
+            Some(PlaybackSource::Video {
+                bvid: "BV1".into(),
+                cid: Some(2),
+                episode: Some(episode),
+            })
+        );
     }
 
     #[test]

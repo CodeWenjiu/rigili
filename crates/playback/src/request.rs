@@ -2,7 +2,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rigili_bilibili::{
-    ApiError, Client, Dash, DashVideo, PlayUrl, PlayerInfo, RecommendVideo, VideoInfo,
+    ApiError, Client, Dash, DashVideo, EpisodeId, PgcEpisode, PgcPlayUrl, PgcSeason, PlayUrl,
+    PlayerInfo, RecommendVideo, VideoInfo, VideoPage,
 };
 use tokio::task::JoinSet;
 
@@ -17,15 +18,36 @@ pub struct PlaybackRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlaybackSource {
-    Video { bvid: String, cid: Option<u64> },
-    Live { room_id: u64 },
+    Video {
+        bvid: String,
+        cid: Option<u64>,
+        episode: Option<EpisodeId>,
+    },
+    Live {
+        room_id: u64,
+    },
 }
 
 impl PlaybackRequest {
     pub fn video(title: String, bvid: String, cid: Option<u64>) -> Self {
         Self {
             title,
-            source: PlaybackSource::Video { bvid, cid },
+            source: PlaybackSource::Video {
+                bvid,
+                cid,
+                episode: None,
+            },
+        }
+    }
+
+    pub fn episode(title: String, bvid: String, cid: Option<u64>, episode: EpisodeId) -> Self {
+        Self {
+            title,
+            source: PlaybackSource::Video {
+                bvid,
+                cid,
+                episode: Some(episode),
+            },
         }
     }
 
@@ -33,6 +55,19 @@ impl PlaybackRequest {
         Self {
             title,
             source: PlaybackSource::Live { room_id },
+        }
+    }
+
+    pub fn from_source(title: String, source: PlaybackSource) -> Self {
+        Self { title, source }
+    }
+}
+
+impl PlaybackSource {
+    pub(crate) fn episode(&self) -> Option<EpisodeId> {
+        match self {
+            Self::Video { episode, .. } => *episode,
+            Self::Live { .. } => None,
         }
     }
 }
@@ -45,6 +80,15 @@ pub(super) struct Resolved {
     pub(super) cid: u64,
     pub(super) streams: Streams,
     pub(super) player_info: PlayerInfo,
+    pub(super) episode: Option<EpisodeId>,
+    pub(super) episodes: Vec<PgcEpisode>,
+    pub(super) preview: bool,
+}
+
+pub(super) struct ResolvedStreams {
+    pub(super) streams: Streams,
+    pub(super) preview: bool,
+    pub(super) duration: u64,
 }
 
 #[derive(Clone)]
@@ -76,6 +120,23 @@ impl Streams {
 
 pub(super) async fn resolve(
     client: Arc<Client>,
+    title: String,
+    bvid: String,
+    cid: Option<u64>,
+    episode: Option<EpisodeId>,
+    preferred_quality: Option<u32>,
+) -> Result<Resolved, ApiError> {
+    match episode {
+        Some(episode) => {
+            resolve_episode(client, title, bvid, cid, episode, preferred_quality).await
+        }
+        None => resolve_video(client, title, bvid, cid, preferred_quality).await,
+    }
+}
+
+async fn resolve_video(
+    client: Arc<Client>,
+    title: String,
     bvid: String,
     cid: Option<u64>,
     preferred_quality: Option<u32>,
@@ -83,13 +144,30 @@ pub(super) async fn resolve(
     let started = Instant::now();
     rigili_monitor::monitor!("stream", "resolving {bvid} (cid {cid:?})");
     let detail = client.video_detail(&bvid).await?;
+    if let Some(ep_id) = episode_from_redirect(&detail.view.redirect_url) {
+        rigili_monitor::monitor!("stream", "bvid {bvid} redirects to episode {ep_id}");
+        match client.pgc_season_by_ep(ep_id).await {
+            Ok(season) if season.season_id != 0 => {
+                let episode = EpisodeId {
+                    ep_id,
+                    season_id: season.season_id,
+                };
+                let cid = Some(cid.unwrap_or(detail.view.cid));
+                return resolve_episode(client, title, bvid, cid, episode, preferred_quality).await;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                rigili_monitor::monitor!("stream", "episode {ep_id} season lookup failed: {error}");
+            }
+        }
+    }
     let info = detail.view;
     let cid = cid.unwrap_or(info.cid);
     let (streams, player_info) = tokio::join!(
-        resolve_streams(&client, &bvid, cid, preferred_quality),
-        client.player_info(&bvid, cid)
+        resolve_streams(&client, &bvid, cid, None, preferred_quality),
+        client.player_info(&bvid, cid, None)
     );
-    let streams = streams?;
+    let streams = streams?.streams;
     let player_info = player_info.unwrap_or_else(|error| {
         // Chapters and the resume point are a bonus; a failed call must not
         // keep the video from playing.
@@ -109,6 +187,109 @@ pub(super) async fn resolve(
         cid,
         streams,
         player_info,
+        episode: None,
+        episodes: Vec::new(),
+        preview: false,
+    })
+}
+
+async fn resolve_episode(
+    client: Arc<Client>,
+    title: String,
+    bvid: String,
+    cid: Option<u64>,
+    episode: EpisodeId,
+    preferred_quality: Option<u32>,
+) -> Result<Resolved, ApiError> {
+    let started = Instant::now();
+    rigili_monitor::monitor!(
+        "stream",
+        "resolving episode {}/{} bvid {bvid} (cid {cid:?})",
+        episode.season_id,
+        episode.ep_id
+    );
+    // History entries may predate a stored cid; look it up before the parallel requests.
+    let known_season = match cid {
+        Some(_) => None,
+        None => Some(client.pgc_season(episode.season_id).await?),
+    };
+    let cid = cid
+        .or_else(|| {
+            known_season
+                .as_ref()
+                .and_then(|season| episode_of(season, episode))
+                .map(|episode| episode.cid)
+                .filter(|cid| *cid != 0)
+        })
+        .ok_or_else(|| ApiError::InvalidResponse("该剧集没有可用的播放分片".into()))?;
+
+    let (streams, player_info, detail, season) = tokio::join!(
+        resolve_streams(&client, &bvid, cid, Some(episode), preferred_quality),
+        client.player_info(&bvid, cid, Some(episode)),
+        client.video_detail(&bvid),
+        async {
+            match known_season {
+                Some(season) => season,
+                None => match client.pgc_season(episode.season_id).await {
+                    Ok(season) => season,
+                    Err(error) => {
+                        rigili_monitor::monitor!(
+                            "stream",
+                            "pgc season {} failed: {error}",
+                            episode.season_id
+                        );
+                        PgcSeason::default()
+                    }
+                },
+            }
+        },
+    );
+    let ResolvedStreams {
+        streams,
+        preview,
+        duration,
+    } = streams?;
+    let mut player_info = player_info.unwrap_or_else(|error| {
+        rigili_monitor::monitor!("stream", "player info {bvid}/{cid} failed: {error}");
+        PlayerInfo::default()
+    });
+    if player_info.last_play_time <= 0.
+        && let Some(last) = season_resume_ms(&season, episode)
+    {
+        player_info.last_play_time = last;
+    }
+    let (mut info, related, followers, owner_likes) = match detail {
+        Ok(detail) => (
+            detail.view,
+            detail.related,
+            detail.card.follower,
+            detail.card.like_num,
+        ),
+        Err(error) => {
+            rigili_monitor::monitor!("stream", "video detail {bvid} failed: {error}");
+            (fallback_episode_info(&title, &bvid, cid), Vec::new(), 0, 0)
+        }
+    };
+    normalize_episode_info(&mut info, &title, &bvid, cid, episode, &season, duration);
+    let episodes = season.episodes;
+    rigili_monitor::monitor!(
+        "stream",
+        "resolved episode {}/{} cid {cid} in {:?}",
+        episode.season_id,
+        episode.ep_id,
+        started.elapsed()
+    );
+    Ok(Resolved {
+        info,
+        related,
+        followers,
+        owner_likes,
+        cid,
+        streams,
+        player_info,
+        episode: Some(episode),
+        episodes,
+        preview,
     })
 }
 
@@ -116,12 +297,56 @@ pub(super) async fn resolve_streams(
     client: &Arc<Client>,
     bvid: &str,
     cid: u64,
+    episode: Option<EpisodeId>,
     preferred_quality: Option<u32>,
-) -> Result<Streams, ApiError> {
-    let playurl = client.playurl(bvid, cid).await?;
-    let Some(dash) = playurl.dash.as_ref() else {
-        rigili_monitor::monitor!("stream", "playurl {bvid}/{cid} returned no DASH manifest");
-        return Err(ApiError::InvalidResponse("该视频没有可用的 DASH 流".into()));
+) -> Result<ResolvedStreams, ApiError> {
+    let (dash, accept_quality, accept_description, preview, duration) = match episode {
+        Some(episode) => {
+            let PgcPlayUrl {
+                dash,
+                accept_quality,
+                accept_description,
+                timelength,
+                is_preview,
+                is_drm,
+            } = client.pgc_playurl(episode, cid).await?;
+            if is_drm {
+                return Err(ApiError::InvalidResponse(
+                    "该内容受 DRM 保护，暂不支持播放".into(),
+                ));
+            }
+            let Some(dash) = dash else {
+                rigili_monitor::monitor!(
+                    "stream",
+                    "pgc playurl {}/{} cid {cid} returned no DASH manifest",
+                    episode.season_id,
+                    episode.ep_id
+                );
+                return Err(ApiError::InvalidResponse("该剧集没有可用的 DASH 流".into()));
+            };
+            (
+                dash,
+                accept_quality,
+                accept_description,
+                is_preview != 0,
+                timelength / 1000,
+            )
+        }
+        None => {
+            let PlayUrl {
+                dash,
+                accept_quality,
+                accept_description,
+            } = client.playurl(bvid, cid).await?;
+            let Some(dash) = dash else {
+                rigili_monitor::monitor!(
+                    "stream",
+                    "playurl {bvid}/{cid} returned no DASH manifest"
+                );
+                return Err(ApiError::InvalidResponse("该视频没有可用的 DASH 流".into()));
+            };
+            (dash, accept_quality, accept_description, false, 0)
+        }
     };
     rigili_monitor::monitor!(
         "stream",
@@ -129,8 +354,12 @@ pub(super) async fn resolve_streams(
         dash.video.len(),
         dash.audio.len()
     );
-    let Some((mut streams, video_urls, audio_urls)) = select_streams(&playurl, preferred_quality)
-    else {
+    let Some((mut streams, video_urls, audio_urls)) = select_streams(
+        &dash,
+        &accept_quality,
+        &accept_description,
+        preferred_quality,
+    ) else {
         return Err(ApiError::InvalidResponse("没有可用的视频流".into()));
     };
 
@@ -158,7 +387,11 @@ pub(super) async fn resolve_streams(
     if let Some(url) = audio {
         streams.audio = Some(url);
     }
-    Ok(streams)
+    Ok(ResolvedStreams {
+        streams,
+        preview,
+        duration,
+    })
 }
 
 pub async fn resolve_preview(
@@ -180,10 +413,11 @@ pub async fn resolve_preview(
 }
 
 fn select_streams(
-    playurl: &PlayUrl,
+    dash: &Dash,
+    accept_quality: &[u32],
+    accept_description: &[String],
     preferred_quality: Option<u32>,
 ) -> Option<(Streams, Vec<String>, Vec<String>)> {
-    let dash = playurl.dash.as_ref()?;
     let video = preferred_video(dash, preferred_quality)?;
     let audio = dash.best_audio();
     rigili_monitor::monitor!(
@@ -216,7 +450,7 @@ fn select_streams(
             video: video.base_url.clone(),
             video_id: video.id,
             audio: audio.map(|audio| audio.base_url.clone()),
-            qualities: quality_tracks(playurl, dash),
+            qualities: quality_tracks(dash, accept_quality, accept_description),
         },
         video_urls,
         audio_urls,
@@ -330,24 +564,27 @@ async fn fastest_stream(
     }
 }
 
-fn quality_tracks(playurl: &PlayUrl, dash: &Dash) -> Vec<VideoQuality> {
-    let ids = if playurl.accept_quality.is_empty() {
+fn quality_tracks(
+    dash: &Dash,
+    accept_quality: &[u32],
+    accept_description: &[String],
+) -> Vec<VideoQuality> {
+    let ids = if accept_quality.is_empty() {
         let mut ids: Vec<u32> = dash.video.iter().map(|video| video.id).collect();
         ids.sort_unstable_by(|a, b| b.cmp(a));
         ids.dedup();
         ids
     } else {
-        playurl.accept_quality.clone()
+        accept_quality.to_vec()
     };
 
     ids.into_iter()
         .filter_map(|id| {
             let video = video_track(dash, id)?;
-            let description = playurl
-                .accept_quality
+            let description = accept_quality
                 .iter()
                 .position(|quality| *quality == id)
-                .and_then(|index| playurl.accept_description.get(index))
+                .and_then(|index| accept_description.get(index))
                 .map(String::as_str)
                 .filter(|text| !text.trim().is_empty());
             let short_label = quality_label(id, video.height);
@@ -387,10 +624,119 @@ fn quality_label(id: u32, height: u32) -> String {
     }
 }
 
+fn episode_of(season: &PgcSeason, episode: EpisodeId) -> Option<&PgcEpisode> {
+    season
+        .episodes
+        .iter()
+        .find(|candidate| candidate.ep_id == episode.ep_id)
+}
+
+fn episode_from_redirect(url: &str) -> Option<u64> {
+    let tail = url.rsplit('/').next()?.split(['?', '#']).next()?;
+    let id = tail.strip_prefix("ep")?;
+    id.parse().ok().filter(|id| *id != 0)
+}
+
+fn episode_title(season: &PgcSeason, episode: &PgcEpisode) -> Option<String> {
+    let season_title = season.title.trim();
+    let long_title = episode.long_title.trim();
+    match (season_title.is_empty(), long_title.is_empty()) {
+        (true, true) => None,
+        (true, false) => Some(long_title.to_owned()),
+        (false, true) => Some(season_title.to_owned()),
+        (false, false) => Some(format!("{season_title} {long_title}")),
+    }
+}
+
+fn season_resume_ms(season: &PgcSeason, episode: EpisodeId) -> Option<f64> {
+    let progress = season.user_status.progress.as_ref()?;
+    (progress.last_ep_id == episode.ep_id && progress.last_time_seconds > 0.)
+        .then_some(progress.last_time_seconds * 1000.)
+}
+
+fn fallback_episode_info(title: &str, bvid: &str, cid: u64) -> VideoInfo {
+    VideoInfo {
+        bvid: bvid.to_owned(),
+        cid,
+        title: title.to_owned(),
+        ..VideoInfo::default()
+    }
+}
+
+fn normalize_episode_info(
+    info: &mut VideoInfo,
+    fallback_title: &str,
+    bvid: &str,
+    cid: u64,
+    episode: EpisodeId,
+    season: &PgcSeason,
+    duration: u64,
+) {
+    let candidate = episode_of(season, episode);
+    if let Some(candidate) = candidate {
+        if info.aid == 0 {
+            info.aid = candidate.aid;
+        }
+        if info.pic.is_empty() {
+            info.pic = candidate.cover.clone();
+        }
+        if info.duration == 0 && candidate.duration > 0 {
+            info.duration = candidate.duration / 1000;
+        }
+        if let Some(title) = episode_title(season, candidate) {
+            info.title = title;
+        }
+    }
+    if info.title.trim().is_empty() {
+        info.title = fallback_title.to_owned();
+    }
+    if info.duration == 0 {
+        info.duration = duration;
+    }
+    info.bvid = bvid.to_owned();
+    info.cid = cid;
+    let part = candidate
+        .map(|candidate| candidate.long_title.trim())
+        .filter(|part| !part.is_empty())
+        .unwrap_or("正片")
+        .to_owned();
+    let mut pages = episode_pages(season);
+    if !pages.iter().any(|page| page.cid == cid) {
+        pages = vec![VideoPage {
+            cid,
+            page: 1,
+            part,
+            duration: info.duration,
+        }];
+    }
+    info.pages = pages;
+}
+
+fn episode_pages(season: &PgcSeason) -> Vec<VideoPage> {
+    season
+        .episodes
+        .iter()
+        .filter(|episode| episode.cid != 0 && !episode.bvid.is_empty())
+        .enumerate()
+        .map(|(index, episode)| VideoPage {
+            cid: episode.cid,
+            page: (index + 1) as u32,
+            part: episode.long_title.trim().to_owned(),
+            duration: episode.duration / 1000,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{candidates, select_streams};
-    use rigili_bilibili::{Dash, DashAudio, DashVideo, PlayUrl};
+    use super::{
+        candidates, episode_from_redirect, episode_pages, normalize_episode_info, season_resume_ms,
+        select_streams,
+    };
+    use rigili_bilibili::{
+        Dash, DashAudio, DashVideo, EpisodeId, PgcEpisode, PgcProgress, PgcSeason, PgcUserStatus,
+        PlayUrl, VideoInfo,
+    };
 
     #[test]
     fn deduplicates_stream_candidates() {
@@ -477,7 +823,14 @@ mod tests {
             accept_description: vec!["1080P 高清".into()],
         };
 
-        let streams = select_streams(&playurl, None).expect("streams").0;
+        let streams = select_streams(
+            playurl.dash.as_ref().expect("dash"),
+            &playurl.accept_quality,
+            &playurl.accept_description,
+            None,
+        )
+        .expect("streams")
+        .0;
         assert_eq!(streams.video, "https://example.invalid/avc.m4s");
         assert_eq!(
             streams.audio.as_deref(),
@@ -514,7 +867,14 @@ mod tests {
             accept_description: Vec::new(),
         };
 
-        let streams = select_streams(&playurl, None).expect("streams").0;
+        let streams = select_streams(
+            playurl.dash.as_ref().expect("dash"),
+            &playurl.accept_quality,
+            &playurl.accept_description,
+            None,
+        )
+        .expect("streams")
+        .0;
         assert_eq!(streams.video, "avc");
         assert_eq!(streams.video_id, 80);
         let qualities: Vec<_> = streams
@@ -543,40 +903,184 @@ mod tests {
             codecs: String::new(),
             codecid: 7,
         };
-        let playurl = PlayUrl {
-            dash: Some(Dash {
-                video: vec![video(80, "1080p", 600_000), video(64, "720p", 300_000)],
-                audio: Vec::new(),
-            }),
-            accept_quality: vec![80, 64],
-            accept_description: Vec::new(),
+        let dash = Dash {
+            video: vec![video(80, "1080p", 600_000), video(64, "720p", 300_000)],
+            audio: Vec::new(),
         };
+        let accept = [80, 64];
 
-        let exact = select_streams(&playurl, Some(80)).expect("streams").0;
+        let exact = select_streams(&dash, &accept, &[], Some(80))
+            .expect("streams")
+            .0;
         assert_eq!(exact.video, "1080p");
         assert_eq!(exact.video_id, 80);
 
-        let below = select_streams(&playurl, Some(64)).expect("streams").0;
+        let below = select_streams(&dash, &accept, &[], Some(64))
+            .expect("streams")
+            .0;
         assert_eq!(below.video, "720p");
         assert_eq!(below.video_id, 64);
 
-        let unavailable = select_streams(&playurl, Some(32)).expect("streams").0;
+        let unavailable = select_streams(&dash, &accept, &[], Some(32))
+            .expect("streams")
+            .0;
         assert_eq!(unavailable.video, "720p");
         assert_eq!(unavailable.video_id, 64);
 
-        let above = select_streams(&playurl, Some(127)).expect("streams").0;
+        let above = select_streams(&dash, &accept, &[], Some(127))
+            .expect("streams")
+            .0;
         assert_eq!(above.video, "1080p");
         assert_eq!(above.video_id, 80);
 
-        let only_high = PlayUrl {
-            dash: Some(Dash {
-                video: vec![video(80, "1080p", 600_000)],
-                audio: Vec::new(),
-            }),
-            accept_quality: vec![80],
-            accept_description: Vec::new(),
+        let only_high = Dash {
+            video: vec![video(80, "1080p", 600_000)],
+            audio: Vec::new(),
         };
-        let lowest = select_streams(&only_high, Some(32)).expect("streams").0;
+        let lowest = select_streams(&only_high, &[80], &[], Some(32))
+            .expect("streams")
+            .0;
         assert_eq!(lowest.video_id, 80);
+    }
+
+    #[test]
+    fn prefers_the_episode_title_and_fills_a_single_page() {
+        let season = PgcSeason {
+            season_id: 1,
+            title: "鬼灭之刃".into(),
+            episodes: vec![PgcEpisode {
+                aid: 42,
+                bvid: "BV15i421v7FQ".into(),
+                cid: 7,
+                ep_id: 3,
+                long_title: "第一话".into(),
+                cover: "cover".into(),
+                duration: 1_500_000,
+            }],
+            ..PgcSeason::default()
+        };
+        let episode = EpisodeId {
+            ep_id: 3,
+            season_id: 1,
+        };
+
+        let mut info = VideoInfo::default();
+        normalize_episode_info(&mut info, "", "BV15i421v7FQ", 7, episode, &season, 1_500);
+
+        assert_eq!(info.title, "鬼灭之刃 第一话");
+        assert_eq!(info.aid, 42);
+        assert_eq!(info.pic, "cover");
+        assert_eq!((info.bvid.as_str(), info.cid), ("BV15i421v7FQ", 7));
+        assert_eq!(info.duration, 1_500);
+        assert_eq!(info.pages.len(), 1);
+        assert_eq!(info.pages[0].part, "第一话");
+        assert_eq!(info.pages[0].duration, 1_500);
+    }
+
+    #[test]
+    fn keeps_the_request_title_without_season_metadata() {
+        let season = PgcSeason::default();
+        let episode = EpisodeId {
+            ep_id: 3,
+            season_id: 1,
+        };
+
+        let mut info = VideoInfo::default();
+        normalize_episode_info(&mut info, "某电影", "BV1", 9, episode, &season, 120);
+
+        assert_eq!(info.title, "某电影");
+        assert_eq!(info.duration, 120);
+        assert_eq!(info.pages.len(), 1);
+        assert_eq!(info.pages[0].part, "正片");
+    }
+
+    #[test]
+    fn reads_the_episode_from_a_bangumi_redirect() {
+        assert_eq!(
+            episode_from_redirect("https://www.bilibili.com/bangumi/play/ep331423"),
+            Some(331_423)
+        );
+        assert_eq!(
+            episode_from_redirect("https://www.bilibili.com/bangumi/play/ep331423?spm_id_from=333"),
+            Some(331_423)
+        );
+        assert_eq!(
+            episode_from_redirect("https://www.bilibili.com/bangumi/play/ss33323"),
+            None
+        );
+        assert_eq!(
+            episode_from_redirect("https://www.bilibili.com/video/BV1xx411c7mD"),
+            None
+        );
+        assert_eq!(episode_from_redirect(""), None);
+    }
+
+    #[test]
+    fn lists_every_playable_episode_as_a_page() {
+        let season = PgcSeason {
+            episodes: vec![
+                PgcEpisode {
+                    ep_id: 1,
+                    bvid: "BV1".into(),
+                    cid: 11,
+                    long_title: "第一话".into(),
+                    duration: 1_500_000,
+                    ..PgcEpisode::default()
+                },
+                PgcEpisode {
+                    ep_id: 2,
+                    bvid: "BV2".into(),
+                    cid: 0,
+                    ..PgcEpisode::default()
+                },
+                PgcEpisode {
+                    ep_id: 3,
+                    bvid: String::new(),
+                    cid: 33,
+                    ..PgcEpisode::default()
+                },
+                PgcEpisode {
+                    ep_id: 4,
+                    bvid: "BV4".into(),
+                    cid: 44,
+                    duration: 2_000_000,
+                    ..PgcEpisode::default()
+                },
+            ],
+            ..PgcSeason::default()
+        };
+
+        let pages = episode_pages(&season);
+        assert_eq!(pages.len(), 2);
+        assert_eq!((pages[0].page, pages[0].cid), (1, 11));
+        assert_eq!(pages[0].part, "第一话");
+        assert_eq!(pages[0].duration, 1_500);
+        assert_eq!((pages[1].page, pages[1].cid), (2, 44));
+        assert_eq!(pages[1].duration, 2_000);
+    }
+
+    #[test]
+    fn resumes_only_the_matching_episode_from_season_progress() {
+        let season = PgcSeason {
+            user_status: PgcUserStatus {
+                progress: Some(PgcProgress {
+                    last_ep_id: 3,
+                    last_time_seconds: 12.5,
+                }),
+            },
+            ..PgcSeason::default()
+        };
+        let matching = EpisodeId {
+            ep_id: 3,
+            season_id: 1,
+        };
+        let other = EpisodeId {
+            ep_id: 4,
+            season_id: 1,
+        };
+
+        assert_eq!(season_resume_ms(&season, matching), Some(12_500.));
+        assert_eq!(season_resume_ms(&season, other), None);
+        assert_eq!(season_resume_ms(&PgcSeason::default(), matching), None);
     }
 }

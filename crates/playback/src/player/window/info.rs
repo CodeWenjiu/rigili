@@ -13,6 +13,9 @@ impl PlayerWindow {
         mid: u64,
         cx: &mut Context<Self>,
     ) {
+        if mid == 0 {
+            return;
+        }
         let Some(client) = self.client.clone() else {
             return;
         };
@@ -42,6 +45,9 @@ impl PlayerWindow {
         aid: u64,
         cx: &mut Context<Self>,
     ) {
+        if aid == 0 {
+            return;
+        }
         let Some(client) = self.client.clone() else {
             return;
         };
@@ -69,6 +75,9 @@ impl PlayerWindow {
         aid: u64,
         cx: &mut Context<Self>,
     ) {
+        if aid == 0 {
+            return;
+        }
         let Some(client) = self.client.clone() else {
             return;
         };
@@ -96,7 +105,7 @@ impl PlayerWindow {
         };
         let (tab_id, generation, bvid, cid, info) = {
             let tab = self.tab();
-            let PlaybackSource::Video { bvid, cid } = tab.request.source.clone() else {
+            let PlaybackSource::Video { bvid, cid, .. } = tab.request.source.clone() else {
                 return;
             };
             (tab.id, tab.generation, bvid, cid, tab.info.clone())

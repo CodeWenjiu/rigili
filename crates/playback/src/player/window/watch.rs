@@ -3,7 +3,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use rigili_bilibili::{Client, WatchReport};
+use rigili_bilibili::{Client, EpisodeId, WatchReport};
 use rigili_core::runtime::Tokio;
 use rigili_player::PlaybackPhase;
 
@@ -22,6 +22,7 @@ struct Tick {
     aid: u64,
     bvid: String,
     cid: u64,
+    episode: Option<EpisodeId>,
     played: u64,
     duration: u64,
 }
@@ -30,6 +31,7 @@ struct Session {
     epoch: u64,
     bvid: String,
     cid: u64,
+    episode: Option<EpisodeId>,
     started_at: u64,
     sent_at: Instant,
     last: u64,
@@ -42,6 +44,7 @@ impl Session {
             epoch: tick.epoch,
             bvid: tick.bvid.clone(),
             cid: tick.cid,
+            episode: tick.episode,
             started_at: unix_now(),
             sent_at: Instant::now(),
             last: 0,
@@ -50,7 +53,10 @@ impl Session {
     }
 
     fn follows(&self, tick: &Tick) -> bool {
-        self.epoch == tick.epoch && self.bvid == tick.bvid && self.cid == tick.cid
+        self.epoch == tick.epoch
+            && self.bvid == tick.bvid
+            && self.cid == tick.cid
+            && self.episode == tick.episode
     }
 }
 
@@ -88,6 +94,7 @@ impl PlayerWindow {
                     aid: tick.aid,
                     bvid: tick.bvid,
                     cid: tick.cid,
+                    episode: tick.episode,
                     played: tick.played,
                     duration: tick.duration,
                     started_at: session.started_at,
@@ -130,7 +137,7 @@ impl PlayerWindow {
             return None;
         }
         let client = self.client.clone()?;
-        let PlaybackSource::Video { bvid, cid } = tab.request.source.clone() else {
+        let PlaybackSource::Video { bvid, cid, episode } = tab.request.source.clone() else {
             return None;
         };
         let status = self.player.read(cx).status();
@@ -147,6 +154,7 @@ impl PlayerWindow {
             aid: tab.info.read(cx).aid()?,
             bvid,
             cid: cid?,
+            episode,
             played: status.time_pos.round() as u64,
             duration: status.duration.round() as u64,
         })

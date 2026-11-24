@@ -218,6 +218,7 @@ impl SpaceView {
             cid: None,
             title: archive.title.clone(),
             new_tab: false,
+            episode: None,
         };
         let on_open = cx.listener(move |_, event: &ClickEvent, _, cx| {
             let mut open = open.clone();
